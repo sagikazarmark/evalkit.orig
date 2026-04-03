@@ -92,10 +92,9 @@ get_iteration_number() {
     echo "0"
     return
   fi
-  # Extract current iteration from state file
   local n
-  n=$(grep -oP '(?<=\*\*Current iteration\*\*: )\d+' "$STATE_FILE" 2>/dev/null || echo "0")
-  echo "$n"
+  n=$(grep -oP '(?<=\*\*Current iteration\*\*: )\d+' "$STATE_FILE" 2>/dev/null) || true
+  echo "${n:-0}"
 }
 
 count_by_status() {
@@ -104,7 +103,9 @@ count_by_status() {
     echo "0"
     return
   fi
-  grep -c "| ${status} |" "$STATE_FILE" 2>/dev/null || echo "0"
+  local count
+  count=$(grep -c "| ${status} |" "$STATE_FILE" 2>/dev/null) || true
+  echo "${count:-0}"
 }
 
 has_blocked() {
@@ -152,7 +153,9 @@ count_deviations() {
     echo "0"
     return
   fi
-  grep -c "^### DEV-" "$STATE_FILE" 2>/dev/null || echo "0"
+  local count
+  count=$(grep -c "^### DEV-" "$STATE_FILE" 2>/dev/null) || true
+  echo "${count:-0}"
 }
 
 # --- Build the per-iteration message -----------------------------------------

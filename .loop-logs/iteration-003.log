@@ -1,0 +1,83 @@
+[0m
+> build · gpt-5.4
+[0m
+Reading `state.md` first to determine the single component for iteration 3, then I’ll pull only the spec sections and existing code needed for that component.
+[0m→ [0mRead state.md[90m [offset=1, limit=400][0m
+State shows no interrupted or blocked work. I’m checking the spec’s dependency order and the root-component API definitions to pick exactly one valid component for iteration 3.
+[0m✱ [0mGrep "^## |^### "[90m in docs/spec · 76 matches[0m
+[0m✱ [0mGrep "Dataset|ScoreDefinition|Direction|ScorerContext|ScorerError|Mapper|Score"[90m in docs/spec · 161 matches[0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=957, limit=40][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=340, limit=40][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=834, limit=60][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=669, limit=50][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=895, limit=40][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=50, limit=35][0m
+[0m✱ [0mGlob "**/*"[90m in tests · 1 match[0m
+[0m✱ [0mGlob "**/*"[90m in src · 2 matches[0m
+The next dependency-ordered root component is `Dataset`, since `Sample` is already done and `Dataset` has no unmet dependencies. I’m reading the existing crate surface and sample implementation before making a minimal dataset addition.
+[0m→ [0mRead src/sample.rs[90m [offset=1, limit=260][0m
+[0m→ [0mRead src/lib.rs[90m [offset=1, limit=120][0m
+[0m→ [0mRead tests/sample.rs[90m [offset=1, limit=220][0m
+[0m→ [0mRead Cargo.toml[90m [offset=1, limit=220][0m
+Plan for `Dataset`:
+- Add `src/dataset.rs` with `Dataset<I, R = ()>` matching Section 5.1 and 6.1.
+- Expose public `samples` and `metadata` fields; `new(Vec<Sample<I, R>>)` initializes empty metadata.
+- Implement `From<Vec<Sample<I, R>>> for Dataset<I, R>` as required by the spec.
+- Export `Dataset` from `src/lib.rs` without changing existing `Sample` APIs.
+- Add focused tests for AC-02.1: direct construction from `Vec<Sample>` and `From<Vec<Sample>>`, including preserved samples and empty metadata defaults.
+- Verify with a clean `cargo test` run, then record iteration 3 in `state.md`.
+[0m⚙ [0mapply_patch Success. Updated the following files:
+A src/dataset.rs
+M src/lib.rs
+A tests/dataset.rs
+The dataset surface is in place. I’m formatting and running the full test suite now to verify the new component and guard against regressions.
+[0m
+[0m$ [0mcargo fmt && cargo test
+Compiling evalkit v0.1.0 (/home/mark/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.53s
+     Running unittests src/lib.rs (target/debug/deps/evalkit-452dfbfa3b4ac9de)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dataset.rs (target/debug/deps/dataset-c6ec30cd6a3387a7)
+
+running 2 tests
+test dataset_from_vec_matches_new_constructor ... ok
+test dataset_new_constructs_from_sample_vector ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sample.rs (target/debug/deps/sample-c2a3291574cecd2f)
+
+running 4 tests
+test sample_builder_supports_explicit_id_optional_reference_and_metadata ... ok
+test sample_builder_generates_id_when_reference_is_present ... ok
+test sample_new_constructs_input_and_reference ... ok
+test sample_new_generates_deterministic_ids_from_content ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests evalkit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[0m
+Verification passed cleanly. I’m updating `state.md` with the completed `Dataset` component, test evidence, and the next dependency-ordered component for the following iteration.
+[0m$ [0mdate --iso-8601=seconds
+2026-04-03T16:42:19+02:00
+[0m
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M state.md
+[0m→ [0mRead src/dataset.rs[90m [offset=1, limit=120][0m
+[0m→ [0mRead src/lib.rs[90m [offset=1, limit=40][0m
+[0m→ [0mRead tests/dataset.rs[90m [offset=1, limit=120][0m
+[0m→ [0mRead state.md[90m [offset=1, limit=240][0m
+✅ Iteration 3 complete.  
+Component: Dataset  
+Status: DONE  
+Tests: 6 passed, 0 failed  
+Deviations: 0  
+Next component: Score

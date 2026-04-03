@@ -1,0 +1,113 @@
+[0m
+> build · gpt-5.4
+[0m
+Reading `state.md` first to determine the exact component for iteration 2, then I’ll pull the matching spec sections and current code before making any edits.
+[0m→ [0mRead state.md[90m [offset=1, limit=2000][0m
+`Sample` is the next dependency-root component in `state.md`. I’m reading the spec sections for its API, data model, errors, and acceptance criteria, then I’ll inspect the current crate layout before editing.
+[0m✱ [0mGrep "^## |^### |Section 11\.1|Sample|AC-|US-"[90m in docs/spec · 183 matches[0m
+[0m→ [0mRead Cargo.toml[90m [offset=1, limit=300][0m
+[0m→ [0mRead src/lib.rs[90m [offset=1, limit=200][0m
+[0m✱ [0mGlob "**/*"[90m in src · 1 match[0m
+[0m✱ [0mGlob "**/*"[90m in tests · 0 matches[0m
+I have the target and the crate is still effectively empty. I’m pulling the exact `Sample` contract from the spec now so the implementation and tests match the required interface precisely.
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=318, limit=80][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=430, limit=120][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=1000, limit=120][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=850, limit=120][0m
+[0m✱ [0mGrep "^## 6\.|^### 6\.|Sample\b|SampleBuilder|auto-ID|metadata"[90m in docs/spec · 38 matches[0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=560, limit=170][0m
+[0m✱ [0mGrep "11\.2|Dependencies \(default\)|sha|blake|hash"[90m in docs/spec · 19 matches[0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=968, limit=40][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=303, limit=20][0m
+[0m✱ [0mGrep "SampleBuilder|builder\(|pub mod prelude|prelude"[90m in docs/spec · 8 matches[0m
+Scope for this iteration is `Sample` only.
+
+Plan:
+1. Add `src/sample.rs` with `Sample<I, R>` and `SampleBuilder<I, R>`.
+2. Expose `Sample` and `SampleBuilder` from `src/lib.rs`.
+3. Implement `Sample::new(input, reference)` with deterministic content-hashed IDs and empty metadata.
+4. Implement `Sample::builder(input)` plus `.id()`, `.reference()`, `.metadata()`, and `.build()`.
+5. Keep the API aligned to Section 5.1 and the schema in Section 6.1.
+6. Add public-facing tests for AC-01.1 and the `Sample` builder behavior, including deterministic ID generation and optional reference handling.
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M src/lib.rs
+A src/sample.rs
+A tests/sample.rs
+The `Sample` type and builder are in place. I’m formatting and running the full test suite now to catch API or trait-bound issues before I update `state.md`.
+[0m
+[0m$ [0mcargo fmt
+[0m
+[0m$ [0mcargo test
+Compiling evalkit v0.1.0 (/home/mark/evalkit)
+error[E0282]: type annotations needed for `Sample<std::string::String, _>`
+  --> tests/sample.rs:26:9
+   |
+26 |     let sample = Sample::builder("prompt".to_string())
+   |         ^^^^^^   ------------------------------------- type must be known at this point
+   |
+help: consider giving `sample` an explicit type, where the type for type parameter `R` is specified
+   |
+26 |     let sample: Sample<_, R> = Sample::builder("prompt".to_string())
+   |               ++++++++++++++
+
+For more information about this error, try `rustc --explain E0282`.
+error: could not compile `evalkit` (test "sample") due to 1 previous error
+[0m
+`Sample::builder` hits Rust’s usual generic inference limit when no reference type is provided, so I’m tightening the test to specify `R = ()` explicitly and re-running verification.
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M tests/sample.rs
+
+LSP errors detected in tests/sample.rs, please fix:
+<diagnostics file="/home/mark/evalkit/tests/sample.rs">
+ERROR [26:9] type annotations needed for `Sample<std::string::String, _>`
+</diagnostics>
+[0m→ [0mRead tests/sample.rs[90m [offset=20, limit=20][0m
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M tests/sample.rs
+
+LSP errors detected in tests/sample.rs, please fix:
+<diagnostics file="/home/mark/evalkit/tests/sample.rs">
+ERROR [26:9] type annotations needed for `Sample<std::string::String, _>`
+</diagnostics>
+[0m→ [0mRead tests/sample.rs[90m [offset=24, limit=8][0m
+[0m
+[0m$ [0mcargo fmt
+[0m
+[0m$ [0mcargo test
+Compiling evalkit v0.1.0 (/home/mark/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running unittests src/lib.rs (target/debug/deps/evalkit-452dfbfa3b4ac9de)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sample.rs (target/debug/deps/sample-c2a3291574cecd2f)
+
+running 4 tests
+test sample_builder_generates_id_when_reference_is_present ... ok
+test sample_new_constructs_input_and_reference ... ok
+test sample_builder_supports_explicit_id_optional_reference_and_metadata ... ok
+test sample_new_generates_deterministic_ids_from_content ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests evalkit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[0m
+Verification passed with `cargo test` and 4 new public API tests. I’m recording the completed `Sample` component in `state.md`, including one interface deviation that fell out of Rust’s type constraints around auto-generated IDs.
+[0m$ [0mdate --iso-8601=seconds
+2026-04-03T16:40:38+02:00
+[0m
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M state.md
+[0m→ [0mRead state.md[90m [offset=1, limit=120][0m
+✅ Iteration 2 complete.  
+Component: Sample  
+Status: DONE  
+Tests: 4 passed, 0 failed  
+Deviations: 1  
+Next component: Dataset

@@ -1,0 +1,620 @@
+[0m
+> build · gpt-5.4
+[0m
+Reading `state.md` first to determine the single component assigned for iteration 15 and check for any in-progress or blocked work to resume.
+[0m→ [0mRead state.md[90m [offset=1, limit=400][0m
+`Run builder` is now the next eligible component: its previous blocker was cleared by iteration 14. I’m pulling the exact spec sections and current implementation surfaces before editing so this iteration stays confined to that one component.
+[0m
+[0m# [0mTodos
+[ ] Read Run builder spec sections, dependency order, and acceptance criteria
+[ ] Inspect existing crate code that Run builder must compose
+[ ] Implement Run builder with focused tests for its acceptance criteria
+[ ] Run formatting/tests and update state.md for iteration 15
+[0m
+[0m✱ [0mGrep "^## 3\.|^### AC-|^## 5\.|^### 5\.8|^## 7\.|^## 8\.|^## 9\.|^## 11\.|^### 11\.1|^### 11\.2"[90m in docs/spec · 9 matches[0m
+[0m✱ [0mGlob "src/*.rs"[90m in . · 12 matches[0m
+[0m✱ [0mGlob "tests/*.rs"[90m in . · 7 matches[0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=50, limit=180][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=562, limit=170][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=797, limit=180][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=957, limit=80][0m
+[0m→ [0mRead src/lib.rs[90m [offset=1, limit=220][0m
+[0m→ [0mRead src/acquisition.rs[90m [offset=1, limit=260][0m
+[0m→ [0mRead src/scorer.rs[90m [offset=1, limit=220][0m
+[0m→ [0mRead src/scorer_set.rs[90m [offset=1, limit=320][0m
+[0m→ [0mRead src/dataset.rs[90m [offset=1, limit=200][0m
+[0m→ [0mRead src/run_result.rs[90m [offset=1, limit=320][0m
+[0m→ [0mRead src/sample.rs[90m [offset=1, limit=220][0m
+I’ve got the exact `Run` spec surface and the current crate APIs. Next I’m checking the rest of `ScorerSet` internals and the crate dependencies so the `Run` implementation can compose existing types without inventing parallel abstractions.
+[0m→ [0mRead Cargo.toml[90m [offset=1, limit=220][0m
+[0m→ [0mRead src/scorer_set.rs[90m [offset=321, limit=320][0m
+[0m✱ [0mGrep "RunBuildError|RunError|struct Run|enum Run|trait Acquisition|ScorerSet|concurrency|sample_timeout|acquisition_mode"[90m in docs/spec · 50 matches[0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=731, limit=120][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=303, limit=260][0m
+[0m✱ [0mGrep "prelude|Run::builder|pub struct Run|pub enum RunBuildError|pub enum RunError|enum AcquisitionMode|struct RunBuilder"[90m in docs/spec · 7 matches[0m
+Plan for iteration 15:
+- Add `src/run.rs` to define `Run`, typestate builders, `RunBuildError`, and `RunError`.
+- Update `src/lib.rs` to export `Run`, the two run error types, and wire in the new module.
+- Add `tests/run.rs` covering `Run::builder(...).execute().await`, per-sample `RunResult` structure, async execution, mixed standalone scorers plus `ScorerSet`, and global mapper behavior for AC-06.5.
+- Keep `Run` generic over `I`, `O`, and `R`, but erase acquisition/scorer internals behind crate-private executor traits so the public `Run` type stays small.
+- Reuse existing `Dataset`, `ScorerSet`, `RunResult`, and `Scorer` surfaces exactly as implemented; no parallel result types or duplicate scorer abstractions.
+- Validate build-time invariants from Section 8: non-empty dataset, unique sample IDs, and unique scorer names.
+- Validate every scorer result after execution so invalid `Score` values become `ScorerError`, matching Section 6.1 and Section 9.
+- Verify AC-02.2 through AC-02.6 and AC-06.5 with tests, then run the full test suite and update `state.md`.
+[0m
+[0m# [0mTodos
+[x] Read Run builder spec sections, dependency order, and acceptance criteria
+[x] Inspect existing crate code that Run builder must compose
+[ ] Implement Run builder with focused tests for its acceptance criteria
+[ ] Run formatting/tests and update state.md for iteration 15
+[0m
+I have the design pinned down. I’m adding a single `run.rs` module with typestate builder states, erased acquisition/scoring executors, build-time validation, timeout handling, and score validation, plus integration tests that exercise the public builder chain end to end.
+[0m⚙ [0mapply_patch Success. Updated the following files:
+A src/run.rs
+M src/lib.rs
+A tests/run.rs
+
+LSP errors detected in src/run.rs, please fix:
+<diagnostics file="/home/mark/evalkit/src/run.rs">
+ERROR [525:9] the parameter type `O` may not live long enough
+...so that the type `O` will meet its required lifetime bounds
+ERROR [643:23] the parameter type `I` may not live long enough
+the parameter type `I` must be valid for the static lifetime...
+ERROR [643:23] the parameter type `I` may not live long enough
+...so that the type `I` will meet its required lifetime bounds
+ERROR [643:23] the parameter type `O` may not live long enough
+the parameter type `O` must be valid for the static lifetime...
+ERROR [643:23] the parameter type `O` may not live long enough
+...so that the type `O` will meet its required lifetime bounds
+ERROR [643:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [643:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+</diagnostics>
+[0m→ [0mRead src/run.rs[90m [offset=500, limit=180][0m
+[0m→ [0mRead src/run.rs[90m [offset=620, limit=80][0m
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M src/run.rs
+
+LSP errors detected in src/run.rs, please fix:
+<diagnostics file="/home/mark/evalkit/src/run.rs">
+ERROR [525:9] the parameter type `O` may not live long enough
+...so that the type `O` will meet its required lifetime bounds
+ERROR [643:23] the parameter type `I` may not live long enough
+the parameter type `I` must be valid for the static lifetime...
+ERROR [643:23] the parameter type `I` may not live long enough
+...so that the type `I` will meet its required lifetime bounds
+ERROR [643:23] the parameter type `O` may not live long enough
+the parameter type `O` must be valid for the static lifetime...
+ERROR [643:23] the parameter type `O` may not live long enough
+...so that the type `O` will meet its required lifetime bounds
+ERROR [643:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [643:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+</diagnostics>
+[0m✗ [0mapply_patch failed
+[91m[1mError: [0mapply_patch verification failed: Error: Failed to find expected lines in /home/mark/evalkit/src/run.rs:
+    pub fn scorer_set(
+        self,
+        scorer_set: ScorerSet<I, O2, R2>,
+    ) -> RunBuilderWithTargets<I, O, R, O2, R2, OutputState, ReferenceState> {
+[0m✱ [0mGrep "pub fn scorer_set|impl<I, O, A> ErasedAcquisition"[90m in src · 3 matches[0m
+[0m→ [0mRead src/run.rs[90m [offset=280, limit=120][0m
+[0m→ [0mRead src/run.rs[90m [offset=516, limit=40][0m
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M src/run.rs
+
+LSP errors detected in src/run.rs, please fix:
+<diagnostics file="/home/mark/evalkit/src/run.rs">
+ERROR [525:9] the parameter type `O` may not live long enough
+...so that the type `O` will meet its required lifetime bounds
+ERROR [643:23] the parameter type `I` may not live long enough
+the parameter type `I` must be valid for the static lifetime...
+ERROR [643:23] the parameter type `I` may not live long enough
+...so that the type `I` will meet its required lifetime bounds
+ERROR [643:23] the parameter type `O` may not live long enough
+the parameter type `O` must be valid for the static lifetime...
+ERROR [643:23] the parameter type `O` may not live long enough
+...so that the type `O` will meet its required lifetime bounds
+ERROR [643:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [643:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+</diagnostics>
+The `Run` implementation is in place, but there are a couple of lifetime/type-erasure edges around boxed async executors. I’m compiling now to resolve those concretely before I touch `state.md`.
+[0m
+[0m$ [0mcargo test
+Compiling evalkit v0.1.0 (/home/mark/evalkit)
+error[E0310]: the parameter type `O` may not live long enough
+   --> src/run.rs:201:26
+    |
+201 |             acquisition: Box::new(acquisition),
+    |                          ^^^^^^^^^^^^^^^^^^^^^
+    |                          |
+    |                          the parameter type `O` must be valid for the static lifetime...
+    |                          ...so that the type `O` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+195 |     pub fn acquisition<O: 'static, A>(self, acquisition: A) -> RunBuilderConfigured<I, O, R>
+    |                         +++++++++
+
+For more information about this error, try `rustc --explain E0310`.
+error: could not compile `evalkit` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `evalkit` (lib test) due to 1 previous error
+[0m
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M src/run.rs
+
+LSP errors detected in src/run.rs, please fix:
+<diagnostics file="/home/mark/evalkit/src/run.rs">
+ERROR [525:9] the parameter type `O` may not live long enough
+...so that the type `O` will meet its required lifetime bounds
+ERROR [643:23] the parameter type `I` may not live long enough
+the parameter type `I` must be valid for the static lifetime...
+ERROR [643:23] the parameter type `I` may not live long enough
+...so that the type `I` will meet its required lifetime bounds
+ERROR [643:23] the parameter type `O` may not live long enough
+the parameter type `O` must be valid for the static lifetime...
+ERROR [643:23] the parameter type `O` may not live long enough
+...so that the type `O` will meet its required lifetime bounds
+ERROR [643:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [643:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+</diagnostics>
+[0m
+[0m$ [0mcargo test
+Compiling evalkit v0.1.0 (/home/mark/evalkit)
+error[E0277]: the trait bound `ReferenceLengthScorer: Scorer<String, usize, String>` is not satisfied
+   --> tests/run.rs:129:17
+    |
+129 |         .scorer(ReferenceLengthScorer)
+    |          ------ ^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |          |
+    |          required by a bound introduced by this call
+    |
+help: the trait `Scorer<String, _, String>` is not implemented for `ReferenceLengthScorer`
+      but trait `Scorer<String, _, usize>` is implemented for it
+   --> tests/run.rs:39:1
+    |
+ 39 | impl Scorer<String, usize, usize> for ReferenceLengthScorer {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for that trait implementation, expected `usize`, found `String`
+note: required by a bound in `evalkit::scorer_set::ScorerSetBuilder::<I, O, R, O2, R2, OutputState, ReferenceState>::scorer`
+   --> /home/mark/evalkit/src/scorer_set.rs:112:12
+    |
+107 |     pub fn scorer<S>(
+    |            ------ required by a bound in this associated function
+...
+112 |         S: Scorer<I, O2, R2> + 'static,
+    |            ^^^^^^^^^^^^^^^^^ required by this bound in `ScorerSetBuilder::<I, O, R, O2, R2, OutputState, ReferenceState>::scorer`
+
+error[E0277]: the trait bound `LengthScorer: Scorer<String, usize, usize>` is not satisfied
+   --> tests/run.rs:182:17
+    |
+182 |         .scorer(LengthScorer { name: "global_len" })
+    |          ------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |          |
+    |          required by a bound introduced by this call
+    |
+help: the trait `Scorer<String, _, usize>` is not implemented for `LengthScorer`
+      but trait `Scorer<String, _, ()>` is implemented for it
+   --> tests/run.rs:24:1
+    |
+ 24 | impl Scorer<String, usize> for LengthScorer {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for that trait implementation, expected `()`, found `usize`
+note: required by a bound in `evalkit::run::RunBuilderConfigured::<I, O, R, O2, R2, OutputState, ReferenceState>::scorer`
+   --> /home/mark/evalkit/src/run.rs:310:12
+    |
+305 |     pub fn scorer<S>(
+    |            ------ required by a bound in this associated function
+...
+310 |         S: Scorer<I, O2, R2> + 'static,
+    |            ^^^^^^^^^^^^^^^^^ required by this bound in `RunBuilderConfigured::<I, O, R, O2, R2, OutputState, ReferenceState>::scorer`
+
+error[E0277]: `Run<String, String, String>` doesn't implement `Debug`
+   --> tests/run.rs:218:10
+    |
+218 |         .unwrap_err();
+    |          ^^^^^^^^^^ the trait `Debug` is not implemented for `Run<String, String, String>`
+    |
+note: required by a bound in `Result::<T, E>::unwrap_err`
+   --> /build/rustc-1.93.0-src/library/core/src/result.rs:1324:5
+
+error[E0277]: the trait bound `LengthScorer: Scorer<String, String, String>` is not satisfied
+   --> tests/run.rs:228:17
+    |
+228 |         .scorer(LengthScorer { name: "dup" })
+    |          ------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |          |
+    |          required by a bound introduced by this call
+    |
+help: the trait `Scorer<String, String, String>` is not implemented for `LengthScorer`
+      but trait `Scorer<String, usize, ()>` is implemented for it
+   --> tests/run.rs:24:1
+    |
+ 24 | impl Scorer<String, usize> for LengthScorer {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `evalkit::run::RunBuilderConfigured::<I, O, R, O2, R2, OutputState, ReferenceState>::scorer`
+   --> /home/mark/evalkit/src/run.rs:310:12
+    |
+305 |     pub fn scorer<S>(
+    |            ------ required by a bound in this associated function
+...
+310 |         S: Scorer<I, O2, R2> + 'static,
+    |            ^^^^^^^^^^^^^^^^^ required by this bound in `RunBuilderConfigured::<I, O, R, O2, R2, OutputState, ReferenceState>::scorer`
+
+error[E0277]: the trait bound `LengthScorer: Scorer<String, String, String>` is not satisfied
+   --> tests/run.rs:229:17
+    |
+229 |         .scorer(LengthScorer { name: "dup" })
+    |          ------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |          |
+    |          required by a bound introduced by this call
+    |
+help: the trait `Scorer<String, String, String>` is not implemented for `LengthScorer`
+      but trait `Scorer<String, usize, ()>` is implemented for it
+   --> tests/run.rs:24:1
+    |
+ 24 | impl Scorer<String, usize> for LengthScorer {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `evalkit::run::RunBuilderWithTargets::<I, O, R, O2, R2, OutputState, ReferenceState>::scorer`
+   --> /home/mark/evalkit/src/run.rs:355:12
+    |
+353 |     pub fn scorer<S>(mut self, scorer: S) -> Self
+    |            ------ required by a bound in this associated function
+354 |     where
+355 |         S: Scorer<I, O2, R2> + 'static,
+    |            ^^^^^^^^^^^^^^^^^ required by this bound in `RunBuilderWithTargets::<I, O, R, O2, R2, OutputState, ReferenceState>::scorer`
+
+error[E0277]: `Run<String, String, String>` doesn't implement `Debug`
+   --> tests/run.rs:231:10
+    |
+231 |         .unwrap_err();
+    |          ^^^^^^^^^^ the trait `Debug` is not implemented for `Run<String, String, String>`
+    |
+note: required by a bound in `Result::<T, E>::unwrap_err`
+   --> /build/rustc-1.93.0-src/library/core/src/result.rs:1324:5
+
+error[E0599]: no method named `sample_timeout` found for struct `evalkit::run::RunBuilderConfigured<I, O, R, O2, R2, OutputState, ReferenceState>` in the current scope
+   --> tests/run.rs:266:10
+    |
+257 |       let timeout_run = Run::builder()
+    |  _______________________-
+258 | |         .dataset(vec![Sample::new(
+259 | |             String::from("slow"),
+260 | |             String::from("reference"),
+...   |
+265 | |         })
+266 | |         .sample_timeout(Duration::from_millis(1))
+    | |         -^^^^^^^^^^^^^^ private field, not a method
+    | |_________|
+    |
+
+error[E0282]: type annotations needed
+   --> tests/run.rs:271:26
+    |
+271 |     let timeout_result = timeout_run.execute().await.unwrap();
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot infer type
+
+error[E0277]: the trait bound `LengthScorer: Scorer<String, _, String>` is not satisfied
+   --> tests/run.rs:292:17
+    |
+292 |         .scorer(LengthScorer { name: "len_a" })
+    |          ------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |          |
+    |          required by a bound introduced by this call
+    |
+help: the trait `Scorer<String, _, String>` is not implemented for `LengthScorer`
+      but trait `Scorer<String, usize, ()>` is implemented for it
+   --> tests/run.rs:24:1
+    |
+ 24 | impl Scorer<String, usize> for LengthScorer {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for that trait implementation, expected `()`, found `String`
+note: required by a bound in `evalkit::run::RunBuilderConfigured::<I, O, R, O2, R2, OutputState, ReferenceState>::scorer`
+   --> /home/mark/evalkit/src/run.rs:310:12
+    |
+305 |     pub fn scorer<S>(
+    |            ------ required by a bound in this associated function
+...
+310 |         S: Scorer<I, O2, R2> + 'static,
+    |            ^^^^^^^^^^^^^^^^^ required by this bound in `RunBuilderConfigured::<I, O, R, O2, R2, OutputState, ReferenceState>::scorer`
+
+error[E0277]: the trait bound `LengthScorer: Scorer<String, _, String>` is not satisfied
+   --> tests/run.rs:293:17
+    |
+293 |         .scorer(LengthScorer { name: "len_b" })
+    |          ------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |          |
+    |          required by a bound introduced by this call
+    |
+help: the trait `Scorer<String, _, String>` is not implemented for `LengthScorer`
+      but trait `Scorer<String, usize, ()>` is implemented for it
+   --> tests/run.rs:24:1
+    |
+ 24 | impl Scorer<String, usize> for LengthScorer {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for that trait implementation, expected `()`, found `String`
+note: required by a bound in `evalkit::run::RunBuilderWithTargets::<I, O, R, O2, R2, OutputState, ReferenceState>::scorer`
+   --> /home/mark/evalkit/src/run.rs:355:12
+    |
+353 |     pub fn scorer<S>(mut self, scorer: S) -> Self
+    |            ------ required by a bound in this associated function
+354 |     where
+355 |         S: Scorer<I, O2, R2> + 'static,
+    |            ^^^^^^^^^^^^^^^^^ required by this bound in `RunBuilderWithTargets::<I, O, R, O2, R2, OutputState, ReferenceState>::scorer`
+
+Some errors have detailed explanations: E0277, E0282, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `evalkit` (test "run") due to 10 previous errors
+warning: build failed, waiting for other jobs to finish...
+[0m
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M tests/run.rs
+[0m
+[0m$ [0mcargo test
+Compiling evalkit v0.1.0 (/home/mark/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.07s
+     Running unittests src/lib.rs (target/debug/deps/evalkit-452dfbfa3b4ac9de)
+
+running 25 tests
+test acquisition::tests::acquisition_error_value_variants_are_distinct_from_wrapped_failures ... ok
+test acquisition::tests::acquisition_error_wrapped_variants_preserve_sources ... ok
+test acquisition::tests::acquisition_blanket_impl_supports_async_closures ... ok
+test scorer::tests::scorer_definition_returns_name_and_direction ... ok
+test acquisition::tests::acquisition_trait_supports_custom_implementations ... ok
+test scorer::tests::scorer_errors_are_distinct_from_scores ... ok
+test scorer::tests::scorer_trait_supports_default_reference_type_and_send_sync ... ok
+test scorer_context::tests::scorer_context_defaults_reference_type_to_unit ... ok
+test scorer::tests::scorer_score_returns_score_result ... ok
+test scorer_context::tests::scorer_context_holds_input_output_and_reference ... ok
+test scorer_context::tests::scorer_context_supports_absent_reference ... ok
+test scorer_context::tests::scorer_context_supports_non_string_generics ... ok
+test scorer_set::tests::mapper_errors_become_scorer_errors_for_all_scorers ... ok
+test scorer_set::tests::output_mapper_runs_once_per_trial_and_is_shared ... ok
+test scorer_set::tests::scorer_set_builds_with_map_output_and_scored_results ... ok
+test scorer_set::tests::scorer_set_builds_with_map_reference ... ok
+test scorers::tests::contains_returns_binary_score ... ok
+test scorers::tests::exact_match_returns_binary_score ... ok
+test scorers::tests::json_schema_invalid_json_is_a_scorer_error ... ok
+test scorers::tests::json_schema_returns_false_for_non_matching_json ... ok
+test scorers::tests::json_schema_validates_object_shape ... ok
+test scorers::tests::missing_reference_returns_scorer_error ... ok
+test scorers::tests::invalid_regex_pattern_is_distinct_from_low_score ... ok
+test scorers::tests::builtin_scorers_expose_expected_definitions ... ok
+test scorers::tests::regex_returns_binary_score ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dataset.rs (target/debug/deps/dataset-c6ec30cd6a3387a7)
+
+running 2 tests
+test dataset_from_vec_matches_new_constructor ... ok
+test dataset_new_constructs_from_sample_vector ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mapper.rs (target/debug/deps/mapper-6f5b818cd7e6c0ad)
+
+running 4 tests
+test closure_mapper_maps_string_to_length ... ok
+test mapper_supports_non_string_generics ... ok
+test map_error_wraps_and_exposes_inner_error ... ok
+test mapper_trait_is_object_safe_for_shared_use ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run.rs (target/debug/deps/run-d0794dbfe5504b52)
+
+running 5 tests
+test global_mapper_failures_propagate_to_every_affected_scorer ... ok
+test global_mappers_apply_before_standalone_scorers_and_scorer_sets ... ok
+test run_builder_executes_dataset_and_returns_sample_results ... ok
+test run_accepts_multiple_scorers_and_scorer_sets ... ok
+test build_validates_duplicates_and_execute_validates_scores_and_timeouts ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run_result.rs (target/debug/deps/run_result-12cdfb9bc866e26c)
+
+running 4 tests
+test sample_result_can_distinguish_low_scores_from_failed_scores ... ok
+test trial_result_deserializes_error_entries_back_into_scorer_errors ... ok
+test trial_result_serializes_scores_and_errors_distinctly ... ok
+test run_result_round_trips_metadata_and_sample_order ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sample.rs (target/debug/deps/sample-c2a3291574cecd2f)
+
+running 4 tests
+test sample_builder_generates_id_when_reference_is_present ... ok
+test sample_builder_supports_explicit_id_optional_reference_and_metadata ... ok
+test sample_new_constructs_input_and_reference ... ok
+test sample_new_generates_deterministic_ids_from_content ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score.rs (target/debug/deps/score-830f483bb5e0027a)
+
+running 4 tests
+test score_binary_round_trips_through_json ... ok
+test score_label_round_trips_through_json ... ok
+test score_metric_round_trips_through_json ... ok
+test score_numeric_serializes_as_tagged_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test score_definition_maximize_sets_maximize_direction ... ok
+test score_definition_minimize_sets_minimize_direction ... ok
+test score_definition_new_defaults_to_no_direction ... ok
+test score_definition_round_trips_through_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score_definition.rs (target/debug/deps/score_definition-05fe97cc37f5ae7c)
+     Running tests/scorer_error.rs (target/debug/deps/scorer_error-6d7e1765eb66a4a4)
+   Doc-tests evalkit
+
+running 4 tests
+test scorer_error_debug_includes_wrapper_type ... ok
+test scorer_error_implements_error_send_and_sync ... ok
+test scorer_error_exposes_inner_error_as_source ... ok
+test scorer_error_wraps_and_displays_inner_error ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[0m
+The implementation compiles and the new `Run` tests pass. I’m doing a final formatting pass and one more full test run before updating `state.md` for iteration 15.
+[0m$ [0mcargo fmt && cargo test
+Compiling evalkit v0.1.0 (/home/mark/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.60s
+     Running unittests src/lib.rs (target/debug/deps/evalkit-452dfbfa3b4ac9de)
+
+running 25 tests
+test acquisition::tests::acquisition_error_value_variants_are_distinct_from_wrapped_failures ... ok
+test acquisition::tests::acquisition_error_wrapped_variants_preserve_sources ... ok
+test acquisition::tests::acquisition_blanket_impl_supports_async_closures ... ok
+test scorer::tests::scorer_definition_returns_name_and_direction ... ok
+test acquisition::tests::acquisition_trait_supports_custom_implementations ... ok
+test scorer::tests::scorer_errors_are_distinct_from_scores ... ok
+test scorer_context::tests::scorer_context_defaults_reference_type_to_unit ... ok
+test scorer::tests::scorer_score_returns_score_result ... ok
+test scorer_context::tests::scorer_context_holds_input_output_and_reference ... ok
+test scorer::tests::scorer_trait_supports_default_reference_type_and_send_sync ... ok
+test scorer_context::tests::scorer_context_supports_absent_reference ... ok
+test scorer_context::tests::scorer_context_supports_non_string_generics ... ok
+test scorer_set::tests::mapper_errors_become_scorer_errors_for_all_scorers ... ok
+test scorer_set::tests::scorer_set_builds_with_map_output_and_scored_results ... ok
+test scorer_set::tests::output_mapper_runs_once_per_trial_and_is_shared ... ok
+test scorer_set::tests::scorer_set_builds_with_map_reference ... ok
+test scorers::tests::contains_returns_binary_score ... ok
+test scorers::tests::exact_match_returns_binary_score ... ok
+test scorers::tests::json_schema_invalid_json_is_a_scorer_error ... ok
+test scorers::tests::json_schema_returns_false_for_non_matching_json ... ok
+test scorers::tests::missing_reference_returns_scorer_error ... ok
+test scorers::tests::json_schema_validates_object_shape ... ok
+test scorers::tests::invalid_regex_pattern_is_distinct_from_low_score ... ok
+test scorers::tests::builtin_scorers_expose_expected_definitions ... ok
+test scorers::tests::regex_returns_binary_score ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dataset.rs (target/debug/deps/dataset-c6ec30cd6a3387a7)
+
+running 2 tests
+test dataset_from_vec_matches_new_constructor ... ok
+test dataset_new_constructs_from_sample_vector ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mapper.rs (target/debug/deps/mapper-6f5b818cd7e6c0ad)
+
+running 4 tests
+test closure_mapper_maps_string_to_length ... ok
+test mapper_supports_non_string_generics ... ok
+test map_error_wraps_and_exposes_inner_error ... ok
+test mapper_trait_is_object_safe_for_shared_use ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run.rs (target/debug/deps/run-d0794dbfe5504b52)
+
+running 5 tests
+test global_mappers_apply_before_standalone_scorers_and_scorer_sets ... ok
+test global_mapper_failures_propagate_to_every_affected_scorer ... ok
+test run_accepts_multiple_scorers_and_scorer_sets ... ok
+test run_builder_executes_dataset_and_returns_sample_results ... ok
+test build_validates_duplicates_and_execute_validates_scores_and_timeouts ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run_result.rs (target/debug/deps/run_result-12cdfb9bc866e26c)
+
+running 4 tests
+test sample_result_can_distinguish_low_scores_from_failed_scores ... ok
+test trial_result_deserializes_error_entries_back_into_scorer_errors ... ok
+test trial_result_serializes_scores_and_errors_distinctly ... ok
+test run_result_round_trips_metadata_and_sample_order ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sample.rs (target/debug/deps/sample-c2a3291574cecd2f)
+
+running 4 tests
+test sample_builder_generates_id_when_reference_is_present ... ok
+test sample_builder_supports_explicit_id_optional_reference_and_metadata ... ok
+test sample_new_constructs_input_and_reference ... ok
+test sample_new_generates_deterministic_ids_from_content ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score.rs (target/debug/deps/score-830f483bb5e0027a)
+
+running 4 tests
+test score_binary_round_trips_through_json ... ok
+test score_label_round_trips_through_json ... ok
+test score_metric_round_trips_through_json ... ok
+test score_numeric_serializes_as_tagged_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test score_definition_maximize_sets_maximize_direction ... ok
+test score_definition_minimize_sets_minimize_direction ... ok
+test score_definition_new_defaults_to_no_direction ... ok
+test score_definition_round_trips_through_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score_definition.rs (target/debug/deps/score_definition-05fe97cc37f5ae7c)
+     Running tests/scorer_error.rs (target/debug/deps/scorer_error-6d7e1765eb66a4a4)
+   Doc-tests evalkit
+
+running 4 tests
+test scorer_error_debug_includes_wrapper_type ... ok
+test scorer_error_exposes_inner_error_as_source ... ok
+test scorer_error_implements_error_send_and_sync ... ok
+test scorer_error_wraps_and_displays_inner_error ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[0m
+[0m$ [0mdate --iso-8601=seconds
+2026-04-03T17:28:37+02:00
+[0m
+[0m→ [0mRead state.md[90m [offset=1, limit=70][0m
+[0m→ [0mRead state.md[90m [offset=33, limit=40][0m
+[0m→ [0mRead state.md[90m [offset=250, limit=90][0m
+[0m→ [0mRead state.md[90m [offset=330, limit=30][0m
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M state.md
+[0m
+[0m# [0mTodos
+[x] Read Run builder spec sections, dependency order, and acceptance criteria
+[x] Inspect existing crate code that Run builder must compose
+[x] Implement Run builder with focused tests for its acceptance criteria
+[x] Run formatting/tests and update state.md for iteration 15
+[0m
+✅ Iteration 15 complete.  
+Component: Run builder  
+Status: DONE  
+Tests: 52 passed, 0 failed  
+Deviations: 1  
+Next component: Stats

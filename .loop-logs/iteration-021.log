@@ -1,0 +1,1413 @@
+[0m
+> build · gpt-5.4
+[0m
+Reading `state.md` first to determine the exact next component, then I’ll pull only the relevant spec sections and existing code for that one iteration task.
+[0m→ [0mRead state.md[90m [offset=1, limit=400][0m
+[0m→ [0mRead state.md[90m [offset=401, limit=200][0m
+State shows exactly one remaining available component: `LLM-as-a-Judge scorer [llm-judge]`. I’m pulling its spec/API/AC references and the current crate surfaces it will need to integrate with before editing.
+[0m→ [0mRead Cargo.toml[90m [offset=1, limit=250][0m
+[0m→ [0mRead src/lib.rs[90m [offset=1, limit=250][0m
+[0m→ [0mRead src/scorers/mod.rs[90m [offset=1, limit=400][0m
+[0m✱ [0mGrep "LLM-as-a-Judge|llm-judge|judge"[90m in docs/spec · 16 matches[0m
+[0m✱ [0mGrep "AC-[0-9]+\.[0-9]+"[90m in docs/spec · 63 matches[0m
+[0m✱ [0mGlob "src/**/*"[90m in . · 18 matches[0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=100, limit=40][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=410, limit=40][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=800, limit=90][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=968, limit=40][0m
+[0m✱ [0mGrep "LlmJudgeConfig|prompt template|score extraction|OpenAI-compatible|chat completion"[90m in docs/spec · 5 matches[0m
+[0m✱ [0mGrep "Section 6|Data Model|LlmJudge"[90m in docs/spec · 3 matches[0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=930, limit=30][0m
+[0m✱ [0mGrep "struct .*Config|LlmJudgeConfig|prompt_template|api_key|base_url|model"[90m in docs/spec · 4 matches[0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=669, limit=170][0m
+[0m→ [0mRead src/otel.rs[90m [offset=1, limit=260][0m
+[0m→ [0mRead tests/observe.rs[90m [offset=1, limit=260][0m
+[0m✱ [0mGrep "reqwest|TraceBackendError|with_header|Authorization|json\("[90m in src · 30 matches[0m
+[0m✱ [0mGlob "tests/*.rs"[90m in . · 13 matches[0m
+Iteration 21 scope:
+
+- Implement the feature-gated `llm_judge(config: LlmJudgeConfig) -> impl Scorer<String, String, String>` API from Section 5.3.
+- Extend `src/scorers/mod.rs` with the config types, OpenAI-compatible HTTP client call, prompt rendering, response parsing, and `ScorerError` mapping.
+- Update `src/lib.rs` to export the new scorer and config types only under `llm-judge`.
+- Add `tests/llm_judge.rs` with feature-gated coverage for config/extraction, request payload contents, parse/network error handling, and async operation.
+- Use existing `Scorer`, `ScorerContext`, `Score`, and `ScorerError` interfaces; no completed component interfaces need changing.
+- Verify AC-05.1 through AC-05.5 with `cargo fmt`, `cargo test`, and `cargo test --features llm-judge`.
+[0m→ [0mRead src/scorers/mod.rs[90m [offset=401, limit=160][0m
+Editing the scorer module and crate exports now. The implementation will stay feature-gated and minimal: one config type, one extraction enum, one HTTP path, and focused integration tests.
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M src/scorers/mod.rs
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M src/lib.rs
+[0m⚙ [0mapply_patch Success. Updated the following files:
+A tests/llm_judge.rs
+[0m→ [0mRead src/scorers/mod.rs[90m [offset=1, limit=220][0m
+[0m→ [0mRead src/lib.rs[90m [offset=1, limit=80][0m
+[0m→ [0mRead tests/llm_judge.rs[90m [offset=1, limit=320][0m
+[0m✱ [0mGrep "LlmJudgeRequest|LlmJudgeError|render_prompt|chat_completions_url|first_message_content|impl LlmJudgeScoreExtractor"[90m in src/scorers · 17 matches[0m
+[0m→ [0mRead src/scorers/mod.rs[90m [offset=221, limit=180][0m
+Running formatting and full verification now, including the new `llm-judge` feature and the existing `otel` feature so this iteration exits clean across feature combinations.
+[0m
+[0m$ [0mcargo fmt && cargo test && cargo test --features llm-judge && cargo test --features otel && cargo test --features "otel llm-judge"
+Compiling evalkit v0.1.0 (/home/mark/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.90s
+     Running unittests src/lib.rs (target/debug/deps/evalkit-452dfbfa3b4ac9de)
+
+running 25 tests
+test acquisition::tests::acquisition_error_value_variants_are_distinct_from_wrapped_failures ... ok
+test acquisition::tests::acquisition_error_wrapped_variants_preserve_sources ... ok
+test acquisition::tests::acquisition_blanket_impl_supports_async_closures ... ok
+test acquisition::tests::acquisition_trait_supports_custom_implementations ... ok
+test scorer::tests::scorer_definition_returns_name_and_direction ... ok
+test scorer::tests::scorer_errors_are_distinct_from_scores ... ok
+test scorer_context::tests::scorer_context_defaults_reference_type_to_unit ... ok
+test scorer::tests::scorer_score_returns_score_result ... ok
+test scorer_context::tests::scorer_context_holds_input_output_and_reference ... ok
+test scorer::tests::scorer_trait_supports_default_reference_type_and_send_sync ... ok
+test scorer_context::tests::scorer_context_supports_absent_reference ... ok
+test scorer_context::tests::scorer_context_supports_non_string_generics ... ok
+test scorer_set::tests::scorer_set_builds_with_map_output_and_scored_results ... ok
+test scorer_set::tests::output_mapper_runs_once_per_trial_and_is_shared ... ok
+test scorer_set::tests::mapper_errors_become_scorer_errors_for_all_scorers ... ok
+test scorer_set::tests::scorer_set_builds_with_map_reference ... ok
+test scorers::tests::contains_returns_binary_score ... ok
+test scorers::tests::exact_match_returns_binary_score ... ok
+test scorers::tests::json_schema_invalid_json_is_a_scorer_error ... ok
+test scorers::tests::json_schema_validates_object_shape ... ok
+test scorers::tests::json_schema_returns_false_for_non_matching_json ... ok
+test scorers::tests::missing_reference_returns_scorer_error ... ok
+test scorers::tests::invalid_regex_pattern_is_distinct_from_low_score ... ok
+test scorers::tests::builtin_scorers_expose_expected_definitions ... ok
+test scorers::tests::regex_returns_binary_score ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/comparison.rs (target/debug/deps/comparison-609e02bbffaa197a)
+
+running 6 tests
+test compare_marks_direction_mismatch_as_incomparable ... ok
+test compare_applies_the_configured_confidence_level_to_significance ... ok
+test compare_reports_direction_aware_numeric_and_metric_sample_deltas ... ok
+test compare_treats_label_scores_as_change_only_without_significance ... ok
+test compare_uses_welch_t_test_and_marks_non_significant_deltas ... ok
+test compare_uses_fisher_exact_for_binary_scores_with_different_trial_counts ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dataset.rs (target/debug/deps/dataset-c6ec30cd6a3387a7)
+
+running 2 tests
+test dataset_from_vec_matches_new_constructor ... ok
+test dataset_new_constructs_from_sample_vector ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/jsonl.rs (target/debug/deps/jsonl-93cb96da138d6b62)
+
+running 2 tests
+test write_jsonl_serializes_metadata_then_samples_as_jsonl ... ok
+test read_jsonl_round_trips_back_to_a_typed_run_result ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/llm_judge.rs (target/debug/deps/llm_judge-45a569016b491644)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mapper.rs (target/debug/deps/mapper-6f5b818cd7e6c0ad)
+
+running 4 tests
+test closure_mapper_maps_string_to_length ... ok
+test mapper_trait_is_object_safe_for_shared_use ... ok
+test map_error_wraps_and_exposes_inner_error ... ok
+test mapper_supports_non_string_generics ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/observe.rs (target/debug/deps/observe-34bc812e8adeb943)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/otel.rs (target/debug/deps/otel-d98808bce9871d38)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run.rs (target/debug/deps/run-d0794dbfe5504b52)
+
+running 5 tests
+test global_mapper_failures_propagate_to_every_affected_scorer ... ok
+test global_mappers_apply_before_standalone_scorers_and_scorer_sets ... ok
+test run_builder_executes_dataset_and_returns_sample_results ... ok
+test run_accepts_multiple_scorers_and_scorer_sets ... ok
+test build_validates_duplicates_and_execute_validates_scores_and_timeouts ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run_result.rs (target/debug/deps/run_result-12cdfb9bc866e26c)
+
+running 4 tests
+test sample_result_can_distinguish_low_scores_from_failed_scores ... ok
+test trial_result_deserializes_error_entries_back_into_scorer_errors ... ok
+test trial_result_serializes_scores_and_errors_distinctly ... ok
+test run_result_round_trips_metadata_and_sample_order ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sample.rs (target/debug/deps/sample-c2a3291574cecd2f)
+
+running 4 tests
+test sample_builder_supports_explicit_id_optional_reference_and_metadata ... ok
+test sample_builder_generates_id_when_reference_is_present ... ok
+test sample_new_constructs_input_and_reference ... ok
+test sample_new_generates_deterministic_ids_from_content ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score.rs (target/debug/deps/score-830f483bb5e0027a)
+
+running 4 tests
+test score_binary_round_trips_through_json ... ok
+test score_label_round_trips_through_json ... ok
+test score_metric_round_trips_through_json ... ok
+test score_numeric_serializes_as_tagged_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score_definition.rs (target/debug/deps/score_definition-05fe97cc37f5ae7c)
+
+running 4 tests
+test score_definition_maximize_sets_maximize_direction ... ok
+test score_definition_new_defaults_to_no_direction ... ok
+test score_definition_minimize_sets_minimize_direction ... ok
+test score_definition_round_trips_through_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/scorer_error.rs (target/debug/deps/scorer_error-6d7e1765eb66a4a4)
+
+running 4 tests
+test scorer_error_exposes_inner_error_as_source ... ok
+test scorer_error_debug_includes_wrapper_type ... ok
+test scorer_error_implements_error_send_and_sync ... ok
+test scorer_error_wraps_and_displays_inner_error ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/stats.rs (target/debug/deps/stats-ec2a13dd5e1f7ea2)
+
+running 5 tests
+test run_result_stats_compute_binary_pass_metrics_and_wilson_interval ... ok
+test run_result_stats_compute_label_distribution_and_mode ... ok
+test run_result_stats_exclude_errors_from_denominator_and_report_total_errors ... ok
+test run_result_stats_handle_single_trial_without_special_casing ... ok
+test run_result_stats_compute_numeric_and_metric_aggregates_with_t_confidence_intervals ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests evalkit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling evalkit v0.1.0 (/home/mark/evalkit)
+error[E0639]: cannot create non-exhaustive struct using struct expression
+  --> tests/llm_judge.rs:34:17
+   |
+34 |           .score(&ScorerContext {
+   |  _________________^
+35 | |             input: &input,
+36 | |             output: &output,
+37 | |             reference: Some(&reference),
+38 | |         })
+   | |_________^
+
+error[E0639]: cannot create non-exhaustive struct using struct expression
+  --> tests/llm_judge.rs:70:17
+   |
+70 |           .score(&ScorerContext {
+   |  _________________^
+71 | |             input: &input,
+72 | |             output: &output,
+73 | |             reference: None,
+74 | |         })
+   | |_________^
+
+error[E0639]: cannot create non-exhaustive struct using struct expression
+   --> tests/llm_judge.rs:104:17
+    |
+104 |           .score(&ScorerContext {
+    |  _________________^
+105 | |             input: &input,
+106 | |             output: &output,
+107 | |             reference: Some(&reference),
+108 | |         })
+    | |_________^
+
+error[E0639]: cannot create non-exhaustive struct using struct expression
+   --> tests/llm_judge.rs:133:17
+    |
+133 |           .score(&ScorerContext {
+    |  _________________^
+134 | |             input: &input,
+135 | |             output: &output,
+136 | |             reference: Some(&reference),
+137 | |         })
+    | |_________^
+
+For more information about this error, try `rustc --explain E0639`.
+error: could not compile `evalkit` (test "llm_judge") due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+[0m
+The new feature tests hit an expected public-API constraint: `ScorerContext` is `#[non_exhaustive]`, so integration tests can’t construct it directly. I’m switching those tests to exercise `llm_judge` through `Run`, which is also closer to the intended external usage.
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M tests/llm_judge.rs
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M tests/llm_judge.rs
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M tests/llm_judge.rs
+[0m
+[0m$ [0mcargo fmt && cargo test && cargo test --features llm-judge && cargo test --features otel && cargo test --features "otel llm-judge"
+Compiling evalkit v0.1.0 (/home/mark/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src/lib.rs (target/debug/deps/evalkit-452dfbfa3b4ac9de)
+
+running 25 tests
+test acquisition::tests::acquisition_error_value_variants_are_distinct_from_wrapped_failures ... ok
+test acquisition::tests::acquisition_error_wrapped_variants_preserve_sources ... ok
+test acquisition::tests::acquisition_blanket_impl_supports_async_closures ... ok
+test acquisition::tests::acquisition_trait_supports_custom_implementations ... ok
+test scorer::tests::scorer_definition_returns_name_and_direction ... ok
+test scorer::tests::scorer_score_returns_score_result ... ok
+test scorer::tests::scorer_errors_are_distinct_from_scores ... ok
+test scorer_context::tests::scorer_context_defaults_reference_type_to_unit ... ok
+test scorer::tests::scorer_trait_supports_default_reference_type_and_send_sync ... ok
+test scorer_context::tests::scorer_context_holds_input_output_and_reference ... ok
+test scorer_context::tests::scorer_context_supports_absent_reference ... ok
+test scorer_context::tests::scorer_context_supports_non_string_generics ... ok
+test scorer_set::tests::mapper_errors_become_scorer_errors_for_all_scorers ... ok
+test scorer_set::tests::output_mapper_runs_once_per_trial_and_is_shared ... ok
+test scorer_set::tests::scorer_set_builds_with_map_output_and_scored_results ... ok
+test scorer_set::tests::scorer_set_builds_with_map_reference ... ok
+test scorers::tests::contains_returns_binary_score ... ok
+test scorers::tests::exact_match_returns_binary_score ... ok
+test scorers::tests::json_schema_invalid_json_is_a_scorer_error ... ok
+test scorers::tests::json_schema_returns_false_for_non_matching_json ... ok
+test scorers::tests::json_schema_validates_object_shape ... ok
+test scorers::tests::missing_reference_returns_scorer_error ... ok
+test scorers::tests::invalid_regex_pattern_is_distinct_from_low_score ... ok
+test scorers::tests::builtin_scorers_expose_expected_definitions ... ok
+test scorers::tests::regex_returns_binary_score ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/comparison.rs (target/debug/deps/comparison-609e02bbffaa197a)
+
+running 6 tests
+test compare_marks_direction_mismatch_as_incomparable ... ok
+test compare_applies_the_configured_confidence_level_to_significance ... ok
+test compare_reports_direction_aware_numeric_and_metric_sample_deltas ... ok
+test compare_treats_label_scores_as_change_only_without_significance ... ok
+test compare_uses_welch_t_test_and_marks_non_significant_deltas ... ok
+test compare_uses_fisher_exact_for_binary_scores_with_different_trial_counts ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dataset.rs (target/debug/deps/dataset-c6ec30cd6a3387a7)
+
+running 2 tests
+test dataset_from_vec_matches_new_constructor ... ok
+test dataset_new_constructs_from_sample_vector ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/jsonl.rs (target/debug/deps/jsonl-93cb96da138d6b62)
+
+running 2 tests
+test write_jsonl_serializes_metadata_then_samples_as_jsonl ... ok
+test read_jsonl_round_trips_back_to_a_typed_run_result ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/llm_judge.rs (target/debug/deps/llm_judge-45a569016b491644)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mapper.rs (target/debug/deps/mapper-6f5b818cd7e6c0ad)
+
+running 4 tests
+test closure_mapper_maps_string_to_length ... ok
+test map_error_wraps_and_exposes_inner_error ... ok
+test mapper_supports_non_string_generics ... ok
+test mapper_trait_is_object_safe_for_shared_use ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/observe.rs (target/debug/deps/observe-34bc812e8adeb943)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/otel.rs (target/debug/deps/otel-d98808bce9871d38)
+     Running tests/run.rs (target/debug/deps/run-d0794dbfe5504b52)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 5 tests
+test global_mapper_failures_propagate_to_every_affected_scorer ... ok
+test global_mappers_apply_before_standalone_scorers_and_scorer_sets ... ok
+test run_accepts_multiple_scorers_and_scorer_sets ... ok
+test run_builder_executes_dataset_and_returns_sample_results ... ok
+test build_validates_duplicates_and_execute_validates_scores_and_timeouts ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run_result.rs (target/debug/deps/run_result-12cdfb9bc866e26c)
+
+running 4 tests
+test sample_result_can_distinguish_low_scores_from_failed_scores ... ok
+test trial_result_deserializes_error_entries_back_into_scorer_errors ... ok
+test trial_result_serializes_scores_and_errors_distinctly ... ok
+test run_result_round_trips_metadata_and_sample_order ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sample.rs (target/debug/deps/sample-c2a3291574cecd2f)
+
+running 4 tests
+test sample_builder_generates_id_when_reference_is_present ... ok
+test sample_builder_supports_explicit_id_optional_reference_and_metadata ... ok
+test sample_new_constructs_input_and_reference ... ok
+test sample_new_generates_deterministic_ids_from_content ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score.rs (target/debug/deps/score-830f483bb5e0027a)
+
+running 4 tests
+test score_label_round_trips_through_json ... ok
+test score_binary_round_trips_through_json ... ok
+test score_metric_round_trips_through_json ... ok
+test score_numeric_serializes_as_tagged_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score_definition.rs (target/debug/deps/score_definition-05fe97cc37f5ae7c)
+
+running 4 tests
+test score_definition_maximize_sets_maximize_direction ... ok
+test score_definition_minimize_sets_minimize_direction ... ok
+test score_definition_new_defaults_to_no_direction ... ok
+test score_definition_round_trips_through_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/scorer_error.rs (target/debug/deps/scorer_error-6d7e1765eb66a4a4)
+
+running 4 tests
+test scorer_error_debug_includes_wrapper_type ... ok
+test scorer_error_exposes_inner_error_as_source ... ok
+test scorer_error_wraps_and_displays_inner_error ... ok
+test scorer_error_implements_error_send_and_sync ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/stats.rs (target/debug/deps/stats-ec2a13dd5e1f7ea2)
+
+running 5 tests
+test run_result_stats_compute_label_distribution_and_mode ... ok
+test run_result_stats_compute_binary_pass_metrics_and_wilson_interval ... ok
+test run_result_stats_exclude_errors_from_denominator_and_report_total_errors ... ok
+test run_result_stats_handle_single_trial_without_special_casing ... ok
+test run_result_stats_compute_numeric_and_metric_aggregates_with_t_confidence_intervals ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests evalkit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling evalkit v0.1.0 (/home/mark/evalkit)
+error[E0308]: mismatched types
+   --> tests/llm_judge.rs:282:5
+    |
+270 |   ) -> Result<Score, evalkit::ScorerError> {
+    |        ----------------------------------- expected `Result<Score, ScorerError>` because of return type
+...
+282 | /     result.samples[0].trials[0]
+283 | |         .scores
+284 | |         .get("llm_judge")
+285 | |         .unwrap()
+286 | |         .clone()
+    | |________________^ expected `Result<Score, ScorerError>`, found `&Result<Score, ScorerError>`
+    |
+    = note:   expected enum `Result<_, _>`
+            found reference `&Result<_, _>`
+note: `Result<Score, ScorerError>` does not implement `Clone`, so `&Result<Score, ScorerError>` was cloned instead
+   --> tests/llm_judge.rs:282:5
+    |
+282 | /     result.samples[0].trials[0]
+283 | |         .scores
+284 | |         .get("llm_judge")
+285 | |         .unwrap()
+    | |_________________^
+    = help: `Clone` is not implemented because the trait bound `ScorerError: Clone` is not satisfied
+
+error[E0382]: borrow of moved value: `scorer`
+   --> tests/llm_judge.rs:35:16
+    |
+ 19 |     let scorer = llm_judge(LlmJudgeConfig {
+    |         ------ move occurs because `scorer` has type `impl Scorer<std::string::String, std::string::String, std::string::String>`, which does not implement the `Copy` trait
+...
+ 32 |     let score = run_single_sample(Sample::new(input.clone(), reference), output, scorer).await;
+    |                                                                                  ------ value moved here
+...
+ 35 |     assert_eq!(scorer.definition(), ScoreDefinition::new("llm_judge"));
+    |                ^^^^^^ value borrowed here after move
+    |
+note: consider changing this parameter type in function `run_single_sample` to borrow instead if owning the value isn't necessary
+   --> tests/llm_judge.rs:245:13
+    |
+242 | async fn run_single_sample(
+    |          ----------------- in this function
+...
+245 |     scorer: impl evalkit::Scorer<String, String, String>,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter takes ownership of the value
+
+Some errors have detailed explanations: E0308, E0382.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `evalkit` (test "llm_judge") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+[0m
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M tests/llm_judge.rs
+[0m
+[0m$ [0mcargo fmt && cargo test && cargo test --features llm-judge && cargo test --features otel && cargo test --features "otel llm-judge"
+Compiling evalkit v0.1.0 (/home/mark/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src/lib.rs (target/debug/deps/evalkit-452dfbfa3b4ac9de)
+
+running 25 tests
+test acquisition::tests::acquisition_error_value_variants_are_distinct_from_wrapped_failures ... ok
+test acquisition::tests::acquisition_error_wrapped_variants_preserve_sources ... ok
+test acquisition::tests::acquisition_blanket_impl_supports_async_closures ... ok
+test scorer::tests::scorer_definition_returns_name_and_direction ... ok
+test acquisition::tests::acquisition_trait_supports_custom_implementations ... ok
+test scorer::tests::scorer_errors_are_distinct_from_scores ... ok
+test scorer_context::tests::scorer_context_defaults_reference_type_to_unit ... ok
+test scorer::tests::scorer_score_returns_score_result ... ok
+test scorer::tests::scorer_trait_supports_default_reference_type_and_send_sync ... ok
+test scorer_context::tests::scorer_context_holds_input_output_and_reference ... ok
+test scorer_context::tests::scorer_context_supports_absent_reference ... ok
+test scorer_context::tests::scorer_context_supports_non_string_generics ... ok
+test scorer_set::tests::mapper_errors_become_scorer_errors_for_all_scorers ... ok
+test scorer_set::tests::scorer_set_builds_with_map_output_and_scored_results ... ok
+test scorer_set::tests::output_mapper_runs_once_per_trial_and_is_shared ... ok
+test scorer_set::tests::scorer_set_builds_with_map_reference ... ok
+test scorers::tests::contains_returns_binary_score ... ok
+test scorers::tests::exact_match_returns_binary_score ... ok
+test scorers::tests::json_schema_invalid_json_is_a_scorer_error ... ok
+test scorers::tests::json_schema_returns_false_for_non_matching_json ... ok
+test scorers::tests::json_schema_validates_object_shape ... ok
+test scorers::tests::missing_reference_returns_scorer_error ... ok
+test scorers::tests::invalid_regex_pattern_is_distinct_from_low_score ... ok
+test scorers::tests::builtin_scorers_expose_expected_definitions ... ok
+test scorers::tests::regex_returns_binary_score ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/comparison.rs (target/debug/deps/comparison-609e02bbffaa197a)
+
+running 6 tests
+test compare_applies_the_configured_confidence_level_to_significance ... ok
+test compare_marks_direction_mismatch_as_incomparable ... ok
+test compare_reports_direction_aware_numeric_and_metric_sample_deltas ... ok
+test compare_treats_label_scores_as_change_only_without_significance ... ok
+test compare_uses_welch_t_test_and_marks_non_significant_deltas ... ok
+test compare_uses_fisher_exact_for_binary_scores_with_different_trial_counts ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dataset.rs (target/debug/deps/dataset-c6ec30cd6a3387a7)
+
+running 2 tests
+test dataset_from_vec_matches_new_constructor ... ok
+test dataset_new_constructs_from_sample_vector ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/jsonl.rs (target/debug/deps/jsonl-93cb96da138d6b62)
+
+running 2 tests
+test write_jsonl_serializes_metadata_then_samples_as_jsonl ... ok
+test read_jsonl_round_trips_back_to_a_typed_run_result ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/llm_judge.rs (target/debug/deps/llm_judge-45a569016b491644)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mapper.rs (target/debug/deps/mapper-6f5b818cd7e6c0ad)
+
+running 4 tests
+test closure_mapper_maps_string_to_length ... ok
+test map_error_wraps_and_exposes_inner_error ... ok
+test mapper_supports_non_string_generics ... ok
+test mapper_trait_is_object_safe_for_shared_use ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/observe.rs (target/debug/deps/observe-34bc812e8adeb943)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/otel.rs (target/debug/deps/otel-d98808bce9871d38)
+     Running tests/run.rs (target/debug/deps/run-d0794dbfe5504b52)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 5 tests
+test global_mappers_apply_before_standalone_scorers_and_scorer_sets ... ok
+test global_mapper_failures_propagate_to_every_affected_scorer ... ok
+test run_accepts_multiple_scorers_and_scorer_sets ... ok
+test run_builder_executes_dataset_and_returns_sample_results ... ok
+test build_validates_duplicates_and_execute_validates_scores_and_timeouts ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run_result.rs (target/debug/deps/run_result-12cdfb9bc866e26c)
+
+running 4 tests
+test sample_result_can_distinguish_low_scores_from_failed_scores ... ok
+test trial_result_deserializes_error_entries_back_into_scorer_errors ... ok
+test trial_result_serializes_scores_and_errors_distinctly ... ok
+test run_result_round_trips_metadata_and_sample_order ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sample.rs (target/debug/deps/sample-c2a3291574cecd2f)
+
+running 4 tests
+test sample_builder_generates_id_when_reference_is_present ... ok
+test sample_new_constructs_input_and_reference ... ok
+test sample_builder_supports_explicit_id_optional_reference_and_metadata ... ok
+test sample_new_generates_deterministic_ids_from_content ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score.rs (target/debug/deps/score-830f483bb5e0027a)
+
+running 4 tests
+test score_binary_round_trips_through_json ... ok
+test score_label_round_trips_through_json ... ok
+test score_metric_round_trips_through_json ... ok
+test score_numeric_serializes_as_tagged_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score_definition.rs (target/debug/deps/score_definition-05fe97cc37f5ae7c)
+
+running 4 tests
+test score_definition_maximize_sets_maximize_direction ... ok
+test score_definition_minimize_sets_minimize_direction ... ok
+test score_definition_new_defaults_to_no_direction ... ok
+test score_definition_round_trips_through_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/scorer_error.rs (target/debug/deps/scorer_error-6d7e1765eb66a4a4)
+
+running 4 tests
+test scorer_error_exposes_inner_error_as_source ... ok
+test scorer_error_debug_includes_wrapper_type ... ok
+test scorer_error_implements_error_send_and_sync ... ok
+test scorer_error_wraps_and_displays_inner_error ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/stats.rs (target/debug/deps/stats-ec2a13dd5e1f7ea2)
+   Doc-tests evalkit
+
+running 5 tests
+test run_result_stats_compute_label_distribution_and_mode ... ok
+test run_result_stats_compute_binary_pass_metrics_and_wilson_interval ... ok
+test run_result_stats_exclude_errors_from_denominator_and_report_total_errors ... ok
+test run_result_stats_handle_single_trial_without_special_casing ... ok
+test run_result_stats_compute_numeric_and_metric_aggregates_with_t_confidence_intervals ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling evalkit v0.1.0 (/home/mark/evalkit)
+error[E0310]: the parameter type `impl evalkit::Scorer<String, String, String>` may not live long enough
+   --> tests/llm_judge.rs:280:15
+    |
+280 |       let run = Run::builder()
+    |  _______________^
+281 | |         .dataset(vec![sample])
+282 | |         .acquisition(move |_input: &String| {
+283 | |             let output = output.clone();
+284 | |             async move { Ok(output) }
+285 | |         })
+286 | |         .scorer(scorer)
+    | |                       ^
+    | |                       |
+    | |_______________________the parameter type `impl evalkit::Scorer<String, String, String>` must be valid for the static lifetime...
+    |                         ...so that the type `impl evalkit::Scorer<String, String, String>` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+278 |     scorer: impl evalkit::Scorer<String, String, String> + 'static,
+    |                                                          +++++++++
+
+For more information about this error, try `rustc --explain E0310`.
+error: could not compile `evalkit` (test "llm_judge") due to 1 previous error
+[0m
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M tests/llm_judge.rs
+[0m
+[0m$ [0mcargo fmt && cargo test && cargo test --features llm-judge && cargo test --features otel && cargo test --features "otel llm-judge"
+Compiling evalkit v0.1.0 (/home/mark/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src/lib.rs (target/debug/deps/evalkit-452dfbfa3b4ac9de)
+
+running 25 tests
+test acquisition::tests::acquisition_error_wrapped_variants_preserve_sources ... ok
+test acquisition::tests::acquisition_error_value_variants_are_distinct_from_wrapped_failures ... ok
+test acquisition::tests::acquisition_blanket_impl_supports_async_closures ... ok
+test scorer::tests::scorer_definition_returns_name_and_direction ... ok
+test acquisition::tests::acquisition_trait_supports_custom_implementations ... ok
+test scorer::tests::scorer_errors_are_distinct_from_scores ... ok
+test scorer_context::tests::scorer_context_defaults_reference_type_to_unit ... ok
+test scorer::tests::scorer_score_returns_score_result ... ok
+test scorer_context::tests::scorer_context_holds_input_output_and_reference ... ok
+test scorer::tests::scorer_trait_supports_default_reference_type_and_send_sync ... ok
+test scorer_context::tests::scorer_context_supports_absent_reference ... ok
+test scorer_context::tests::scorer_context_supports_non_string_generics ... ok
+test scorer_set::tests::mapper_errors_become_scorer_errors_for_all_scorers ... ok
+test scorer_set::tests::output_mapper_runs_once_per_trial_and_is_shared ... ok
+test scorer_set::tests::scorer_set_builds_with_map_output_and_scored_results ... ok
+test scorer_set::tests::scorer_set_builds_with_map_reference ... ok
+test scorers::tests::contains_returns_binary_score ... ok
+test scorers::tests::exact_match_returns_binary_score ... ok
+test scorers::tests::json_schema_invalid_json_is_a_scorer_error ... ok
+test scorers::tests::json_schema_returns_false_for_non_matching_json ... ok
+test scorers::tests::missing_reference_returns_scorer_error ... ok
+test scorers::tests::json_schema_validates_object_shape ... ok
+test scorers::tests::invalid_regex_pattern_is_distinct_from_low_score ... ok
+test scorers::tests::builtin_scorers_expose_expected_definitions ... ok
+test scorers::tests::regex_returns_binary_score ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/comparison.rs (target/debug/deps/comparison-609e02bbffaa197a)
+
+running 6 tests
+test compare_marks_direction_mismatch_as_incomparable ... ok
+test compare_applies_the_configured_confidence_level_to_significance ... ok
+test compare_reports_direction_aware_numeric_and_metric_sample_deltas ... ok
+test compare_uses_fisher_exact_for_binary_scores_with_different_trial_counts ... ok
+test compare_treats_label_scores_as_change_only_without_significance ... ok
+test compare_uses_welch_t_test_and_marks_non_significant_deltas ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dataset.rs (target/debug/deps/dataset-c6ec30cd6a3387a7)
+
+running 2 tests
+test dataset_from_vec_matches_new_constructor ... ok
+test dataset_new_constructs_from_sample_vector ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/jsonl.rs (target/debug/deps/jsonl-93cb96da138d6b62)
+
+running 2 tests
+test write_jsonl_serializes_metadata_then_samples_as_jsonl ... ok
+test read_jsonl_round_trips_back_to_a_typed_run_result ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/llm_judge.rs (target/debug/deps/llm_judge-45a569016b491644)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mapper.rs (target/debug/deps/mapper-6f5b818cd7e6c0ad)
+
+running 4 tests
+test closure_mapper_maps_string_to_length ... ok
+test map_error_wraps_and_exposes_inner_error ... ok
+test mapper_trait_is_object_safe_for_shared_use ... ok
+test mapper_supports_non_string_generics ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/observe.rs (target/debug/deps/observe-34bc812e8adeb943)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/otel.rs (target/debug/deps/otel-d98808bce9871d38)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run.rs (target/debug/deps/run-d0794dbfe5504b52)
+     Running tests/run_result.rs (target/debug/deps/run_result-12cdfb9bc866e26c)
+
+running 5 tests
+test run_builder_executes_dataset_and_returns_sample_results ... ok
+test run_accepts_multiple_scorers_and_scorer_sets ... ok
+test global_mappers_apply_before_standalone_scorers_and_scorer_sets ... ok
+test global_mapper_failures_propagate_to_every_affected_scorer ... ok
+test build_validates_duplicates_and_execute_validates_scores_and_timeouts ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test sample_result_can_distinguish_low_scores_from_failed_scores ... ok
+test trial_result_deserializes_error_entries_back_into_scorer_errors ... ok
+test trial_result_serializes_scores_and_errors_distinctly ... ok
+test run_result_round_trips_metadata_and_sample_order ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sample.rs (target/debug/deps/sample-c2a3291574cecd2f)
+
+running 4 tests
+test sample_builder_generates_id_when_reference_is_present ... ok
+test sample_builder_supports_explicit_id_optional_reference_and_metadata ... ok
+test sample_new_constructs_input_and_reference ... ok
+test sample_new_generates_deterministic_ids_from_content ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score.rs (target/debug/deps/score-830f483bb5e0027a)
+
+running 4 tests
+test score_binary_round_trips_through_json ... ok
+test score_label_round_trips_through_json ... ok
+test score_metric_round_trips_through_json ... ok
+test score_numeric_serializes_as_tagged_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score_definition.rs (target/debug/deps/score_definition-05fe97cc37f5ae7c)
+
+running 4 tests
+test score_definition_maximize_sets_maximize_direction ... ok
+test score_definition_minimize_sets_minimize_direction ... ok
+test score_definition_new_defaults_to_no_direction ... ok
+test score_definition_round_trips_through_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/scorer_error.rs (target/debug/deps/scorer_error-6d7e1765eb66a4a4)
+
+running 4 tests
+test scorer_error_debug_includes_wrapper_type ... ok
+test scorer_error_exposes_inner_error_as_source ... ok
+test scorer_error_implements_error_send_and_sync ... ok
+test scorer_error_wraps_and_displays_inner_error ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/stats.rs (target/debug/deps/stats-ec2a13dd5e1f7ea2)
+
+running 5 tests
+test run_result_stats_compute_label_distribution_and_mode ... ok
+test run_result_stats_compute_binary_pass_metrics_and_wilson_interval ... ok
+test run_result_stats_exclude_errors_from_denominator_and_report_total_errors ... ok
+test run_result_stats_handle_single_trial_without_special_casing ... ok
+test run_result_stats_compute_numeric_and_metric_aggregates_with_t_confidence_intervals ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests evalkit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling evalkit v0.1.0 (/home/mark/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.36s
+     Running unittests src/lib.rs (target/debug/deps/evalkit-a6eac0df37940111)
+
+running 25 tests
+test acquisition::tests::acquisition_error_value_variants_are_distinct_from_wrapped_failures ... ok
+test acquisition::tests::acquisition_error_wrapped_variants_preserve_sources ... ok
+test scorer::tests::scorer_definition_returns_name_and_direction ... ok
+test acquisition::tests::acquisition_blanket_impl_supports_async_closures ... ok
+test scorer::tests::scorer_errors_are_distinct_from_scores ... ok
+test acquisition::tests::acquisition_trait_supports_custom_implementations ... ok
+test scorer::tests::scorer_score_returns_score_result ... ok
+test scorer_context::tests::scorer_context_holds_input_output_and_reference ... ok
+test scorer::tests::scorer_trait_supports_default_reference_type_and_send_sync ... ok
+test scorer_context::tests::scorer_context_defaults_reference_type_to_unit ... ok
+test scorer_context::tests::scorer_context_supports_absent_reference ... ok
+test scorer_context::tests::scorer_context_supports_non_string_generics ... ok
+test scorer_set::tests::mapper_errors_become_scorer_errors_for_all_scorers ... ok
+test scorer_set::tests::output_mapper_runs_once_per_trial_and_is_shared ... ok
+test scorer_set::tests::scorer_set_builds_with_map_output_and_scored_results ... ok
+test scorer_set::tests::scorer_set_builds_with_map_reference ... ok
+test scorers::tests::contains_returns_binary_score ... ok
+test scorers::tests::exact_match_returns_binary_score ... ok
+test scorers::tests::json_schema_invalid_json_is_a_scorer_error ... ok
+test scorers::tests::json_schema_validates_object_shape ... ok
+test scorers::tests::json_schema_returns_false_for_non_matching_json ... ok
+test scorers::tests::missing_reference_returns_scorer_error ... ok
+test scorers::tests::invalid_regex_pattern_is_distinct_from_low_score ... ok
+test scorers::tests::builtin_scorers_expose_expected_definitions ... ok
+test scorers::tests::regex_returns_binary_score ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/comparison.rs (target/debug/deps/comparison-e2a268335d83fde3)
+
+running 6 tests
+test compare_marks_direction_mismatch_as_incomparable ... ok
+test compare_applies_the_configured_confidence_level_to_significance ... ok
+test compare_reports_direction_aware_numeric_and_metric_sample_deltas ... ok
+test compare_treats_label_scores_as_change_only_without_significance ... ok
+test compare_uses_welch_t_test_and_marks_non_significant_deltas ... ok
+test compare_uses_fisher_exact_for_binary_scores_with_different_trial_counts ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dataset.rs (target/debug/deps/dataset-f300e4cd54c14d39)
+
+running 2 tests
+test dataset_from_vec_matches_new_constructor ... ok
+test dataset_new_constructs_from_sample_vector ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/jsonl.rs (target/debug/deps/jsonl-fedfc9c183c08e9c)
+
+running 2 tests
+test write_jsonl_serializes_metadata_then_samples_as_jsonl ... ok
+test read_jsonl_round_trips_back_to_a_typed_run_result ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/llm_judge.rs (target/debug/deps/llm_judge-038471f00375c2dc)
+     Running tests/mapper.rs (target/debug/deps/mapper-631e3739431528f7)
+
+running 5 tests
+test llm_judge_config_skips_api_key_during_serde ... ok
+test llm_judge_network_errors_return_scorer_error ... ok
+test llm_judge_parse_errors_return_scorer_error ... ok
+test llm_judge_supports_boolean_extraction_without_reference ... ok
+test llm_judge_sends_prompt_and_parses_score_json ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test closure_mapper_maps_string_to_length ... ok
+test map_error_wraps_and_exposes_inner_error ... ok
+test mapper_supports_non_string_generics ... ok
+test mapper_trait_is_object_safe_for_shared_use ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/observe.rs (target/debug/deps/observe-41ca41411e923e2f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/otel.rs (target/debug/deps/otel-47addcefc452ad78)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run.rs (target/debug/deps/run-0912ccda28846be1)
+
+running 5 tests
+test global_mapper_failures_propagate_to_every_affected_scorer ... ok
+test global_mappers_apply_before_standalone_scorers_and_scorer_sets ... ok
+test run_accepts_multiple_scorers_and_scorer_sets ... ok
+test run_builder_executes_dataset_and_returns_sample_results ... ok
+test build_validates_duplicates_and_execute_validates_scores_and_timeouts ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run_result.rs (target/debug/deps/run_result-0a7d2fa1215c9d3f)
+
+running 4 tests
+test sample_result_can_distinguish_low_scores_from_failed_scores ... ok
+test trial_result_deserializes_error_entries_back_into_scorer_errors ... ok
+test trial_result_serializes_scores_and_errors_distinctly ... ok
+test run_result_round_trips_metadata_and_sample_order ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sample.rs (target/debug/deps/sample-84224911e5ef6a15)
+
+running 4 tests
+test sample_builder_generates_id_when_reference_is_present ... ok
+test sample_builder_supports_explicit_id_optional_reference_and_metadata ... ok
+test sample_new_constructs_input_and_reference ... ok
+test sample_new_generates_deterministic_ids_from_content ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score.rs (target/debug/deps/score-d3d002dd91fced8a)
+
+running 4 tests
+test score_label_round_trips_through_json ... ok
+test score_metric_round_trips_through_json ... ok
+test score_binary_round_trips_through_json ... ok
+test score_numeric_serializes_as_tagged_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score_definition.rs (target/debug/deps/score_definition-f48075a2d91b672e)
+
+running 4 tests
+test score_definition_maximize_sets_maximize_direction ... ok
+test score_definition_minimize_sets_minimize_direction ... ok
+test score_definition_new_defaults_to_no_direction ... ok
+test score_definition_round_trips_through_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/scorer_error.rs (target/debug/deps/scorer_error-55f1554471850593)
+     Running tests/stats.rs (target/debug/deps/stats-e72f146f26ffd555)
+   Doc-tests evalkit
+
+running 4 tests
+test scorer_error_debug_includes_wrapper_type ... ok
+test scorer_error_implements_error_send_and_sync ... ok
+test scorer_error_exposes_inner_error_as_source ... ok
+test scorer_error_wraps_and_displays_inner_error ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 5 tests
+test run_result_stats_compute_binary_pass_metrics_and_wilson_interval ... ok
+test run_result_stats_compute_label_distribution_and_mode ... ok
+test run_result_stats_handle_single_trial_without_special_casing ... ok
+test run_result_stats_exclude_errors_from_denominator_and_report_total_errors ... ok
+test run_result_stats_compute_numeric_and_metric_aggregates_with_t_confidence_intervals ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling evalkit v0.1.0 (/home/mark/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.16s
+     Running unittests src/lib.rs (target/debug/deps/evalkit-d1b546cccd57ff6b)
+
+running 25 tests
+test acquisition::tests::acquisition_blanket_impl_supports_async_closures ... ok
+test acquisition::tests::acquisition_error_value_variants_are_distinct_from_wrapped_failures ... ok
+test acquisition::tests::acquisition_error_wrapped_variants_preserve_sources ... ok
+test scorer::tests::scorer_definition_returns_name_and_direction ... ok
+test acquisition::tests::acquisition_trait_supports_custom_implementations ... ok
+test scorer::tests::scorer_errors_are_distinct_from_scores ... ok
+test scorer_context::tests::scorer_context_defaults_reference_type_to_unit ... ok
+test scorer::tests::scorer_score_returns_score_result ... ok
+test scorer_context::tests::scorer_context_holds_input_output_and_reference ... ok
+test scorer::tests::scorer_trait_supports_default_reference_type_and_send_sync ... ok
+test scorer_context::tests::scorer_context_supports_absent_reference ... ok
+test scorer_context::tests::scorer_context_supports_non_string_generics ... ok
+test scorer_set::tests::mapper_errors_become_scorer_errors_for_all_scorers ... ok
+test scorer_set::tests::output_mapper_runs_once_per_trial_and_is_shared ... ok
+test scorer_set::tests::scorer_set_builds_with_map_output_and_scored_results ... ok
+test scorer_set::tests::scorer_set_builds_with_map_reference ... ok
+test scorers::tests::exact_match_returns_binary_score ... ok
+test scorers::tests::contains_returns_binary_score ... ok
+test scorers::tests::json_schema_invalid_json_is_a_scorer_error ... ok
+test scorers::tests::json_schema_returns_false_for_non_matching_json ... ok
+test scorers::tests::missing_reference_returns_scorer_error ... ok
+test scorers::tests::json_schema_validates_object_shape ... ok
+test scorers::tests::invalid_regex_pattern_is_distinct_from_low_score ... ok
+test scorers::tests::builtin_scorers_expose_expected_definitions ... ok
+test scorers::tests::regex_returns_binary_score ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/comparison.rs (target/debug/deps/comparison-5ff523bb5cec7f07)
+
+running 6 tests
+test compare_marks_direction_mismatch_as_incomparable ... ok
+test compare_applies_the_configured_confidence_level_to_significance ... ok
+test compare_reports_direction_aware_numeric_and_metric_sample_deltas ... ok
+test compare_treats_label_scores_as_change_only_without_significance ... ok
+test compare_uses_welch_t_test_and_marks_non_significant_deltas ... ok
+test compare_uses_fisher_exact_for_binary_scores_with_different_trial_counts ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dataset.rs (target/debug/deps/dataset-b33229550f9a7975)
+
+running 2 tests
+test dataset_from_vec_matches_new_constructor ... ok
+test dataset_new_constructs_from_sample_vector ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/jsonl.rs (target/debug/deps/jsonl-1e2ef88023cb32e3)
+     Running tests/llm_judge.rs (target/debug/deps/llm_judge-edc499969b9dd9b2)
+
+running 2 tests
+test write_jsonl_serializes_metadata_then_samples_as_jsonl ... ok
+test read_jsonl_round_trips_back_to_a_typed_run_result ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mapper.rs (target/debug/deps/mapper-db5ec510609c5902)
+     Running tests/observe.rs (target/debug/deps/observe-1831f8ce1965f282)
+
+running 4 tests
+test closure_mapper_maps_string_to_length ... ok
+test mapper_supports_non_string_generics ... ok
+test map_error_wraps_and_exposes_inner_error ... ok
+test mapper_trait_is_object_safe_for_shared_use ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test observe_mode_requires_non_generated_sample_ids ... ok
+test observe_mode_maps_missing_sample_spans_to_trace_not_found ... ok
+test observe_mode_runs_from_grouped_spans_and_scores_like_inline_mode ... ok
+test observe_mode_uses_collection_timeout_for_backend_fetches ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/otel.rs (target/debug/deps/otel-9ec7df305db742dd)
+
+running 3 tests
+test trace_backend_trait_supports_custom_implementations ... ok
+test jaeger_backend_groups_matching_spans_by_sample_attribute ... ok
+test jaeger_backend_retries_failed_requests_before_returning ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run.rs (target/debug/deps/run-ac5b15cbcf3e74b8)
+
+running 5 tests
+test global_mappers_apply_before_standalone_scorers_and_scorer_sets ... ok
+test run_accepts_multiple_scorers_and_scorer_sets ... ok
+test global_mapper_failures_propagate_to_every_affected_scorer ... ok
+test run_builder_executes_dataset_and_returns_sample_results ... ok
+test build_validates_duplicates_and_execute_validates_scores_and_timeouts ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run_result.rs (target/debug/deps/run_result-02a19a690b926fd2)
+
+running 4 tests
+test sample_result_can_distinguish_low_scores_from_failed_scores ... ok
+test trial_result_deserializes_error_entries_back_into_scorer_errors ... ok
+test trial_result_serializes_scores_and_errors_distinctly ... ok
+test run_result_round_trips_metadata_and_sample_order ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sample.rs (target/debug/deps/sample-bc3de740b9c1dc67)
+
+running 4 tests
+test sample_builder_generates_id_when_reference_is_present ... ok
+test sample_builder_supports_explicit_id_optional_reference_and_metadata ... ok
+test sample_new_constructs_input_and_reference ... ok
+test sample_new_generates_deterministic_ids_from_content ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score.rs (target/debug/deps/score-d4a810e4c5f6314f)
+
+running 4 tests
+test score_label_round_trips_through_json ... ok
+test score_binary_round_trips_through_json ... ok
+test score_metric_round_trips_through_json ... ok
+test score_numeric_serializes_as_tagged_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score_definition.rs (target/debug/deps/score_definition-259cbf0d6129de59)
+     Running tests/scorer_error.rs (target/debug/deps/scorer_error-c7bfa4442d935782)
+     Running tests/stats.rs (target/debug/deps/stats-95839cb7a2fe5602)
+
+running 4 tests
+test score_definition_maximize_sets_maximize_direction ... ok
+test score_definition_minimize_sets_minimize_direction ... ok
+test score_definition_new_defaults_to_no_direction ... ok
+test score_definition_round_trips_through_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test scorer_error_debug_includes_wrapper_type ... ok
+test scorer_error_exposes_inner_error_as_source ... ok
+test scorer_error_implements_error_send_and_sync ... ok
+test scorer_error_wraps_and_displays_inner_error ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 5 tests
+test run_result_stats_compute_label_distribution_and_mode ... ok
+test run_result_stats_compute_binary_pass_metrics_and_wilson_interval ... ok
+test run_result_stats_exclude_errors_from_denominator_and_report_total_errors ... ok
+test run_result_stats_handle_single_trial_without_special_casing ... ok
+test run_result_stats_compute_numeric_and_metric_aggregates_with_t_confidence_intervals ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests evalkit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling evalkit v0.1.0 (/home/mark/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.28s
+     Running unittests src/lib.rs (target/debug/deps/evalkit-4dde097ca84af1bd)
+
+running 25 tests
+test acquisition::tests::acquisition_error_value_variants_are_distinct_from_wrapped_failures ... ok
+test acquisition::tests::acquisition_error_wrapped_variants_preserve_sources ... ok
+test acquisition::tests::acquisition_blanket_impl_supports_async_closures ... ok
+test scorer::tests::scorer_definition_returns_name_and_direction ... ok
+test acquisition::tests::acquisition_trait_supports_custom_implementations ... ok
+test scorer::tests::scorer_errors_are_distinct_from_scores ... ok
+test scorer::tests::scorer_score_returns_score_result ... ok
+test scorer_context::tests::scorer_context_defaults_reference_type_to_unit ... ok
+test scorer_context::tests::scorer_context_holds_input_output_and_reference ... ok
+test scorer_context::tests::scorer_context_supports_absent_reference ... ok
+test scorer::tests::scorer_trait_supports_default_reference_type_and_send_sync ... ok
+test scorer_context::tests::scorer_context_supports_non_string_generics ... ok
+test scorer_set::tests::mapper_errors_become_scorer_errors_for_all_scorers ... ok
+test scorer_set::tests::output_mapper_runs_once_per_trial_and_is_shared ... ok
+test scorer_set::tests::scorer_set_builds_with_map_output_and_scored_results ... ok
+test scorer_set::tests::scorer_set_builds_with_map_reference ... ok
+test scorers::tests::contains_returns_binary_score ... ok
+test scorers::tests::exact_match_returns_binary_score ... ok
+test scorers::tests::json_schema_invalid_json_is_a_scorer_error ... ok
+test scorers::tests::json_schema_returns_false_for_non_matching_json ... ok
+test scorers::tests::json_schema_validates_object_shape ... ok
+test scorers::tests::missing_reference_returns_scorer_error ... ok
+test scorers::tests::invalid_regex_pattern_is_distinct_from_low_score ... ok
+test scorers::tests::builtin_scorers_expose_expected_definitions ... ok
+test scorers::tests::regex_returns_binary_score ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/comparison.rs (target/debug/deps/comparison-daa665dc716b555d)
+
+running 6 tests
+test compare_marks_direction_mismatch_as_incomparable ... ok
+test compare_applies_the_configured_confidence_level_to_significance ... ok
+test compare_reports_direction_aware_numeric_and_metric_sample_deltas ... ok
+test compare_treats_label_scores_as_change_only_without_significance ... ok
+test compare_uses_welch_t_test_and_marks_non_significant_deltas ... ok
+test compare_uses_fisher_exact_for_binary_scores_with_different_trial_counts ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dataset.rs (target/debug/deps/dataset-fcea93d68e53e58c)
+
+running 2 tests
+test dataset_from_vec_matches_new_constructor ... ok
+test dataset_new_constructs_from_sample_vector ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/jsonl.rs (target/debug/deps/jsonl-c066bc10b0ddef7e)
+
+running 2 tests
+test write_jsonl_serializes_metadata_then_samples_as_jsonl ... ok
+test read_jsonl_round_trips_back_to_a_typed_run_result ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/llm_judge.rs (target/debug/deps/llm_judge-91d6e4db594650d0)
+
+running 5 tests
+test llm_judge_config_skips_api_key_during_serde ... ok
+test llm_judge_network_errors_return_scorer_error ... ok
+test llm_judge_parse_errors_return_scorer_error ... ok
+test llm_judge_sends_prompt_and_parses_score_json ... ok
+test llm_judge_supports_boolean_extraction_without_reference ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mapper.rs (target/debug/deps/mapper-fde16d637749cd98)
+     Running tests/observe.rs (target/debug/deps/observe-d34c0a583e9e443b)
+
+running 4 tests
+test closure_mapper_maps_string_to_length ... ok
+test map_error_wraps_and_exposes_inner_error ... ok
+test mapper_supports_non_string_generics ... ok
+test mapper_trait_is_object_safe_for_shared_use ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test observe_mode_requires_non_generated_sample_ids ... ok
+test observe_mode_maps_missing_sample_spans_to_trace_not_found ... ok
+test observe_mode_runs_from_grouped_spans_and_scores_like_inline_mode ... ok
+test observe_mode_uses_collection_timeout_for_backend_fetches ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+test trace_backend_trait_supports_custom_implementations ... ok
+test jaeger_backend_groups_matching_spans_by_sample_attribute ... ok
+test jaeger_backend_retries_failed_requests_before_returning ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 5 tests
+test run_accepts_multiple_scorers_and_scorer_sets ... ok
+test global_mapper_failures_propagate_to_every_affected_scorer ... ok
+test global_mappers_apply_before_standalone_scorers_and_scorer_sets ... ok
+test run_builder_executes_dataset_and_returns_sample_results ... ok
+test build_validates_duplicates_and_execute_validates_scores_and_timeouts ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test sample_result_can_distinguish_low_scores_from_failed_scores ... ok
+test trial_result_deserializes_error_entries_back_into_scorer_errors ... ok
+test trial_result_serializes_scores_and_errors_distinctly ... ok
+test run_result_round_trips_metadata_and_sample_order ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test sample_builder_generates_id_when_reference_is_present ... ok
+test sample_new_constructs_input_and_reference ... ok
+test sample_builder_supports_explicit_id_optional_reference_and_metadata ... ok
+test sample_new_generates_deterministic_ids_from_content ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test score_binary_round_trips_through_json ... ok
+test score_label_round_trips_through_json ... ok
+test score_metric_round_trips_through_json ... ok
+test score_numeric_serializes_as_tagged_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test score_definition_minimize_sets_minimize_direction ... ok
+test score_definition_maximize_sets_maximize_direction ... ok
+test score_definition_new_defaults_to_no_direction ... ok
+test score_definition_round_trips_through_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test scorer_error_exposes_inner_error_as_source ... ok
+test scorer_error_debug_includes_wrapper_type ... ok
+test scorer_error_implements_error_send_and_sync ... ok
+test scorer_error_wraps_and_displays_inner_error ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 5 tests
+test run_result_stats_compute_label_distribution_and_mode ... ok
+test run_result_stats_compute_binary_pass_metrics_and_wilson_interval ... ok
+test run_result_stats_handle_single_trial_without_special_casing ... ok
+test run_result_stats_exclude_errors_from_denominator_and_report_total_errors ... ok
+test run_result_stats_compute_numeric_and_metric_aggregates_with_t_confidence_intervals ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/otel.rs (target/debug/deps/otel-858c03815d7c3cdc)
+     Running tests/run.rs (target/debug/deps/run-4e8fbe425a5f96e8)
+     Running tests/run_result.rs (target/debug/deps/run_result-d85b68e443152c96)
+     Running tests/sample.rs (target/debug/deps/sample-fd4cb25e6df9606c)
+     Running tests/score.rs (target/debug/deps/score-d77d8da8edddfae9)
+     Running tests/score_definition.rs (target/debug/deps/score_definition-ca6412281f48e28d)
+     Running tests/scorer_error.rs (target/debug/deps/scorer_error-0d9406fff8bf6880)
+     Running tests/stats.rs (target/debug/deps/stats-69a58c5662ba61e5)
+   Doc-tests evalkit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[0m
+Implementation and verification are complete. I’m updating `state.md` with the iteration record, acceptance evidence, exposed interfaces, and the final progress summary for the last remaining component.
+[0m$ [0mdate --iso-8601=seconds
+2026-04-03T18:08:54+02:00
+[0m
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M state.md
+[0m→ [0mRead state.md[90m [offset=1, limit=40][0m
+[0m→ [0mRead state.md[90m [offset=462, limit=70][0m
+✅ Iteration 21 complete.
+Component: LLM-as-a-Judge scorer [llm-judge]
+Status: DONE
+Tests: 77 passed, 0 failed
+Deviations: 0
+Next component: none
+
+Updated:
+- `src/scorers/mod.rs`
+- `src/lib.rs`
+- `tests/llm_judge.rs`
+- `state.md`
+
+Verification:
+- `cargo fmt`
+- `cargo test`
+- `cargo test --features llm-judge`
+- `cargo test --features otel`
+- `cargo test --features "otel llm-judge"`

@@ -1,0 +1,1602 @@
+[0m
+> build · gpt-5.4
+[0m
+Reading `state.md` first to determine the exact next component, then I’ll scope against the spec and existing code before making any edits.
+[0m→ [0mRead state.md[90m [offset=1, limit=2000][0m
+[0m
+[0m# [0mTodos
+[ ] Read spec sections for the next eligible component and inspect existing crate structure/interfaces
+[ ] Implement exactly one component with tests and necessary exports
+[ ] Run full verification and update state.md for iteration 10
+[0m
+`ScorerSet` is the first unfinished component in state order with satisfied dependencies, so I’m reading the spec sections that define its exact API and acceptance criteria, alongside the current scorer/mapper code it must compose with.
+[0m✱ [0mGrep "ScorerSet|AC-|^## |^### "[90m in docs/spec · 150 matches[0m
+[0m→ [0mRead src/lib.rs[90m [offset=1, limit=400][0m
+[0m→ [0mRead src/scorer.rs[90m [offset=1, limit=400][0m
+[0m→ [0mRead src/mapper.rs[90m [offset=1, limit=400][0m
+[0m→ [0mRead Cargo.toml[90m [offset=1, limit=300][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=118, limit=20][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=210, limit=90][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=820, limit=90][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=930, limit=80][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=470, limit=40][0m
+[0m✱ [0mGlob "tests/**/*"[90m in . · 6 matches[0m
+[0m✱ [0mGlob "src/**/*"[90m in . · 9 matches[0m
+[0m✱ [0mGrep "map_output|map_reference|scorer_set|ScorerSet::|struct ScorerSet|enum ScorerSet"[90m in docs/spec · 20 matches[0m
+[0m✱ [0mGrep "ScorerSet"[90m in research · 0 matches[0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=560, limit=40][0m
+Plan for iteration 10 (`ScorerSet`):
+1. Add `src/scorer_set.rs` with a public builder API matching the spec example: `builder()`, optional `.map_output()`, optional `.map_reference()`, one-or-more `.scorer()`, then `.build()`.
+2. Keep the public API minimal and spec-aligned; use an internal type-erased scorer adapter so the set can store heterogeneous async scorers despite `Scorer` not being object-safe.
+3. Implement per-trial execution inside `ScorerSet` so output/reference mappers run at most once and mapped values are shared across all scorers in the set.
+4. Convert any `MapError` into `ScorerError` and fan that same failure out to every scorer result in the set, matching AC-06.4.
+5. Export `ScorerSet` from `src/lib.rs`.
+6. Add focused tests in `src/scorer_set.rs` for AC-06.1 through AC-06.4: builder construction, output mapping, reference mapping, shared single-run mapper behavior, and mapper-error fanout.
+7. Verify the full crate with `cargo test`, then update `state.md` for iteration 10 only.
+[0m→ [0mRead src/score_definition.rs[90m [offset=1, limit=200][0m
+Implementing `ScorerSet` now with a spec-aligned builder and an internal executor closure so the public API stays minimal while the set can still run shared mappers exactly once per trial.
+[0m⚙ [0mapply_patch Success. Updated the following files:
+A src/scorer_set.rs
+M src/lib.rs
+
+LSP errors detected in src/scorer_set.rs, please fix:
+<diagnostics file="/home/mark/evalkit/src/scorer_set.rs">
+ERROR [41:29] type parameter `I` is never used
+consider removing `I`, referring to it in a field, or using a marker such as `PhantomData`
+if you intended `I` to be a const parameter, use `const I: /* Type */` instead
+ERROR [22:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [62:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [75:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [118:43] future cannot be sent between threads safely
+required for the cast from `Pin<Box<impl Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>>>>` to `Pin<Box<dyn Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>> + Send>>`
+ERROR [250:9] type annotations needed for `Arc<_, _>`
+ERROR [295:9] `impl Future<Output = Result<Score, ScorerError>>` cannot be sent between threads safely
+the trait `Send` is not implemented for `impl Future<Output = Result<Score, ScorerError>>`
+required for the cast from `Pin<Box<impl Future<Output = Result<Score, ScorerError>>>>` to `Pin<Box<(dyn Future<Output = Result<Score, ScorerError>> + Send + 'a)>>`
+ERROR [133:23] the parameter type `O` may not live long enough
+the parameter type `O` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `O` may not live long enough
+...so that the type `O` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `O2` may not live long enough
+the parameter type `O2` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `O2` may not live long enough
+...so that the type `O2` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `I` may not live long enough
+the parameter type `I` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `I` may not live long enough
+...so that the type `I` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+ERROR [134:17] future cannot be sent between threads safely
+required for the cast from `Pin<Box<{async block@src/scorer_set.rs:134:26: 134:31}>>` to `Pin<Box<dyn Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>> + Send>>`
+ERROR [162:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [162:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+ERROR [162:23] the parameter type `R2` may not live long enough
+the parameter type `R2` must be valid for the static lifetime...
+ERROR [162:23] the parameter type `R2` may not live long enough
+...so that the type `R2` will meet its required lifetime bounds
+... and 20 more
+</diagnostics>
+[0m→ [0mRead src/scorer_set.rs[90m [offset=1, limit=420][0m
+[0m✗ [0mapply_patch failed
+[91m[1mError: [0mapply_patch verification failed: Error: Failed to find expected lines in /home/mark/evalkit/src/scorer_set.rs:
+    pub fn builder() -> ScorerSetBuilder<I, O, R> {
+        ScorerSetBuilder {
+            output_mapper: None,
+            reference_mapper: None,
+            _mapped: PhantomData,
+[0m✗ [0mapply_patch failed
+[91m[1mError: [0mapply_patch verification failed: Error: Failed to find expected lines in /home/mark/evalkit/src/scorer_set.rs:
+impl<I, O, R> ScorerSet<I, O, R> {
+    pub fn builder() -> ScorerSetBuilder<I, O, R> {
+        ScorerSetBuilder {
+            output_mapper: None,
+            reference_mapper: None,
+            _mapped: PhantomData,
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M src/scorer_set.rs
+
+LSP errors detected in src/scorer_set.rs, please fix:
+<diagnostics file="/home/mark/evalkit/src/scorer_set.rs">
+ERROR [41:29] type parameter `I` is never used
+consider removing `I`, referring to it in a field, or using a marker such as `PhantomData`
+if you intended `I` to be a const parameter, use `const I: /* Type */` instead
+ERROR [22:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [62:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [75:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [118:43] future cannot be sent between threads safely
+required for the cast from `Pin<Box<impl Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>>>>` to `Pin<Box<dyn Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>> + Send>>`
+ERROR [250:9] type annotations needed for `Arc<_, _>`
+ERROR [295:9] `impl Future<Output = Result<Score, ScorerError>>` cannot be sent between threads safely
+the trait `Send` is not implemented for `impl Future<Output = Result<Score, ScorerError>>`
+required for the cast from `Pin<Box<impl Future<Output = Result<Score, ScorerError>>>>` to `Pin<Box<(dyn Future<Output = Result<Score, ScorerError>> + Send + 'a)>>`
+ERROR [133:23] the parameter type `O` may not live long enough
+the parameter type `O` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `O` may not live long enough
+...so that the type `O` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `O2` may not live long enough
+the parameter type `O2` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `O2` may not live long enough
+...so that the type `O2` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `I` may not live long enough
+the parameter type `I` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `I` may not live long enough
+...so that the type `I` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+ERROR [134:17] future cannot be sent between threads safely
+required for the cast from `Pin<Box<{async block@src/scorer_set.rs:134:26: 134:31}>>` to `Pin<Box<dyn Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>> + Send>>`
+ERROR [162:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [162:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+ERROR [162:23] the parameter type `R2` may not live long enough
+the parameter type `R2` must be valid for the static lifetime...
+ERROR [162:23] the parameter type `R2` may not live long enough
+...so that the type `R2` will meet its required lifetime bounds
+... and 20 more
+</diagnostics>
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M src/scorer_set.rs
+
+LSP errors detected in src/scorer_set.rs, please fix:
+<diagnostics file="/home/mark/evalkit/src/scorer_set.rs">
+ERROR [41:29] type parameter `I` is never used
+consider removing `I`, referring to it in a field, or using a marker such as `PhantomData`
+if you intended `I` to be a const parameter, use `const I: /* Type */` instead
+ERROR [22:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [62:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [75:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [118:43] future cannot be sent between threads safely
+required for the cast from `Pin<Box<impl Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>>>>` to `Pin<Box<dyn Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>> + Send>>`
+ERROR [250:9] type annotations needed for `Arc<_, _>`
+ERROR [295:9] `impl Future<Output = Result<Score, ScorerError>>` cannot be sent between threads safely
+the trait `Send` is not implemented for `impl Future<Output = Result<Score, ScorerError>>`
+required for the cast from `Pin<Box<impl Future<Output = Result<Score, ScorerError>>>>` to `Pin<Box<(dyn Future<Output = Result<Score, ScorerError>> + Send + 'a)>>`
+ERROR [133:23] the parameter type `O` may not live long enough
+the parameter type `O` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `O` may not live long enough
+...so that the type `O` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `O2` may not live long enough
+the parameter type `O2` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `O2` may not live long enough
+...so that the type `O2` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `I` may not live long enough
+the parameter type `I` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `I` may not live long enough
+...so that the type `I` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+ERROR [134:17] future cannot be sent between threads safely
+required for the cast from `Pin<Box<{async block@src/scorer_set.rs:134:26: 134:31}>>` to `Pin<Box<dyn Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>> + Send>>`
+ERROR [162:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [162:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+ERROR [162:23] the parameter type `R2` may not live long enough
+the parameter type `R2` must be valid for the static lifetime...
+ERROR [162:23] the parameter type `R2` may not live long enough
+...so that the type `R2` will meet its required lifetime bounds
+... and 20 more
+</diagnostics>
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M src/scorer_set.rs
+
+LSP errors detected in src/scorer_set.rs, please fix:
+<diagnostics file="/home/mark/evalkit/src/scorer_set.rs">
+ERROR [41:29] type parameter `I` is never used
+consider removing `I`, referring to it in a field, or using a marker such as `PhantomData`
+if you intended `I` to be a const parameter, use `const I: /* Type */` instead
+ERROR [22:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [62:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [75:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [118:43] future cannot be sent between threads safely
+required for the cast from `Pin<Box<impl Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>>>>` to `Pin<Box<dyn Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>> + Send>>`
+ERROR [250:9] type annotations needed for `Arc<_, _>`
+ERROR [295:9] `impl Future<Output = Result<Score, ScorerError>>` cannot be sent between threads safely
+the trait `Send` is not implemented for `impl Future<Output = Result<Score, ScorerError>>`
+required for the cast from `Pin<Box<impl Future<Output = Result<Score, ScorerError>>>>` to `Pin<Box<(dyn Future<Output = Result<Score, ScorerError>> + Send + 'a)>>`
+ERROR [133:23] the parameter type `O` may not live long enough
+the parameter type `O` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `O` may not live long enough
+...so that the type `O` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `O2` may not live long enough
+the parameter type `O2` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `O2` may not live long enough
+...so that the type `O2` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `I` may not live long enough
+the parameter type `I` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `I` may not live long enough
+...so that the type `I` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+ERROR [134:17] future cannot be sent between threads safely
+required for the cast from `Pin<Box<{async block@src/scorer_set.rs:134:26: 134:31}>>` to `Pin<Box<dyn Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>> + Send>>`
+ERROR [162:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [162:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+ERROR [162:23] the parameter type `R2` may not live long enough
+the parameter type `R2` must be valid for the static lifetime...
+ERROR [162:23] the parameter type `R2` may not live long enough
+...so that the type `R2` will meet its required lifetime bounds
+... and 20 more
+</diagnostics>
+[0m✗ [0mapply_patch failed
+[91m[1mError: [0mapply_patch verification failed: Error: Failed to find expected lines in /home/mark/evalkit/src/scorer_set.rs:
+fn mapper_failure_results<I, O, R>(
+    scorers: &[ScorerEntry<I, O, R>],
+    err: MapError,
+) -> ScoreResults {
+    let shared_err = Arc::from(err.0);
+[0m→ [0mRead src/scorer_set.rs[90m [offset=246, limit=60][0m
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M src/scorer_set.rs
+
+LSP errors detected in src/scorer_set.rs, please fix:
+<diagnostics file="/home/mark/evalkit/src/scorer_set.rs">
+ERROR [41:29] type parameter `I` is never used
+consider removing `I`, referring to it in a field, or using a marker such as `PhantomData`
+if you intended `I` to be a const parameter, use `const I: /* Type */` instead
+ERROR [22:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [62:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [75:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [118:43] future cannot be sent between threads safely
+required for the cast from `Pin<Box<impl Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>>>>` to `Pin<Box<dyn Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>> + Send>>`
+ERROR [250:9] type annotations needed for `Arc<_, _>`
+ERROR [295:9] `impl Future<Output = Result<Score, ScorerError>>` cannot be sent between threads safely
+the trait `Send` is not implemented for `impl Future<Output = Result<Score, ScorerError>>`
+required for the cast from `Pin<Box<impl Future<Output = Result<Score, ScorerError>>>>` to `Pin<Box<(dyn Future<Output = Result<Score, ScorerError>> + Send + 'a)>>`
+ERROR [133:23] the parameter type `O` may not live long enough
+the parameter type `O` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `O` may not live long enough
+...so that the type `O` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `O2` may not live long enough
+the parameter type `O2` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `O2` may not live long enough
+...so that the type `O2` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `I` may not live long enough
+the parameter type `I` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `I` may not live long enough
+...so that the type `I` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+ERROR [134:17] future cannot be sent between threads safely
+required for the cast from `Pin<Box<{async block@src/scorer_set.rs:134:26: 134:31}>>` to `Pin<Box<dyn Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>> + Send>>`
+ERROR [162:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [162:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+ERROR [162:23] the parameter type `R2` may not live long enough
+the parameter type `R2` must be valid for the static lifetime...
+ERROR [162:23] the parameter type `R2` may not live long enough
+...so that the type `R2` will meet its required lifetime bounds
+... and 20 more
+</diagnostics>
+[0m→ [0mRead src/scorer_set.rs[90m [offset=1, limit=20][0m
+The initial `ScorerSet` implementation is in place. I’m compiling now to resolve type-system issues around the internal executor and keep the public surface minimal.
+[0m
+[0m$ [0mcargo test
+Compiling evalkit v0.1.0 (/home/mark/evalkit)
+error: lifetime may not live long enough
+   --> src/scorer_set.rs:118:43
+    |
+118 |             executor: Box::new(move |ctx| Box::pin(score_entries(&scorers, ctx))),
+    |                                ---------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ closure was supposed to return data with lifetime `'2` but it is returning data with lifetime `'1`
+    |                                |     |
+    |                                |     has type `&'2 ScorerContext<'2, I, O, R>`
+    |                                lifetime `'1` represents this closure's body
+    |
+    = note: closure implements `Fn`, so references to captured variables can't escape the closure
+
+error[E0310]: the parameter type `I` may not live long enough
+   --> src/scorer_set.rs:118:23
+    |
+118 |             executor: Box::new(move |ctx| Box::pin(score_entries(&scorers, ctx))),
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                       |
+    |                       the parameter type `I` must be valid for the static lifetime...
+    |                       ...so that the type `I` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+111 | impl<I: 'static, O, R> ScorerSetBuilderWithScorers<I, O, R, O, R, Unmapped, Unmapped> {
+    |       +++++++++
+
+error[E0310]: the parameter type `O` may not live long enough
+   --> src/scorer_set.rs:118:23
+    |
+118 |             executor: Box::new(move |ctx| Box::pin(score_entries(&scorers, ctx))),
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                       |
+    |                       the parameter type `O` must be valid for the static lifetime...
+    |                       ...so that the type `O` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+111 | impl<I, O: 'static, R> ScorerSetBuilderWithScorers<I, O, R, O, R, Unmapped, Unmapped> {
+    |          +++++++++
+
+error[E0310]: the parameter type `R` may not live long enough
+   --> src/scorer_set.rs:118:23
+    |
+118 |             executor: Box::new(move |ctx| Box::pin(score_entries(&scorers, ctx))),
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                       |
+    |                       the parameter type `R` must be valid for the static lifetime...
+    |                       ...so that the type `R` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+111 | impl<I, O, R: 'static> ScorerSetBuilderWithScorers<I, O, R, O, R, Unmapped, Unmapped> {
+    |             +++++++++
+
+error: lifetime may not live long enough
+   --> src/scorer_set.rs:134:17
+    |
+133 |               executor: Box::new(move |ctx| {
+    |                                  ----------
+    |                                  |     |
+    |                                  |     has type `&'2 ScorerContext<'2, I, O, R>`
+    |                                  lifetime `'1` represents this closure's body
+134 | /                 Box::pin(async {
+135 | |                     let mapped_output = match output_mapper.map(ctx.output) {
+136 | |                         Ok(mapped_output) => mapped_output,
+137 | |                         Err(err) => return mapper_failure_results(&scorers, err),
+...   |
+145 | |                     score_entries(&scorers, &mapped_ctx).await
+146 | |                 })
+    | |__________________^ closure was supposed to return data with lifetime `'2` but it is returning data with lifetime `'1`
+    |
+    = note: closure implements `Fn`, so references to captured variables can't escape the closure
+
+error[E0310]: the parameter type `O` may not live long enough
+   --> src/scorer_set.rs:133:23
+    |
+133 |               executor: Box::new(move |ctx| {
+    |  _______________________^
+134 | |                 Box::pin(async {
+135 | |                     let mapped_output = match output_mapper.map(ctx.output) {
+136 | |                         Ok(mapped_output) => mapped_output,
+...   |
+146 | |                 })
+147 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `O` must be valid for the static lifetime...
+    |                ...so that the type `O` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+123 | impl<I, O: 'static, R, O2> ScorerSetBuilderWithScorers<I, O, R, O2, R, Mapped, Unmapped> {
+    |          +++++++++
+
+error[E0310]: the parameter type `O2` may not live long enough
+   --> src/scorer_set.rs:133:23
+    |
+133 |               executor: Box::new(move |ctx| {
+    |  _______________________^
+134 | |                 Box::pin(async {
+135 | |                     let mapped_output = match output_mapper.map(ctx.output) {
+136 | |                         Ok(mapped_output) => mapped_output,
+...   |
+146 | |                 })
+147 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `O2` must be valid for the static lifetime...
+    |                ...so that the type `O2` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+123 | impl<I, O, R, O2: 'static> ScorerSetBuilderWithScorers<I, O, R, O2, R, Mapped, Unmapped> {
+    |                 +++++++++
+
+error[E0310]: the parameter type `I` may not live long enough
+   --> src/scorer_set.rs:133:23
+    |
+133 |               executor: Box::new(move |ctx| {
+    |  _______________________^
+134 | |                 Box::pin(async {
+135 | |                     let mapped_output = match output_mapper.map(ctx.output) {
+136 | |                         Ok(mapped_output) => mapped_output,
+...   |
+146 | |                 })
+147 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `I` must be valid for the static lifetime...
+    |                ...so that the type `I` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+123 | impl<I: 'static, O, R, O2> ScorerSetBuilderWithScorers<I, O, R, O2, R, Mapped, Unmapped> {
+    |       +++++++++
+
+error[E0310]: the parameter type `R` may not live long enough
+   --> src/scorer_set.rs:133:23
+    |
+133 |               executor: Box::new(move |ctx| {
+    |  _______________________^
+134 | |                 Box::pin(async {
+135 | |                     let mapped_output = match output_mapper.map(ctx.output) {
+136 | |                         Ok(mapped_output) => mapped_output,
+...   |
+146 | |                 })
+147 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `R` must be valid for the static lifetime...
+    |                ...so that the type `R` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+123 | impl<I, O, R: 'static, O2> ScorerSetBuilderWithScorers<I, O, R, O2, R, Mapped, Unmapped> {
+    |             +++++++++
+
+error: lifetime may not live long enough
+   --> src/scorer_set.rs:163:17
+    |
+162 |               executor: Box::new(move |ctx| {
+    |                                  ----------
+    |                                  |     |
+    |                                  |     has type `&'2 ScorerContext<'2, I, O, R>`
+    |                                  lifetime `'1` represents this closure's body
+163 | /                 Box::pin(async {
+164 | |                     let mapped_reference = match ctx.reference {
+165 | |                         Some(reference) => match reference_mapper.map(reference) {
+166 | |                             Ok(mapped_reference) => Some(mapped_reference),
+...   |
+177 | |                     score_entries(&scorers, &mapped_ctx).await
+178 | |                 })
+    | |__________________^ closure was supposed to return data with lifetime `'2` but it is returning data with lifetime `'1`
+    |
+    = note: closure implements `Fn`, so references to captured variables can't escape the closure
+
+error[E0310]: the parameter type `R` may not live long enough
+   --> src/scorer_set.rs:162:23
+    |
+162 |               executor: Box::new(move |ctx| {
+    |  _______________________^
+163 | |                 Box::pin(async {
+164 | |                     let mapped_reference = match ctx.reference {
+165 | |                         Some(reference) => match reference_mapper.map(reference) {
+...   |
+178 | |                 })
+179 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `R` must be valid for the static lifetime...
+    |                ...so that the type `R` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+152 | impl<I, O, R: 'static, R2> ScorerSetBuilderWithScorers<I, O, R, O, R2, Unmapped, Mapped> {
+    |             +++++++++
+
+error[E0310]: the parameter type `R2` may not live long enough
+   --> src/scorer_set.rs:162:23
+    |
+162 |               executor: Box::new(move |ctx| {
+    |  _______________________^
+163 | |                 Box::pin(async {
+164 | |                     let mapped_reference = match ctx.reference {
+165 | |                         Some(reference) => match reference_mapper.map(reference) {
+...   |
+178 | |                 })
+179 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `R2` must be valid for the static lifetime...
+    |                ...so that the type `R2` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+152 | impl<I, O, R, R2: 'static> ScorerSetBuilderWithScorers<I, O, R, O, R2, Unmapped, Mapped> {
+    |                 +++++++++
+
+error[E0310]: the parameter type `I` may not live long enough
+   --> src/scorer_set.rs:162:23
+    |
+162 |               executor: Box::new(move |ctx| {
+    |  _______________________^
+163 | |                 Box::pin(async {
+164 | |                     let mapped_reference = match ctx.reference {
+165 | |                         Some(reference) => match reference_mapper.map(reference) {
+...   |
+178 | |                 })
+179 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `I` must be valid for the static lifetime...
+    |                ...so that the type `I` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+152 | impl<I: 'static, O, R, R2> ScorerSetBuilderWithScorers<I, O, R, O, R2, Unmapped, Mapped> {
+    |       +++++++++
+
+error[E0310]: the parameter type `O` may not live long enough
+   --> src/scorer_set.rs:162:23
+    |
+162 |               executor: Box::new(move |ctx| {
+    |  _______________________^
+163 | |                 Box::pin(async {
+164 | |                     let mapped_reference = match ctx.reference {
+165 | |                         Some(reference) => match reference_mapper.map(reference) {
+...   |
+178 | |                 })
+179 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `O` must be valid for the static lifetime...
+    |                ...so that the type `O` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+152 | impl<I, O: 'static, R, R2> ScorerSetBuilderWithScorers<I, O, R, O, R2, Unmapped, Mapped> {
+    |          +++++++++
+
+error: lifetime may not live long enough
+   --> src/scorer_set.rs:198:17
+    |
+197 |               executor: Box::new(move |ctx| {
+    |                                  ----------
+    |                                  |     |
+    |                                  |     has type `&'2 ScorerContext<'2, I, O, R>`
+    |                                  lifetime `'1` represents this closure's body
+198 | /                 Box::pin(async {
+199 | |                     let mapped_output = match output_mapper.map(ctx.output) {
+200 | |                         Ok(mapped_output) => mapped_output,
+201 | |                         Err(err) => return mapper_failure_results(&scorers, err),
+...   |
+216 | |                     score_entries(&scorers, &mapped_ctx).await
+217 | |                 })
+    | |__________________^ closure was supposed to return data with lifetime `'2` but it is returning data with lifetime `'1`
+    |
+    = note: closure implements `Fn`, so references to captured variables can't escape the closure
+
+error[E0310]: the parameter type `O` may not live long enough
+   --> src/scorer_set.rs:197:23
+    |
+197 |               executor: Box::new(move |ctx| {
+    |  _______________________^
+198 | |                 Box::pin(async {
+199 | |                     let mapped_output = match output_mapper.map(ctx.output) {
+200 | |                         Ok(mapped_output) => mapped_output,
+...   |
+217 | |                 })
+218 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `O` must be valid for the static lifetime...
+    |                ...so that the type `O` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+184 | impl<I, O: 'static, R, O2, R2> ScorerSetBuilderWithScorers<I, O, R, O2, R2, Mapped, Mapped> {
+    |          +++++++++
+
+error[E0310]: the parameter type `O2` may not live long enough
+   --> src/scorer_set.rs:197:23
+    |
+197 |               executor: Box::new(move |ctx| {
+    |  _______________________^
+198 | |                 Box::pin(async {
+199 | |                     let mapped_output = match output_mapper.map(ctx.output) {
+200 | |                         Ok(mapped_output) => mapped_output,
+...   |
+217 | |                 })
+218 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `O2` must be valid for the static lifetime...
+    |                ...so that the type `O2` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+184 | impl<I, O, R, O2: 'static, R2> ScorerSetBuilderWithScorers<I, O, R, O2, R2, Mapped, Mapped> {
+    |                 +++++++++
+
+error[E0310]: the parameter type `I` may not live long enough
+   --> src/scorer_set.rs:197:23
+    |
+197 |               executor: Box::new(move |ctx| {
+    |  _______________________^
+198 | |                 Box::pin(async {
+199 | |                     let mapped_output = match output_mapper.map(ctx.output) {
+200 | |                         Ok(mapped_output) => mapped_output,
+...   |
+217 | |                 })
+218 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `I` must be valid for the static lifetime...
+    |                ...so that the type `I` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+184 | impl<I: 'static, O, R, O2, R2> ScorerSetBuilderWithScorers<I, O, R, O2, R2, Mapped, Mapped> {
+    |       +++++++++
+
+error[E0310]: the parameter type `R2` may not live long enough
+   --> src/scorer_set.rs:197:23
+    |
+197 |               executor: Box::new(move |ctx| {
+    |  _______________________^
+198 | |                 Box::pin(async {
+199 | |                     let mapped_output = match output_mapper.map(ctx.output) {
+200 | |                         Ok(mapped_output) => mapped_output,
+...   |
+217 | |                 })
+218 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `R2` must be valid for the static lifetime...
+    |                ...so that the type `R2` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+184 | impl<I, O, R, O2, R2: 'static> ScorerSetBuilderWithScorers<I, O, R, O2, R2, Mapped, Mapped> {
+    |                     +++++++++
+
+error[E0310]: the parameter type `R` may not live long enough
+   --> src/scorer_set.rs:197:23
+    |
+197 |               executor: Box::new(move |ctx| {
+    |  _______________________^
+198 | |                 Box::pin(async {
+199 | |                     let mapped_output = match output_mapper.map(ctx.output) {
+200 | |                         Ok(mapped_output) => mapped_output,
+...   |
+217 | |                 })
+218 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `R` must be valid for the static lifetime...
+    |                ...so that the type `R` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+184 | impl<I, O, R: 'static, O2, R2> ScorerSetBuilderWithScorers<I, O, R, O2, R2, Mapped, Mapped> {
+    |             +++++++++
+
+For more information about this error, try `rustc --explain E0310`.
+error: could not compile `evalkit` (lib) due to 20 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `evalkit` (lib test) due to 20 previous errors
+[0m
+The closure-based executor is fighting Rust’s borrow rules. I’m switching it to a boxed internal executor trait with concrete structs per mapping shape, which keeps the same public API but makes the lifetimes explicit and stable.
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M src/scorer_set.rs
+
+LSP errors detected in src/scorer_set.rs, please fix:
+<diagnostics file="/home/mark/evalkit/src/scorer_set.rs">
+ERROR [41:29] type parameter `I` is never used
+consider removing `I`, referring to it in a field, or using a marker such as `PhantomData`
+if you intended `I` to be a const parameter, use `const I: /* Type */` instead
+ERROR [22:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [62:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [75:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [118:43] future cannot be sent between threads safely
+required for the cast from `Pin<Box<impl Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>>>>` to `Pin<Box<dyn Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>> + Send>>`
+ERROR [250:9] type annotations needed for `Arc<_, _>`
+ERROR [295:9] `impl Future<Output = Result<Score, ScorerError>>` cannot be sent between threads safely
+the trait `Send` is not implemented for `impl Future<Output = Result<Score, ScorerError>>`
+required for the cast from `Pin<Box<impl Future<Output = Result<Score, ScorerError>>>>` to `Pin<Box<(dyn Future<Output = Result<Score, ScorerError>> + Send + 'a)>>`
+ERROR [133:23] the parameter type `O` may not live long enough
+the parameter type `O` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `O` may not live long enough
+...so that the type `O` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `O2` may not live long enough
+the parameter type `O2` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `O2` may not live long enough
+...so that the type `O2` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `I` may not live long enough
+the parameter type `I` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `I` may not live long enough
+...so that the type `I` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+ERROR [134:17] future cannot be sent between threads safely
+required for the cast from `Pin<Box<{async block@src/scorer_set.rs:134:26: 134:31}>>` to `Pin<Box<dyn Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>> + Send>>`
+ERROR [162:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [162:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+ERROR [162:23] the parameter type `R2` may not live long enough
+the parameter type `R2` must be valid for the static lifetime...
+ERROR [162:23] the parameter type `R2` may not live long enough
+...so that the type `R2` will meet its required lifetime bounds
+... and 20 more
+</diagnostics>
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M src/scorer_set.rs
+
+LSP errors detected in src/scorer_set.rs, please fix:
+<diagnostics file="/home/mark/evalkit/src/scorer_set.rs">
+ERROR [41:29] type parameter `I` is never used
+consider removing `I`, referring to it in a field, or using a marker such as `PhantomData`
+if you intended `I` to be a const parameter, use `const I: /* Type */` instead
+ERROR [22:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [62:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [75:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [118:43] future cannot be sent between threads safely
+required for the cast from `Pin<Box<impl Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>>>>` to `Pin<Box<dyn Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>> + Send>>`
+ERROR [250:9] type annotations needed for `Arc<_, _>`
+ERROR [295:9] `impl Future<Output = Result<Score, ScorerError>>` cannot be sent between threads safely
+the trait `Send` is not implemented for `impl Future<Output = Result<Score, ScorerError>>`
+required for the cast from `Pin<Box<impl Future<Output = Result<Score, ScorerError>>>>` to `Pin<Box<(dyn Future<Output = Result<Score, ScorerError>> + Send + 'a)>>`
+ERROR [133:23] the parameter type `O` may not live long enough
+the parameter type `O` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `O` may not live long enough
+...so that the type `O` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `O2` may not live long enough
+the parameter type `O2` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `O2` may not live long enough
+...so that the type `O2` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `I` may not live long enough
+the parameter type `I` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `I` may not live long enough
+...so that the type `I` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+ERROR [134:17] future cannot be sent between threads safely
+required for the cast from `Pin<Box<{async block@src/scorer_set.rs:134:26: 134:31}>>` to `Pin<Box<dyn Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>> + Send>>`
+ERROR [162:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [162:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+ERROR [162:23] the parameter type `R2` may not live long enough
+the parameter type `R2` must be valid for the static lifetime...
+ERROR [162:23] the parameter type `R2` may not live long enough
+...so that the type `R2` will meet its required lifetime bounds
+... and 20 more
+</diagnostics>
+[0m
+[0m$ [0mcargo test
+Compiling evalkit v0.1.0 (/home/mark/evalkit)
+error[E0618]: expected function, found `Box<(dyn ScorerSetExecutor<I, O, R> + 'static)>`
+  --> src/scorer_set.rs:34:9
+   |
+34 |         (self.executor)(ctx).await
+   |         ^^^^^^^^^^^^^^^-----
+   |         |
+   |         call expression requires function
+
+error[E0310]: the parameter type `I` may not live long enough
+   --> src/scorer_set.rs:114:23
+    |
+114 |               executor: Box::new(RawExecutor {
+    |  _______________________^
+115 | |                 scorers: self.scorers,
+116 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `I` must be valid for the static lifetime...
+    |                ...so that the type `I` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+108 | impl<I: 'static, O, R> ScorerSetBuilderWithScorers<I, O, R, O, R, Unmapped, Unmapped> {
+    |       +++++++++
+
+error[E0310]: the parameter type `O` may not live long enough
+   --> src/scorer_set.rs:114:23
+    |
+114 |               executor: Box::new(RawExecutor {
+    |  _______________________^
+115 | |                 scorers: self.scorers,
+116 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `O` must be valid for the static lifetime...
+    |                ...so that the type `O` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+108 | impl<I, O: 'static, R> ScorerSetBuilderWithScorers<I, O, R, O, R, Unmapped, Unmapped> {
+    |          +++++++++
+
+error[E0310]: the parameter type `R` may not live long enough
+   --> src/scorer_set.rs:114:23
+    |
+114 |               executor: Box::new(RawExecutor {
+    |  _______________________^
+115 | |                 scorers: self.scorers,
+116 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `R` must be valid for the static lifetime...
+    |                ...so that the type `R` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+108 | impl<I, O, R: 'static> ScorerSetBuilderWithScorers<I, O, R, O, R, Unmapped, Unmapped> {
+    |             +++++++++
+
+error[E0310]: the parameter type `I` may not live long enough
+   --> src/scorer_set.rs:129:23
+    |
+129 |               executor: Box::new(OutputMappedExecutor {
+    |  _______________________^
+130 | |                 output_mapper,
+131 | |                 scorers: self.scorers,
+132 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `I` must be valid for the static lifetime...
+    |                ...so that the type `I` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+121 | impl<I: 'static, O, R, O2> ScorerSetBuilderWithScorers<I, O, R, O2, R, Mapped, Unmapped> {
+    |       +++++++++
+
+error[E0310]: the parameter type `O` may not live long enough
+   --> src/scorer_set.rs:129:23
+    |
+129 |               executor: Box::new(OutputMappedExecutor {
+    |  _______________________^
+130 | |                 output_mapper,
+131 | |                 scorers: self.scorers,
+132 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `O` must be valid for the static lifetime...
+    |                ...so that the type `O` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+121 | impl<I, O: 'static, R, O2> ScorerSetBuilderWithScorers<I, O, R, O2, R, Mapped, Unmapped> {
+    |          +++++++++
+
+error[E0310]: the parameter type `R` may not live long enough
+   --> src/scorer_set.rs:129:23
+    |
+129 |               executor: Box::new(OutputMappedExecutor {
+    |  _______________________^
+130 | |                 output_mapper,
+131 | |                 scorers: self.scorers,
+132 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `R` must be valid for the static lifetime...
+    |                ...so that the type `R` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+121 | impl<I, O, R: 'static, O2> ScorerSetBuilderWithScorers<I, O, R, O2, R, Mapped, Unmapped> {
+    |             +++++++++
+
+error[E0310]: the parameter type `O2` may not live long enough
+   --> src/scorer_set.rs:129:23
+    |
+129 |               executor: Box::new(OutputMappedExecutor {
+    |  _______________________^
+130 | |                 output_mapper,
+131 | |                 scorers: self.scorers,
+132 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `O2` must be valid for the static lifetime...
+    |                ...so that the type `O2` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+121 | impl<I, O, R, O2: 'static> ScorerSetBuilderWithScorers<I, O, R, O2, R, Mapped, Unmapped> {
+    |                 +++++++++
+
+error[E0310]: the parameter type `I` may not live long enough
+   --> src/scorer_set.rs:145:23
+    |
+145 |               executor: Box::new(ReferenceMappedExecutor {
+    |  _______________________^
+146 | |                 reference_mapper,
+147 | |                 scorers: self.scorers,
+148 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `I` must be valid for the static lifetime...
+    |                ...so that the type `I` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+137 | impl<I: 'static, O, R, R2> ScorerSetBuilderWithScorers<I, O, R, O, R2, Unmapped, Mapped> {
+    |       +++++++++
+
+error[E0310]: the parameter type `O` may not live long enough
+   --> src/scorer_set.rs:145:23
+    |
+145 |               executor: Box::new(ReferenceMappedExecutor {
+    |  _______________________^
+146 | |                 reference_mapper,
+147 | |                 scorers: self.scorers,
+148 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `O` must be valid for the static lifetime...
+    |                ...so that the type `O` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+137 | impl<I, O: 'static, R, R2> ScorerSetBuilderWithScorers<I, O, R, O, R2, Unmapped, Mapped> {
+    |          +++++++++
+
+error[E0310]: the parameter type `R` may not live long enough
+   --> src/scorer_set.rs:145:23
+    |
+145 |               executor: Box::new(ReferenceMappedExecutor {
+    |  _______________________^
+146 | |                 reference_mapper,
+147 | |                 scorers: self.scorers,
+148 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `R` must be valid for the static lifetime...
+    |                ...so that the type `R` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+137 | impl<I, O, R: 'static, R2> ScorerSetBuilderWithScorers<I, O, R, O, R2, Unmapped, Mapped> {
+    |             +++++++++
+
+error[E0310]: the parameter type `R2` may not live long enough
+   --> src/scorer_set.rs:145:23
+    |
+145 |               executor: Box::new(ReferenceMappedExecutor {
+    |  _______________________^
+146 | |                 reference_mapper,
+147 | |                 scorers: self.scorers,
+148 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `R2` must be valid for the static lifetime...
+    |                ...so that the type `R2` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+137 | impl<I, O, R, R2: 'static> ScorerSetBuilderWithScorers<I, O, R, O, R2, Unmapped, Mapped> {
+    |                 +++++++++
+
+error[E0310]: the parameter type `I` may not live long enough
+   --> src/scorer_set.rs:164:23
+    |
+164 |               executor: Box::new(FullyMappedExecutor {
+    |  _______________________^
+165 | |                 output_mapper,
+166 | |                 reference_mapper,
+167 | |                 scorers: self.scorers,
+168 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `I` must be valid for the static lifetime...
+    |                ...so that the type `I` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+153 | impl<I: 'static, O, R, O2, R2> ScorerSetBuilderWithScorers<I, O, R, O2, R2, Mapped, Mapped> {
+    |       +++++++++
+
+error[E0310]: the parameter type `O` may not live long enough
+   --> src/scorer_set.rs:164:23
+    |
+164 |               executor: Box::new(FullyMappedExecutor {
+    |  _______________________^
+165 | |                 output_mapper,
+166 | |                 reference_mapper,
+167 | |                 scorers: self.scorers,
+168 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `O` must be valid for the static lifetime...
+    |                ...so that the type `O` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+153 | impl<I, O: 'static, R, O2, R2> ScorerSetBuilderWithScorers<I, O, R, O2, R2, Mapped, Mapped> {
+    |          +++++++++
+
+error[E0310]: the parameter type `R` may not live long enough
+   --> src/scorer_set.rs:164:23
+    |
+164 |               executor: Box::new(FullyMappedExecutor {
+    |  _______________________^
+165 | |                 output_mapper,
+166 | |                 reference_mapper,
+167 | |                 scorers: self.scorers,
+168 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `R` must be valid for the static lifetime...
+    |                ...so that the type `R` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+153 | impl<I, O, R: 'static, O2, R2> ScorerSetBuilderWithScorers<I, O, R, O2, R2, Mapped, Mapped> {
+    |             +++++++++
+
+error[E0310]: the parameter type `O2` may not live long enough
+   --> src/scorer_set.rs:164:23
+    |
+164 |               executor: Box::new(FullyMappedExecutor {
+    |  _______________________^
+165 | |                 output_mapper,
+166 | |                 reference_mapper,
+167 | |                 scorers: self.scorers,
+168 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `O2` must be valid for the static lifetime...
+    |                ...so that the type `O2` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+153 | impl<I, O, R, O2: 'static, R2> ScorerSetBuilderWithScorers<I, O, R, O2, R2, Mapped, Mapped> {
+    |                 +++++++++
+
+error[E0310]: the parameter type `R2` may not live long enough
+   --> src/scorer_set.rs:164:23
+    |
+164 |               executor: Box::new(FullyMappedExecutor {
+    |  _______________________^
+165 | |                 output_mapper,
+166 | |                 reference_mapper,
+167 | |                 scorers: self.scorers,
+168 | |             }),
+    | |              ^
+    | |              |
+    | |______________the parameter type `R2` must be valid for the static lifetime...
+    |                ...so that the type `R2` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+153 | impl<I, O, R, O2, R2: 'static> ScorerSetBuilderWithScorers<I, O, R, O2, R2, Mapped, Mapped> {
+    |                     +++++++++
+
+Some errors have detailed explanations: E0310, E0618.
+For more information about an error, try `rustc --explain E0310`.
+error: could not compile `evalkit` (lib) due to 17 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `evalkit` (lib test) due to 17 previous errors
+[0m
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M src/scorer_set.rs
+
+LSP errors detected in src/scorer_set.rs, please fix:
+<diagnostics file="/home/mark/evalkit/src/scorer_set.rs">
+ERROR [41:29] type parameter `I` is never used
+consider removing `I`, referring to it in a field, or using a marker such as `PhantomData`
+if you intended `I` to be a const parameter, use `const I: /* Type */` instead
+ERROR [22:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [62:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [75:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [118:43] future cannot be sent between threads safely
+required for the cast from `Pin<Box<impl Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>>>>` to `Pin<Box<dyn Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>> + Send>>`
+ERROR [250:9] type annotations needed for `Arc<_, _>`
+ERROR [295:9] `impl Future<Output = Result<Score, ScorerError>>` cannot be sent between threads safely
+the trait `Send` is not implemented for `impl Future<Output = Result<Score, ScorerError>>`
+required for the cast from `Pin<Box<impl Future<Output = Result<Score, ScorerError>>>>` to `Pin<Box<(dyn Future<Output = Result<Score, ScorerError>> + Send + 'a)>>`
+ERROR [133:23] the parameter type `O` may not live long enough
+the parameter type `O` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `O` may not live long enough
+...so that the type `O` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `O2` may not live long enough
+the parameter type `O2` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `O2` may not live long enough
+...so that the type `O2` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `I` may not live long enough
+the parameter type `I` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `I` may not live long enough
+...so that the type `I` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+ERROR [134:17] future cannot be sent between threads safely
+required for the cast from `Pin<Box<{async block@src/scorer_set.rs:134:26: 134:31}>>` to `Pin<Box<dyn Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>> + Send>>`
+ERROR [162:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [162:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+ERROR [162:23] the parameter type `R2` may not live long enough
+the parameter type `R2` must be valid for the static lifetime...
+ERROR [162:23] the parameter type `R2` may not live long enough
+...so that the type `R2` will meet its required lifetime bounds
+... and 20 more
+</diagnostics>
+[0m
+[0m$ [0mcargo test
+Compiling evalkit v0.1.0 (/home/mark/evalkit)
+warning: type alias `ScoreFuture` is never used
+ --> src/scorer_set.rs:9:6
+  |
+9 | type ScoreFuture<'a> = Pin<Box<dyn Future<Output = ScoreResults> + 'a>>;
+  |      ^^^^^^^^^^^
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: type alias `ScoreResults` is never used
+  --> src/scorer_set.rs:10:6
+   |
+10 | type ScoreResults = Vec<(ScoreDefinition, Result<Score, ScorerError>)>;
+   |      ^^^^^^^^^^^^
+
+warning: fields `definitions` and `executor` are never read
+  --> src/scorer_set.rs:13:5
+   |
+12 | pub struct ScorerSet<I, O, R = ()> {
+   |            --------- fields in this struct
+13 |     definitions: Vec<ScoreDefinition>,
+   |     ^^^^^^^^^^^
+14 |     executor: Box<dyn ScorerSetExecutor<I, O, R>>,
+   |     ^^^^^^^^
+
+warning: methods `definitions` and `score` are never used
+  --> src/scorer_set.rs:26:19
+   |
+17 | impl<I, O, R> ScorerSet<I, O, R> {
+   | -------------------------------- methods in this implementation
+...
+26 |     pub(crate) fn definitions(&self) -> &[ScoreDefinition] {
+   |                   ^^^^^^^^^^^
+...
+30 |     pub(crate) async fn score(
+   |                         ^^^^^
+
+warning: method `execute` is never used
+   --> src/scorer_set.rs:182:8
+    |
+181 | trait ScorerSetExecutor<I, O, R>: Send + Sync {
+    |       ----------------- method in this trait
+182 |     fn execute<'a>(&'a self, ctx: &'a ScorerContext<'a, I, O, R>) -> ScoreFuture<'a>;
+    |        ^^^^^^^
+
+warning: field `scorers` is never read
+   --> src/scorer_set.rs:186:5
+    |
+185 | struct RawExecutor<I, O, R> {
+    |        ----------- field in this struct
+186 |     scorers: Vec<ScorerEntry<I, O, R>>,
+    |     ^^^^^^^
+
+warning: fields `output_mapper` and `scorers` are never read
+   --> src/scorer_set.rs:196:5
+    |
+195 | struct OutputMappedExecutor<I, O, R, O2> {
+    |        -------------------- fields in this struct
+196 |     output_mapper: Box<dyn Mapper<O, O2>>,
+    |     ^^^^^^^^^^^^^
+197 |     scorers: Vec<ScorerEntry<I, O2, R>>,
+    |     ^^^^^^^
+
+warning: fields `reference_mapper` and `scorers` are never read
+   --> src/scorer_set.rs:219:5
+    |
+218 | struct ReferenceMappedExecutor<I, O, R, R2> {
+    |        ----------------------- fields in this struct
+219 |     reference_mapper: Box<dyn Mapper<R, R2>>,
+    |     ^^^^^^^^^^^^^^^^
+220 |     scorers: Vec<ScorerEntry<I, O, R2>>,
+    |     ^^^^^^^
+
+warning: fields `output_mapper`, `reference_mapper`, and `scorers` are never read
+   --> src/scorer_set.rs:245:5
+    |
+244 | struct FullyMappedExecutor<I, O, R, O2, R2> {
+    |        ------------------- fields in this struct
+245 |     output_mapper: Box<dyn Mapper<O, O2>>,
+    |     ^^^^^^^^^^^^^
+246 |     reference_mapper: Box<dyn Mapper<R, R2>>,
+    |     ^^^^^^^^^^^^^^^^
+247 |     scorers: Vec<ScorerEntry<I, O2, R2>>,
+    |     ^^^^^^^
+
+warning: function `score_entries` is never used
+   --> src/scorer_set.rs:282:10
+    |
+282 | async fn score_entries<I, O, R>(
+    |          ^^^^^^^^^^^^^
+
+warning: function `mapper_failure_results` is never used
+   --> src/scorer_set.rs:298:4
+    |
+298 | fn mapper_failure_results<I, O, R>(
+    |    ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `scorer` is never read
+   --> src/scorer_set.rs:317:5
+    |
+315 | struct ScorerEntry<I, O, R> {
+    |        ----------- field in this struct
+316 |     definition: ScoreDefinition,
+317 |     scorer: Box<dyn ErasedScorer<I, O, R>>,
+    |     ^^^^^^
+
+warning: method `score_boxed` is never used
+   --> src/scorer_set.rs:333:8
+    |
+332 | trait ErasedScorer<I, O, R>: Send + Sync {
+    |       ------------ method in this trait
+333 |     fn score_boxed<'a>(
+    |        ^^^^^^^^^^^
+
+warning: struct `SharedMapError` is never constructed
+   --> src/scorer_set.rs:352:8
+    |
+352 | struct SharedMapError(Arc<dyn Error + Send + Sync>);
+    |        ^^^^^^^^^^^^^^
+
+warning: `evalkit` (lib) generated 14 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.84s
+     Running unittests src/lib.rs (target/debug/deps/evalkit-452dfbfa3b4ac9de)
+
+running 12 tests
+test scorer::tests::scorer_definition_returns_name_and_direction ... ok
+test scorer_context::tests::scorer_context_defaults_reference_type_to_unit ... ok
+test scorer::tests::scorer_errors_are_distinct_from_scores ... ok
+test scorer_context::tests::scorer_context_holds_input_output_and_reference ... ok
+test scorer::tests::scorer_trait_supports_default_reference_type_and_send_sync ... ok
+test scorer::tests::scorer_score_returns_score_result ... ok
+test scorer_context::tests::scorer_context_supports_absent_reference ... ok
+test scorer_context::tests::scorer_context_supports_non_string_generics ... ok
+test scorer_set::tests::output_mapper_runs_once_per_trial_and_is_shared ... ok
+test scorer_set::tests::scorer_set_builds_with_map_output_and_scored_results ... ok
+test scorer_set::tests::mapper_errors_become_scorer_errors_for_all_scorers ... ok
+test scorer_set::tests::scorer_set_builds_with_map_reference ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dataset.rs (target/debug/deps/dataset-c6ec30cd6a3387a7)
+
+running 2 tests
+test dataset_from_vec_matches_new_constructor ... ok
+test dataset_new_constructs_from_sample_vector ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mapper.rs (target/debug/deps/mapper-6f5b818cd7e6c0ad)
+
+running 4 tests
+test closure_mapper_maps_string_to_length ... ok
+test map_error_wraps_and_exposes_inner_error ... ok
+test mapper_supports_non_string_generics ... ok
+test mapper_trait_is_object_safe_for_shared_use ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sample.rs (target/debug/deps/sample-c2a3291574cecd2f)
+
+running 4 tests
+test sample_builder_generates_id_when_reference_is_present ... ok
+test sample_builder_supports_explicit_id_optional_reference_and_metadata ... ok
+test sample_new_constructs_input_and_reference ... ok
+test sample_new_generates_deterministic_ids_from_content ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score.rs (target/debug/deps/score-830f483bb5e0027a)
+
+running 4 tests
+test score_binary_round_trips_through_json ... ok
+test score_label_round_trips_through_json ... ok
+test score_metric_round_trips_through_json ... ok
+test score_numeric_serializes_as_tagged_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score_definition.rs (target/debug/deps/score_definition-05fe97cc37f5ae7c)
+
+running 4 tests
+test score_definition_minimize_sets_minimize_direction ... ok
+test score_definition_maximize_sets_maximize_direction ... ok
+test score_definition_new_defaults_to_no_direction ... ok
+test score_definition_round_trips_through_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/scorer_error.rs (target/debug/deps/scorer_error-6d7e1765eb66a4a4)
+
+running 4 tests
+test scorer_error_exposes_inner_error_as_source ... ok
+test scorer_error_debug_includes_wrapper_type ... ok
+test scorer_error_implements_error_send_and_sync ... ok
+test scorer_error_wraps_and_displays_inner_error ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests evalkit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[0m
+Compilation is clean functionally; the remaining issue is warning-only because `ScorerSet`’s execution path is intentionally only exercised by tests until the `Run` component exists. I’m narrowing that noise at the module level so the crate stays warning-free.
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M src/scorer_set.rs
+
+LSP errors detected in src/scorer_set.rs, please fix:
+<diagnostics file="/home/mark/evalkit/src/scorer_set.rs">
+ERROR [41:29] type parameter `I` is never used
+consider removing `I`, referring to it in a field, or using a marker such as `PhantomData`
+if you intended `I` to be a const parameter, use `const I: /* Type */` instead
+ERROR [22:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [62:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [75:9] type annotations needed
+cannot infer type of the type parameter `I` declared on the struct `ScorerSetBuilder`
+ERROR [118:43] future cannot be sent between threads safely
+required for the cast from `Pin<Box<impl Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>>>>` to `Pin<Box<dyn Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>> + Send>>`
+ERROR [250:9] type annotations needed for `Arc<_, _>`
+ERROR [295:9] `impl Future<Output = Result<Score, ScorerError>>` cannot be sent between threads safely
+the trait `Send` is not implemented for `impl Future<Output = Result<Score, ScorerError>>`
+required for the cast from `Pin<Box<impl Future<Output = Result<Score, ScorerError>>>>` to `Pin<Box<(dyn Future<Output = Result<Score, ScorerError>> + Send + 'a)>>`
+ERROR [133:23] the parameter type `O` may not live long enough
+the parameter type `O` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `O` may not live long enough
+...so that the type `O` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `O2` may not live long enough
+the parameter type `O2` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `O2` may not live long enough
+...so that the type `O2` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `I` may not live long enough
+the parameter type `I` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `I` may not live long enough
+...so that the type `I` will meet its required lifetime bounds
+ERROR [133:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [133:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+ERROR [134:17] future cannot be sent between threads safely
+required for the cast from `Pin<Box<{async block@src/scorer_set.rs:134:26: 134:31}>>` to `Pin<Box<dyn Future<Output = Vec<(ScoreDefinition, Result<Score, ScorerError>)>> + Send>>`
+ERROR [162:23] the parameter type `R` may not live long enough
+the parameter type `R` must be valid for the static lifetime...
+ERROR [162:23] the parameter type `R` may not live long enough
+...so that the type `R` will meet its required lifetime bounds
+ERROR [162:23] the parameter type `R2` may not live long enough
+the parameter type `R2` must be valid for the static lifetime...
+ERROR [162:23] the parameter type `R2` may not live long enough
+...so that the type `R2` will meet its required lifetime bounds
+... and 20 more
+</diagnostics>
+[0m
+[0m$ [0mcargo test
+Compiling evalkit v0.1.0 (/home/mark/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.66s
+     Running unittests src/lib.rs (target/debug/deps/evalkit-452dfbfa3b4ac9de)
+
+running 12 tests
+test scorer::tests::scorer_definition_returns_name_and_direction ... ok
+test scorer_context::tests::scorer_context_defaults_reference_type_to_unit ... ok
+test scorer::tests::scorer_errors_are_distinct_from_scores ... ok
+test scorer::tests::scorer_trait_supports_default_reference_type_and_send_sync ... ok
+test scorer_context::tests::scorer_context_holds_input_output_and_reference ... ok
+test scorer::tests::scorer_score_returns_score_result ... ok
+test scorer_context::tests::scorer_context_supports_absent_reference ... ok
+test scorer_context::tests::scorer_context_supports_non_string_generics ... ok
+test scorer_set::tests::mapper_errors_become_scorer_errors_for_all_scorers ... ok
+test scorer_set::tests::output_mapper_runs_once_per_trial_and_is_shared ... ok
+test scorer_set::tests::scorer_set_builds_with_map_output_and_scored_results ... ok
+test scorer_set::tests::scorer_set_builds_with_map_reference ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dataset.rs (target/debug/deps/dataset-c6ec30cd6a3387a7)
+
+running 2 tests
+test dataset_from_vec_matches_new_constructor ... ok
+test dataset_new_constructs_from_sample_vector ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mapper.rs (target/debug/deps/mapper-6f5b818cd7e6c0ad)
+
+running 4 tests
+test map_error_wraps_and_exposes_inner_error ... ok
+test closure_mapper_maps_string_to_length ... ok
+test mapper_supports_non_string_generics ... ok
+test mapper_trait_is_object_safe_for_shared_use ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sample.rs (target/debug/deps/sample-c2a3291574cecd2f)
+
+running 4 tests
+test sample_builder_generates_id_when_reference_is_present ... ok
+test sample_builder_supports_explicit_id_optional_reference_and_metadata ... ok
+test sample_new_constructs_input_and_reference ... ok
+test sample_new_generates_deterministic_ids_from_content ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score.rs (target/debug/deps/score-830f483bb5e0027a)
+
+running 4 tests
+test score_binary_round_trips_through_json ... ok
+test score_label_round_trips_through_json ... ok
+test score_numeric_serializes_as_tagged_json ... ok
+test score_metric_round_trips_through_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score_definition.rs (target/debug/deps/score_definition-05fe97cc37f5ae7c)
+
+running 4 tests
+test score_definition_maximize_sets_maximize_direction ... ok
+test score_definition_minimize_sets_minimize_direction ... ok
+test score_definition_new_defaults_to_no_direction ... ok
+test score_definition_round_trips_through_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/scorer_error.rs (target/debug/deps/scorer_error-6d7e1765eb66a4a4)
+
+running 4 tests
+test scorer_error_debug_includes_wrapper_type ... ok
+test scorer_error_exposes_inner_error_as_source ... ok
+test scorer_error_implements_error_send_and_sync ... ok
+test scorer_error_wraps_and_displays_inner_error ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests evalkit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[0m
+The implementation and tests are passing. I’m doing a final formatting pass, then I’ll update `state.md` with iteration 10 details and the exact downstream note about the current `ScorerSet` constraints.
+[0m$ [0mcargo fmt && cargo test
+Compiling evalkit v0.1.0 (/home/mark/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.69s
+     Running unittests src/lib.rs (target/debug/deps/evalkit-452dfbfa3b4ac9de)
+
+running 12 tests
+test scorer::tests::scorer_definition_returns_name_and_direction ... ok
+test scorer::tests::scorer_errors_are_distinct_from_scores ... ok
+test scorer::tests::scorer_score_returns_score_result ... ok
+test scorer_context::tests::scorer_context_defaults_reference_type_to_unit ... ok
+test scorer_context::tests::scorer_context_holds_input_output_and_reference ... ok
+test scorer::tests::scorer_trait_supports_default_reference_type_and_send_sync ... ok
+test scorer_context::tests::scorer_context_supports_absent_reference ... ok
+test scorer_context::tests::scorer_context_supports_non_string_generics ... ok
+test scorer_set::tests::mapper_errors_become_scorer_errors_for_all_scorers ... ok
+test scorer_set::tests::output_mapper_runs_once_per_trial_and_is_shared ... ok
+test scorer_set::tests::scorer_set_builds_with_map_output_and_scored_results ... ok
+test scorer_set::tests::scorer_set_builds_with_map_reference ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dataset.rs (target/debug/deps/dataset-c6ec30cd6a3387a7)
+
+running 2 tests
+test dataset_from_vec_matches_new_constructor ... ok
+test dataset_new_constructs_from_sample_vector ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mapper.rs (target/debug/deps/mapper-6f5b818cd7e6c0ad)
+
+running 4 tests
+test closure_mapper_maps_string_to_length ... ok
+test map_error_wraps_and_exposes_inner_error ... ok
+test mapper_supports_non_string_generics ... ok
+test mapper_trait_is_object_safe_for_shared_use ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sample.rs (target/debug/deps/sample-c2a3291574cecd2f)
+
+running 4 tests
+test sample_builder_generates_id_when_reference_is_present ... ok
+test sample_builder_supports_explicit_id_optional_reference_and_metadata ... ok
+test sample_new_generates_deterministic_ids_from_content ... ok
+test sample_new_constructs_input_and_reference ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score.rs (target/debug/deps/score-830f483bb5e0027a)
+
+running 4 tests
+test score_label_round_trips_through_json ... ok
+test score_binary_round_trips_through_json ... ok
+test score_numeric_serializes_as_tagged_json ... ok
+test score_metric_round_trips_through_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score_definition.rs (target/debug/deps/score_definition-05fe97cc37f5ae7c)
+
+running 4 tests
+test score_definition_maximize_sets_maximize_direction ... ok
+test score_definition_minimize_sets_minimize_direction ... ok
+test score_definition_new_defaults_to_no_direction ... ok
+test score_definition_round_trips_through_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/scorer_error.rs (target/debug/deps/scorer_error-6d7e1765eb66a4a4)
+
+running 4 tests
+test scorer_error_debug_includes_wrapper_type ... ok
+test scorer_error_exposes_inner_error_as_source ... ok
+test scorer_error_implements_error_send_and_sync ... ok
+test scorer_error_wraps_and_displays_inner_error ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests evalkit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[0m
+[0m→ [0mRead src/scorer_set.rs[90m [offset=1, limit=240][0m
+[0m
+[0m# [0mTodos
+[x] Read spec sections for the next eligible component and inspect existing crate structure/interfaces
+[x] Implement exactly one component with tests and necessary exports
+[ ] Run full verification and update state.md for iteration 10
+[0m
+[0m$ [0mdate --iso-8601=seconds
+2026-04-03T17:05:23+02:00
+[0m
+Updating `state.md` now with the completed `ScorerSet` details, the one interface deviation discovered during implementation, and the precise next-component handoff.
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M state.md
+[0m→ [0mRead state.md[90m [offset=1, limit=340][0m
+[0m
+[0m# [0mTodos
+[x] Read spec sections for the next eligible component and inspect existing crate structure/interfaces
+[x] Implement exactly one component with tests and necessary exports
+[x] Run full verification and update state.md for iteration 10
+[0m
+✅ Iteration 10 complete.
+Component: ScorerSet
+Status: DONE
+Tests: 34 passed, 0 failed
+Deviations: 1
+Next component: Acquisition trait
+
+Implemented `ScorerSet` in `src/scorer_set.rs`, exported it from `src/lib.rs`, verified AC-06.1 through AC-06.4 with 4 unit tests, and updated `state.md`. Recorded `DEV-02` for the current `'static` bounds on `ScorerSetBuilderWithScorers::build()`.

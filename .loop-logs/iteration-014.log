@@ -1,0 +1,160 @@
+[0m
+> build · gpt-5.4
+[0m
+Reading `state.md` first to identify the single component for iteration 14, then I’ll inspect the relevant spec sections and existing code before making any changes.
+[0m→ [0mRead state.md[90m [offset=1, limit=400][0m
+`Run builder` is still legitimately blocked by missing public result types, so iteration 14 should advance `RunResult / SampleResult / TrialResult`. I’m reading the exact spec sections for those APIs and then the current crate sources to match existing interfaces.
+[0m✱ [0mGrep "RunResult|SampleResult|TrialResult|## 3|## 5|## 6|## 7|## 8|## 9|11\.1"[90m in docs/spec · 80 matches[0m
+[0m✱ [0mGlob "src/**/*.rs"[90m in . · 12 matches[0m
+[0m✱ [0mGlob "tests/**/*.rs"[90m in . · 6 matches[0m
+[0m→ [0mRead src/lib.rs[90m [offset=1, limit=220][0m
+[0m→ [0mRead src/score.rs[90m [offset=1, limit=220][0m
+[0m→ [0mRead src/scorer_error.rs[90m [offset=1, limit=220][0m
+[0m→ [0mRead src/score_definition.rs[90m [offset=1, limit=220][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=303, limit=160][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=669, limit=130][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=959, limit=30][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=832, limit=90][0m
+I’ve confirmed the dependency-order conflict and the result-type schema. Next I’m narrowing the exact public API around `RunResult` to avoid pulling in future `Stats` work prematurely.
+[0m→ [0mRead Cargo.toml[90m [offset=1, limit=220][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=562, limit=95][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=60, limit=35][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=180, limit=35][0m
+Plan for iteration 14:
+- Add `src/run_result.rs` with `TrialResult`, `SampleResult`, `RunMetadata`, and `RunResult`.
+- Keep the API to the spec’s public fields only; no constructors or stats/comparison helpers yet.
+- Implement serde for `TrialResult.scores: HashMap<String, Result<Score, ScorerError>>` so scored results and scorer failures remain distinguishable in serialized form.
+- Serialize scorer maps in sorted-key order to support the spec’s deterministic persistence constraint without changing the public `HashMap` API.
+- Export the new result types from `src/lib.rs`.
+- Add focused tests for serde round-tripping, sample-order preservation, sorted scorer serialization, and score-vs-error distinction for AC-13.3.
+[0m⚙ [0mapply_patch Success. Updated the following files:
+A src/run_result.rs
+M src/lib.rs
+A tests/run_result.rs
+The new module is in place. I caught one lifetime issue in the custom score-result serializer before verification, and I’m patching that now before running formatting and the full test suite.
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M src/run_result.rs
+[0m
+[0m$ [0mcargo fmt && cargo test
+Compiling evalkit v0.1.0 (/home/mark/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.10s
+     Running unittests src/lib.rs (target/debug/deps/evalkit-452dfbfa3b4ac9de)
+
+running 25 tests
+test acquisition::tests::acquisition_error_value_variants_are_distinct_from_wrapped_failures ... ok
+test acquisition::tests::acquisition_error_wrapped_variants_preserve_sources ... ok
+test scorer::tests::scorer_definition_returns_name_and_direction ... ok
+test acquisition::tests::acquisition_blanket_impl_supports_async_closures ... ok
+test acquisition::tests::acquisition_trait_supports_custom_implementations ... ok
+test scorer::tests::scorer_errors_are_distinct_from_scores ... ok
+test scorer_context::tests::scorer_context_defaults_reference_type_to_unit ... ok
+test scorer::tests::scorer_score_returns_score_result ... ok
+test scorer_context::tests::scorer_context_holds_input_output_and_reference ... ok
+test scorer::tests::scorer_trait_supports_default_reference_type_and_send_sync ... ok
+test scorer_context::tests::scorer_context_supports_absent_reference ... ok
+test scorer_context::tests::scorer_context_supports_non_string_generics ... ok
+test scorer_set::tests::mapper_errors_become_scorer_errors_for_all_scorers ... ok
+test scorer_set::tests::output_mapper_runs_once_per_trial_and_is_shared ... ok
+test scorer_set::tests::scorer_set_builds_with_map_output_and_scored_results ... ok
+test scorer_set::tests::scorer_set_builds_with_map_reference ... ok
+test scorers::tests::contains_returns_binary_score ... ok
+test scorers::tests::exact_match_returns_binary_score ... ok
+test scorers::tests::json_schema_invalid_json_is_a_scorer_error ... ok
+test scorers::tests::json_schema_returns_false_for_non_matching_json ... ok
+test scorers::tests::missing_reference_returns_scorer_error ... ok
+test scorers::tests::json_schema_validates_object_shape ... ok
+test scorers::tests::invalid_regex_pattern_is_distinct_from_low_score ... ok
+test scorers::tests::builtin_scorers_expose_expected_definitions ... ok
+test scorers::tests::regex_returns_binary_score ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dataset.rs (target/debug/deps/dataset-c6ec30cd6a3387a7)
+
+running 2 tests
+test dataset_from_vec_matches_new_constructor ... ok
+test dataset_new_constructs_from_sample_vector ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mapper.rs (target/debug/deps/mapper-6f5b818cd7e6c0ad)
+
+running 4 tests
+test closure_mapper_maps_string_to_length ... ok
+test map_error_wraps_and_exposes_inner_error ... ok
+test mapper_supports_non_string_generics ... ok
+test mapper_trait_is_object_safe_for_shared_use ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run_result.rs (target/debug/deps/run_result-12cdfb9bc866e26c)
+
+running 4 tests
+test sample_result_can_distinguish_low_scores_from_failed_scores ... ok
+test trial_result_deserializes_error_entries_back_into_scorer_errors ... ok
+test trial_result_serializes_scores_and_errors_distinctly ... ok
+test run_result_round_trips_metadata_and_sample_order ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sample.rs (target/debug/deps/sample-c2a3291574cecd2f)
+
+running 4 tests
+test sample_builder_generates_id_when_reference_is_present ... ok
+test sample_builder_supports_explicit_id_optional_reference_and_metadata ... ok
+test sample_new_constructs_input_and_reference ... ok
+test sample_new_generates_deterministic_ids_from_content ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score.rs (target/debug/deps/score-830f483bb5e0027a)
+
+running 4 tests
+test score_binary_round_trips_through_json ... ok
+test score_label_round_trips_through_json ... ok
+test score_metric_round_trips_through_json ... ok
+test score_numeric_serializes_as_tagged_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/score_definition.rs (target/debug/deps/score_definition-05fe97cc37f5ae7c)
+
+running 4 tests
+test score_definition_minimize_sets_minimize_direction ... ok
+test score_definition_maximize_sets_maximize_direction ... ok
+test score_definition_new_defaults_to_no_direction ... ok
+test score_definition_round_trips_through_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/scorer_error.rs (target/debug/deps/scorer_error-6d7e1765eb66a4a4)
+
+running 4 tests
+test scorer_error_debug_includes_wrapper_type ... ok
+test scorer_error_exposes_inner_error_as_source ... ok
+test scorer_error_wraps_and_displays_inner_error ... ok
+test scorer_error_implements_error_send_and_sync ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests evalkit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[0m
+Implementation is verified cleanly. I’m updating `state.md` now to mark the result types as done, clear the resolved `Run builder` blocker, and record the exact public interfaces and test evidence for the next iteration.
+[0m$ [0mdate --iso-8601=seconds
+2026-04-03T17:20:14+02:00
+[0m
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M state.md
+[0m→ [0mRead state.md[90m [offset=1, limit=120][0m
+[0m→ [0mRead state.md[90m [offset=260, limit=90][0m
+[0m→ [0mRead src/run_result.rs[90m [offset=1, limit=220][0m
+✅ Iteration 14 complete.  
+Component: RunResult / SampleResult / TrialResult  
+Status: DONE  
+Tests: 51 passed, 0 failed  
+Deviations: 0  
+Next component: Run builder

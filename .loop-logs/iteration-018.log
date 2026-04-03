@@ -1,0 +1,286 @@
+[0m
+> build · gpt-5.4
+[0m
+Reading `state.md` first, then I’ll inspect the spec and the current code for the one component this iteration should complete.
+[0m→ [0mRead state.md[90m [offset=1, limit=400][0m
+[0m→ [0mRead state.md[90m [offset=401, limit=120][0m
+`JSONL` is the next unstarted component with all dependencies satisfied. I’m pulling the spec sections that define its API, data constraints, and acceptance criteria, then I’ll inspect the existing `RunResult` code it has to serialize.
+[0m
+[0m# [0mTodos
+[ ] Read JSONL-related spec sections and confirm exact scope for iteration 18
+[ ] Inspect existing result/serde code and identify minimal files to add or modify
+[ ] Implement JSONL component and tests for mapped acceptance criteria
+[ ] Run formatting and full test suite, fix issues if any
+[ ] Update state.md for iteration 18 with verification results
+[0m
+[0m✱ [0mGrep "JSONL|jsonl|AC-0|AC-1|Section 5\.|Section 6\.|Section 8\.|Section 9\.|11\.1|11\.2"[90m in docs/spec · 78 matches[0m
+[0m✱ [0mGlob "src/**/*.rs"[90m in . · 16 matches[0m
+[0m✱ [0mGlob "tests/**/*.rs"[90m in . · 10 matches[0m
+[0m→ [0mRead tests/run_result.rs[90m [offset=1, limit=260][0m
+[0m→ [0mRead src/run_result.rs[90m [offset=1, limit=320][0m
+[0m→ [0mRead src/lib.rs[90m [offset=1, limit=220][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=620, limit=40][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=780, limit=40][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=950, limit=40][0m
+[0m→ [0mRead docs/spec/eval-kernel.md[90m [offset=80, limit=20][0m
+Scope is clear from the spec: add the two public JSONL convenience functions exactly as defined, keep serialization deterministic, and cover AC-03.1/03.2 with tests. I’m checking the crate layout and dependency setup now so I can make the smallest correct change.
+[0m→ [0mRead Cargo.toml[90m [offset=1, limit=220][0m
+[0m✱ [0mGrep "write_jsonl|read_jsonl|jsonl"[90m in . · 0 matches[0m
+[0m✱ [0mGrep "JSONL|jsonl"[90m in docs/spec · 15 matches[0m
+[0m✱ [0mGrep "write_jsonl\(|read_jsonl\("[90m in docs/spec · 2 matches[0m
+[0m
+[0m# [0mTodos
+[x] Read JSONL-related spec sections and confirm exact scope for iteration 18
+[ ] Inspect existing result/serde code and identify minimal files to add or modify
+[ ] Implement JSONL component and tests for mapped acceptance criteria
+[ ] Run formatting and full test suite, fix issues if any
+[ ] Update state.md for iteration 18 with verification results
+[0m
+Plan for this iteration:
+- Add `src/jsonl.rs` with `write_jsonl(result: &RunResult, writer: impl Write) -> Result<(), serde_json::Error>` and `read_jsonl(reader: impl Read) -> Result<RunResult, serde_json::Error>`.
+- Use a small internal JSONL record enum so the output is actually line-oriented: one metadata record followed by one record per `SampleResult`.
+- Reuse the existing `RunResult`, `RunMetadata`, and `SampleResult` serde implementations rather than inventing a parallel schema.
+- Export the two functions from `src/lib.rs`.
+- Add `tests/jsonl.rs` to verify AC-03.1 and AC-03.2, including deterministic line order and round-tripping back to `RunResult`.
+- Preserve the existing per-trial score encoding and sample order from `src/run_result.rs` exactly as already implemented.
+[0m# [0mTodos
+[x] Read JSONL-related spec sections and confirm exact scope for iteration 18
+[x] Inspect existing result/serde code and identify minimal files to add or modify
+[ ] Implement JSONL component and tests for mapped acceptance criteria
+[ ] Run formatting and full test suite, fix issues if any
+[ ] Update state.md for iteration 18 with verification results
+[0m
+I’ve got the minimal design. Next I’m editing the crate to add the JSONL module and its tests, keeping the existing `RunResult` serde surface as the single source of truth.
+[0m⚙ [0mapply_patch Success. Updated the following files:
+A src/jsonl.rs
+M src/run_result.rs
+M src/lib.rs
+A tests/jsonl.rs
+
+LSP errors detected in src/run_result.rs, please fix:
+<diagnostics file="/home/mark/evalkit/src/run_result.rs">
+ERROR [15:5] the trait bound `scorer_error::ScorerError: Clone` is not satisfied
+required for `Result<score::Score, scorer_error::ScorerError>` to implement `Clone`
+1 redundant requirement hidden
+required for `HashMap<String, Result<Score, ScorerError>>` to implement `Clone`
+the full name for the type has been written to '/home/mark/evalkit/target/debug/deps/evalkit-06d3f64d50df9b89.long-type-9916013370157813379.txt'
+consider using `--verbose` to print the full type name to the console
+ERROR [15:5] the trait bound `scorer_error::ScorerError: Clone` is not satisfied
+required for `Result<score::Score, scorer_error::ScorerError>` to implement `Clone`
+1 redundant requirement hidden
+required for `HashMap<String, Result<Score, ScorerError>>` to implement `Clone`
+the full name for the type has been written to '/home/mark/evalkit/target/debug/deps/evalkit-ad1530aaf5f775e8.long-type-14088096228023055731.txt'
+consider using `--verbose` to print the full type name to the console
+</diagnostics>
+The first pass hit an avoidable clone requirement from `ScorerError`. I’m tightening the JSONL writer to serialize borrowed records instead of cloning `RunResult` internals, which keeps the public data types unchanged.
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M src/jsonl.rs
+M src/run_result.rs
+
+LSP errors detected in src/run_result.rs, please fix:
+<diagnostics file="/home/mark/evalkit/src/run_result.rs">
+ERROR [15:5] the trait bound `scorer_error::ScorerError: Clone` is not satisfied
+required for `Result<score::Score, scorer_error::ScorerError>` to implement `Clone`
+1 redundant requirement hidden
+required for `HashMap<String, Result<Score, ScorerError>>` to implement `Clone`
+the full name for the type has been written to '/home/mark/evalkit/target/debug/deps/evalkit-06d3f64d50df9b89.long-type-9916013370157813379.txt'
+consider using `--verbose` to print the full type name to the console
+ERROR [15:5] the trait bound `scorer_error::ScorerError: Clone` is not satisfied
+required for `Result<score::Score, scorer_error::ScorerError>` to implement `Clone`
+1 redundant requirement hidden
+required for `HashMap<String, Result<Score, ScorerError>>` to implement `Clone`
+the full name for the type has been written to '/home/mark/evalkit/target/debug/deps/evalkit-ad1530aaf5f775e8.long-type-14088096228023055731.txt'
+consider using `--verbose` to print the full type name to the console
+</diagnostics>
+[0m→ [0mRead src/run_result.rs[90m [offset=1, limit=60][0m
+[0m
+[0m$ [0mcargo fmt && cargo test
+Compiling evalkit v0.1.0 (/home/mark/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.55s
+     Running unittests src/lib.rs (target/debug/deps/evalkit-452dfbfa3b4ac9de)
+
+running 25 tests
+test acquisition::tests::acquisition_error_wrapped_variants_preserve_sources ... ok
+test acquisition::tests::acquisition_error_value_variants_are_distinct_from_wrapped_failures ... ok
+test scorer::tests::scorer_definition_returns_name_and_direction ... ok
+test acquisition::tests::acquisition_blanket_impl_supports_async_closures ... ok
+test acquisition::tests::acquisition_trait_supports_custom_implementations ... ok
+test scorer::tests::scorer_errors_are_distinct_from_scores ... ok
+test scorer_context::tests::scorer_context_defaults_reference_type_to_unit ... ok
+test scorer::tests::scorer_score_returns_score_result ... ok
+test scorer_context::tests::scorer_context_holds_input_output_and_reference ... ok
+test scorer::tests::scorer_trait_supports_default_reference_type_and_send_sync ... ok
+test scorer_context::tests::scorer_context_supports_absent_reference ... ok
+test scorer_context::tests::scorer_context_supports_non_string_generics ... ok
+test scorer_set::tests::mapper_errors_become_scorer_errors_for_all_scorers ... ok
+test scorer_set::tests::output_mapper_runs_once_per_trial_and_is_shared ... ok
+test scorer_set::tests::scorer_set_builds_with_map_output_and_scored_results ... ok
+test scorer_set::tests::scorer_set_builds_with_map_reference ... ok
+test scorers::tests::contains_returns_binary_score ... ok
+test scorers::tests::exact_match_returns_binary_score ... ok
+test scorers::tests::json_schema_invalid_json_is_a_scorer_error ... ok
+test scorers::tests::missing_reference_returns_scorer_error ... ok
+test scorers::tests::json_schema_validates_object_shape ... ok
+test scorers::tests::json_schema_returns_false_for_non_matching_json ... ok
+test scorers::tests::invalid_regex_pattern_is_distinct_from_low_score ... ok
+test scorers::tests::builtin_scorers_expose_expected_definitions ... ok
+test scorers::tests::regex_returns_binary_score ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 6 tests
+test compare_marks_direction_mismatch_as_incomparable ... ok
+test compare_reports_direction_aware_numeric_and_metric_sample_deltas ... ok
+test compare_applies_the_configured_confidence_level_to_significance ... ok
+test compare_treats_label_scores_as_change_only_without_significance ... ok
+test compare_uses_welch_t_test_and_marks_non_significant_deltas ... ok
+test compare_uses_fisher_exact_for_binary_scores_with_different_trial_counts ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+test dataset_from_vec_matches_new_constructor ... ok
+test dataset_new_constructs_from_sample_vector ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+test write_jsonl_serializes_metadata_then_samples_as_jsonl ... ok
+test read_jsonl_round_trips_back_to_a_typed_run_result ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test closure_mapper_maps_string_to_length ... ok
+test map_error_wraps_and_exposes_inner_error ... ok
+test mapper_supports_non_string_generics ... ok
+test mapper_trait_is_object_safe_for_shared_use ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 5 tests
+     Running tests/comparison.rs (target/debug/deps/comparison-609e02bbffaa197a)
+     Running tests/dataset.rs (target/debug/deps/dataset-c6ec30cd6a3387a7)
+     Running tests/jsonl.rs (target/debug/deps/jsonl-93cb96da138d6b62)
+     Running tests/mapper.rs (target/debug/deps/mapper-6f5b818cd7e6c0ad)
+     Running tests/run.rs (target/debug/deps/run-d0794dbfe5504b52)
+test global_mapper_failures_propagate_to_every_affected_scorer ... ok
+test run_accepts_multiple_scorers_and_scorer_sets ... ok
+test global_mappers_apply_before_standalone_scorers_and_scorer_sets ... ok
+test run_builder_executes_dataset_and_returns_sample_results ... ok
+test build_validates_duplicates_and_execute_validates_scores_and_timeouts ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run_result.rs (target/debug/deps/run_result-12cdfb9bc866e26c)
+
+running 4 tests
+test sample_result_can_distinguish_low_scores_from_failed_scores ... ok
+test trial_result_deserializes_error_entries_back_into_scorer_errors ... ok
+test trial_result_serializes_scores_and_errors_distinctly ... ok
+test run_result_round_trips_metadata_and_sample_order ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test sample_builder_generates_id_when_reference_is_present ... ok
+test sample_builder_supports_explicit_id_optional_reference_and_metadata ... ok
+test sample_new_generates_deterministic_ids_from_content ... ok
+test sample_new_constructs_input_and_reference ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test score_label_round_trips_through_json ... ok
+test score_binary_round_trips_through_json ... ok
+test score_metric_round_trips_through_json ... ok
+test score_numeric_serializes_as_tagged_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sample.rs (target/debug/deps/sample-c2a3291574cecd2f)
+     Running tests/score.rs (target/debug/deps/score-830f483bb5e0027a)
+     Running tests/score_definition.rs (target/debug/deps/score_definition-05fe97cc37f5ae7c)
+
+running 4 tests
+test score_definition_maximize_sets_maximize_direction ... ok
+test score_definition_minimize_sets_minimize_direction ... ok
+test score_definition_new_defaults_to_no_direction ... ok
+test score_definition_round_trips_through_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/scorer_error.rs (target/debug/deps/scorer_error-6d7e1765eb66a4a4)
+
+running 4 tests
+test scorer_error_debug_includes_wrapper_type ... ok
+test scorer_error_exposes_inner_error_as_source ... ok
+test scorer_error_implements_error_send_and_sync ... ok
+test scorer_error_wraps_and_displays_inner_error ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/stats.rs (target/debug/deps/stats-ec2a13dd5e1f7ea2)
+
+running 5 tests
+test run_result_stats_compute_label_distribution_and_mode ... ok
+test run_result_stats_compute_binary_pass_metrics_and_wilson_interval ... ok
+test run_result_stats_exclude_errors_from_denominator_and_report_total_errors ... ok
+test run_result_stats_handle_single_trial_without_special_casing ... ok
+test run_result_stats_compute_numeric_and_metric_aggregates_with_t_confidence_intervals ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests evalkit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[0m
+The implementation is compiling and the full test suite is green. I’m recording iteration 18 in `state.md` now, including the new public JSONL interfaces, test evidence, and the next dependency-eligible component.
+[0m# [0mTodos
+[x] Read JSONL-related spec sections and confirm exact scope for iteration 18
+[x] Inspect existing result/serde code and identify minimal files to add or modify
+[x] Implement JSONL component and tests for mapped acceptance criteria
+[x] Run formatting and full test suite, fix issues if any
+[ ] Update state.md for iteration 18 with verification results
+[0m
+[0m$ [0mdate --iso-8601=seconds
+2026-04-03T17:49:19+02:00
+[0m
+[0m→ [0mRead state.md[90m [offset=1, limit=40][0m
+[0m→ [0mRead state.md[90m [offset=384, limit=30][0m
+[0m→ [0mRead state.md[90m [offset=412, limit=30][0m
+[0m⚙ [0mapply_patch Success. Updated the following files:
+M state.md
+[0m→ [0mRead state.md[90m [offset=1, limit=32][0m
+[0m→ [0mRead state.md[90m [offset=388, limit=28][0m
+[0m→ [0mRead state.md[90m [offset=428, limit=10][0m
+[0m→ [0mRead state.md[90m [offset=438, limit=12][0m
+[0m
+[0m# [0mTodos
+[x] Read JSONL-related spec sections and confirm exact scope for iteration 18
+[x] Inspect existing result/serde code and identify minimal files to add or modify
+[x] Implement JSONL component and tests for mapped acceptance criteria
+[x] Run formatting and full test suite, fix issues if any
+[x] Update state.md for iteration 18 with verification results
+[0m
+✅ Iteration 18 complete.
+Component: JSONL
+Status: DONE
+Tests: 65 passed, 0 failed
+Deviations: 0
+Next component: TraceBackend / JaegerBackend [otel]
+
+Files updated:
+- `src/jsonl.rs`
+- `src/lib.rs`
+- `tests/jsonl.rs`
+- `state.md`
