@@ -26,7 +26,7 @@ LOG_DIR=".loop-logs"
 PROMPT_FILE="prompts/implement.md"
 
 # How to invoke the agent. Adjust this for your setup.
-# OpenCode: opencode run "prompt"
+# OpenCode: opencode run "message" --file prompt.md
 # Claude Code: claude -p "prompt" --model opus
 AGENT_CMD="opencode"
 AGENT_SUBCMD="run"
@@ -161,13 +161,17 @@ build_message() {
   local iteration="$1"
   if [[ ! -f "$STATE_FILE" ]]; then
     cat <<EOF
+The attached file contains your implementation loop instructions. Follow them exactly.
+
 This is iteration $iteration (first run — bootstrap).
 Spec location: $SPEC_PATH
 State file: $STATE_FILE
-No state file exists yet. Execute the Bootstrap task as described in the implementation prompt.
+No state file exists yet. Execute the Bootstrap task as described in the attached instructions.
 EOF
   else
     cat <<EOF
+The attached file contains your implementation loop instructions. Follow them exactly.
+
 This is iteration $iteration.
 Spec location: $SPEC_PATH
 State file: $STATE_FILE
@@ -270,9 +274,9 @@ while true; do
   log_file="$LOG_DIR/iteration-$(printf '%03d' $iteration).log"
   message=$(build_message "$iteration")
 
-  # Run agent: --prompt loads implementation instructions, message is the per-iteration directive
+  # Run agent: message first, then --file attaches implementation prompt as context
   set +e
-  $AGENT_CMD $AGENT_SUBCMD --prompt "$PROMPT_FILE" $AGENT_FLAGS "$message" > "$log_file" 2>&1
+  $AGENT_CMD $AGENT_SUBCMD $AGENT_FLAGS "$message" --file "$PROMPT_FILE" > "$log_file" 2>&1
   agent_exit=$?
   set -e
 
