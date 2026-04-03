@@ -26,10 +26,11 @@ LOG_DIR=".loop-logs"
 PROMPT_FILE="prompts/implement.md"
 
 # How to invoke the agent. Adjust this for your setup.
-# OpenCode: opencode -p "prompt" --model gpt-5.4
+# OpenCode: opencode run "prompt"
 # Claude Code: claude -p "prompt" --model opus
 AGENT_CMD="opencode"
-AGENT_FLAGS="-p"
+AGENT_SUBCMD="run"
+AGENT_FLAGS=""  # e.g., "-m provider/model" to pin a model
 
 # Cooldown between iterations (seconds). Prevents runaway API spend if
 # the agent starts exiting immediately due to a bug.
@@ -45,9 +46,25 @@ while [[ $# -gt 0 ]]; do
     --prompt)         PROMPT_FILE="$2"; shift 2 ;;
     --cooldown)       COOLDOWN="$2"; shift 2 ;;
     --agent-cmd)      AGENT_CMD="$2"; shift 2 ;;
+    --agent-subcmd)   AGENT_SUBCMD="$2"; shift 2 ;;
+    --agent-flags)    AGENT_FLAGS="$2"; shift 2 ;;
     *)                echo "Unknown option: $1"; exit 1 ;;
   esac
 done
+
+# --- Resolve project root and cd into it -------------------------------------
+
+PROJECT_ROOT="$(realpath "$PROJECT_ROOT")"
+if [[ ! -d "$PROJECT_ROOT" ]]; then
+  echo "❌ Project root not found: $PROJECT_ROOT"
+  exit 1
+fi
+cd "$PROJECT_ROOT"
+
+# Resolve remaining paths relative to project root
+SPEC_PATH="$(realpath "$SPEC_PATH" 2>/dev/null || echo "$SPEC_PATH")"
+PROMPT_FILE="$(realpath "$PROMPT_FILE" 2>/dev/null || echo "$PROMPT_FILE")"
+LOG_DIR="$PROJECT_ROOT/$LOG_DIR"
 
 # --- Preflight checks --------------------------------------------------------
 
@@ -67,7 +84,6 @@ if ! command -v "$AGENT_CMD" &> /dev/null; then
 fi
 
 mkdir -p "$LOG_DIR"
-cd "$PROJECT_ROOT"
 
 # --- State file parsing ------------------------------------------------------
 
@@ -139,19 +155,25 @@ count_deviations() {
   grep -c "^### DEV-" "$STATE_FILE" 2>/dev/null || echo "0"
 }
 
-# --- Build the agent prompt --------------------------------------------------
+# --- Build the per-iteration message -----------------------------------------
 
-build_prompt() {
+build_message() {
   local iteration="$1"
-  cat <<EOF
-Read the implementation loop prompt below, then execute exactly one iteration.
-
+  if [[ ! -f "$STATE_FILE" ]]; then
+    cat <<EOF
+This is iteration $iteration (first run — bootstrap).
 Spec location: $SPEC_PATH
 State file: $STATE_FILE
-This is iteration: $iteration
-
-$(cat "$PROMPT_FILE")
+No state file exists yet. Execute the Bootstrap task as described in the implementation prompt.
 EOF
+  else
+    cat <<EOF
+This is iteration $iteration.
+Spec location: $SPEC_PATH
+State file: $STATE_FILE
+Read state.md FIRST, then execute exactly one iteration of the implementation loop.
+EOF
+  fi
 }
 
 # --- Status display ----------------------------------------------------------
@@ -184,7 +206,8 @@ LAST_STATE_HASH=""
 
 check_stuck() {
   if [[ ! -f "$STATE_FILE" ]]; then
-    return 0
+    echo "false"
+    return
   fi
   local current_hash
   current_hash=$(md5sum "$STATE_FILE" | cut -d' ' -f1)
@@ -204,6 +227,7 @@ MAX_STUCK=3  # Exit after 3 consecutive iterations with no state change
 
 echo "🚀 Implementation loop starting"
 echo "   Spec: $SPEC_PATH"
+echo "   Agent: $AGENT_CMD $AGENT_SUBCMD $AGENT_FLAGS"
 echo "   Max iterations: $MAX_ITERATIONS"
 echo "   Cooldown: ${COOLDOWN}s"
 echo "   Logs: $LOG_DIR/"
@@ -232,7 +256,6 @@ while true; do
   if [[ "$(has_blocked)" == "true" && "$(has_in_progress)" == "false" ]]; then
     # Only stop for blocked if there's no in-progress work to resume
     # and no unblocked NOT_STARTED components remain
-    local unblocked_remaining
     unblocked_remaining=$(count_by_status "NOT_STARTED")
     if [[ "$unblocked_remaining" -eq 0 ]]; then
       echo "🚫 All remaining components are BLOCKED. Human intervention needed."
@@ -245,11 +268,11 @@ while true; do
   # --- Run the agent ---
   echo "▶ Iteration $iteration starting..."
   log_file="$LOG_DIR/iteration-$(printf '%03d' $iteration).log"
-  prompt=$(build_prompt "$iteration")
+  message=$(build_message "$iteration")
 
-  # Run agent, capture output, allow failure
+  # Run agent: --prompt loads implementation instructions, message is the per-iteration directive
   set +e
-  $AGENT_CMD $AGENT_FLAGS "$prompt" > "$log_file" 2>&1
+  $AGENT_CMD $AGENT_SUBCMD --prompt "$PROMPT_FILE" $AGENT_FLAGS "$message" > "$log_file" 2>&1
   agent_exit=$?
   set -e
 
