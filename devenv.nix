@@ -9,7 +9,7 @@
 {
   packages =
     with pkgs;
-    [ ] ++ [ inputs.nixpkgsUnstable.legacyPackages.${pkgs.stdenv.system}.opencode ];
+    [ lld ] ++ [ inputs.nixpkgsUnstable.legacyPackages.${pkgs.stdenv.system}.opencode ];
   languages = {
     rust = {
       enable = true;
