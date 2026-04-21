@@ -202,3 +202,217 @@ fn spawn_http_server(
 
     (address, requests, handle)
 }
+
+// ---------------------------------------------------------------------------
+// OtlpReceiver tests
+// ---------------------------------------------------------------------------
+
+use evalkit::OtlpReceiver;
+use std::net::TcpStream;
+
+/// Send a single OTLP/HTTP POST on tokio's blocking thread pool.
+///
+/// Using `spawn_blocking` keeps the current-thread tokio runtime free to run
+/// the server accept/handler tasks concurrently with the blocking TCP exchange.
+/// The thread MUST drain the server response before closing the socket — dropping
+/// without reading causes the OS to send TCP RST, aborting the in-flight request.
+async fn post_otlp(port: u16, body: &str) {
+    let body = body.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let request = format!(
+            "POST /v1/traces HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(request.as_bytes()).unwrap();
+        // Drain the response before closing so the OS sends FIN, not RST.
+        let mut buf = [0u8; 256];
+        loop {
+            match stream.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn otlp_receiver_stores_spans_by_correlation_id() {
+    let receiver = OtlpReceiver::start_on_port(0).await.unwrap();
+    let port = receiver.port();
+
+    let now_ns = Utc::now().timestamp_nanos_opt().unwrap();
+    let body = json!({
+        "resourceSpans": [{
+            "scopeSpans": [{
+                "spans": [{
+                    "traceId": "abc123",
+                    "spanId": "def456",
+                    "name": "llm.call",
+                    "startTimeUnixNano": now_ns.to_string(),
+                    "endTimeUnixNano": (now_ns + 1_000_000).to_string(),
+                    "attributes": [
+                        {"key": "eval.run_id", "value": {"stringValue": "run-xyz"}},
+                        {"key": "eval.sample_id", "value": {"stringValue": "sample-1"}}
+                    ]
+                }]
+            }]
+        }]
+    })
+    .to_string();
+
+    post_otlp(port, &body).await;
+    // No explicit sleep: fetch_spans polls every 200 ms until spans arrive.
+
+    let spans = receiver
+        .fetch_spans("run-xyz", "eval.sample_id", Duration::from_secs(1))
+        .await
+        .unwrap();
+
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans["sample-1"].len(), 1);
+    assert_eq!(spans["sample-1"][0].span_id, "def456");
+    assert_eq!(spans["sample-1"][0].operation_name, "llm.call");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn otlp_receiver_groups_spans_across_multiple_samples() {
+    let receiver = OtlpReceiver::start_on_port(0).await.unwrap();
+    let port = receiver.port();
+
+    let now_ns = Utc::now().timestamp_nanos_opt().unwrap();
+    let body = json!({
+        "resourceSpans": [{
+            "scopeSpans": [{
+                "spans": [
+                    {
+                        "traceId": "t1",
+                        "spanId": "s1",
+                        "name": "op",
+                        "startTimeUnixNano": now_ns.to_string(),
+                        "endTimeUnixNano": (now_ns + 1_000).to_string(),
+                        "attributes": [
+                            {"key": "eval.run_id", "value": {"stringValue": "run-multi"}},
+                            {"key": "eval.sample_id", "value": {"stringValue": "sample-a"}}
+                        ]
+                    },
+                    {
+                        "traceId": "t2",
+                        "spanId": "s2",
+                        "name": "op",
+                        "startTimeUnixNano": now_ns.to_string(),
+                        "endTimeUnixNano": (now_ns + 1_000).to_string(),
+                        "attributes": [
+                            {"key": "eval.run_id", "value": {"stringValue": "run-multi"}},
+                            {"key": "eval.sample_id", "value": {"stringValue": "sample-b"}}
+                        ]
+                    },
+                    {
+                        "traceId": "t3",
+                        "spanId": "s3",
+                        "name": "op",
+                        "startTimeUnixNano": now_ns.to_string(),
+                        "endTimeUnixNano": (now_ns + 1_000).to_string(),
+                        "attributes": [
+                            {"key": "eval.run_id", "value": {"stringValue": "run-multi"}},
+                            {"key": "eval.sample_id", "value": {"stringValue": "sample-a"}}
+                        ]
+                    }
+                ]
+            }]
+        }]
+    })
+    .to_string();
+
+    post_otlp(port, &body).await;
+    // No explicit sleep: fetch_spans polls every 200 ms until spans arrive.
+
+    let spans = receiver
+        .fetch_spans("run-multi", "eval.sample_id", Duration::from_secs(1))
+        .await
+        .unwrap();
+
+    assert_eq!(spans.len(), 2);
+    assert_eq!(spans["sample-a"].len(), 2);
+    assert_eq!(spans["sample-b"].len(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn otlp_receiver_drops_spans_without_run_id() {
+    let receiver = OtlpReceiver::start_on_port(0).await.unwrap();
+    let port = receiver.port();
+
+    let now_ns = Utc::now().timestamp_nanos_opt().unwrap();
+    let body = json!({
+        "resourceSpans": [{
+            "scopeSpans": [{
+                "spans": [{
+                    "traceId": "t1",
+                    "spanId": "s1",
+                    "name": "untagged",
+                    "startTimeUnixNano": now_ns.to_string(),
+                    "endTimeUnixNano": (now_ns + 1_000).to_string(),
+                    "attributes": []
+                }]
+            }]
+        }]
+    })
+    .to_string();
+
+    post_otlp(port, &body).await;
+    // No explicit sleep: fetch_spans polls every 200 ms until spans arrive.
+
+    let spans = receiver
+        .fetch_spans("run-nobody", "eval.sample_id", Duration::from_millis(100))
+        .await
+        .unwrap();
+
+    assert!(spans.is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn otlp_receiver_parses_scalar_attribute_types() {
+    let receiver = OtlpReceiver::start_on_port(0).await.unwrap();
+    let port = receiver.port();
+
+    let now_ns = Utc::now().timestamp_nanos_opt().unwrap();
+    let body = json!({
+        "resourceSpans": [{
+            "scopeSpans": [{
+                "spans": [{
+                    "traceId": "t1",
+                    "spanId": "s1",
+                    "name": "op",
+                    "startTimeUnixNano": now_ns.to_string(),
+                    "endTimeUnixNano": (now_ns + 1_000).to_string(),
+                    "attributes": [
+                        {"key": "eval.run_id",    "value": {"stringValue": "run-types"}},
+                        {"key": "eval.sample_id", "value": {"stringValue": "s1"}},
+                        {"key": "str_attr",       "value": {"stringValue": "hello"}},
+                        {"key": "bool_attr",      "value": {"boolValue": true}},
+                        {"key": "int_attr",       "value": {"intValue": "42"}},
+                        {"key": "double_attr",    "value": {"doubleValue": 3.14}}
+                    ]
+                }]
+            }]
+        }]
+    })
+    .to_string();
+
+    post_otlp(port, &body).await;
+    // No explicit sleep: fetch_spans polls every 200 ms until spans arrive.
+
+    let spans = receiver
+        .fetch_spans("run-types", "eval.sample_id", Duration::from_secs(1))
+        .await
+        .unwrap();
+
+    let attrs = &spans["s1"][0].attributes;
+    assert_eq!(attrs["str_attr"], json!("hello"));
+    assert_eq!(attrs["bool_attr"], json!(true));
+    assert_eq!(attrs["int_attr"], json!(42));
+    assert_eq!(attrs["double_attr"].as_f64().unwrap(), 3.14);
+}

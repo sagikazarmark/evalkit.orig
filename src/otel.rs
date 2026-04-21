@@ -1,5 +1,12 @@
 use crate::{Acquisition, AcquisitionError};
+use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use http_body_util::{BodyExt, Full};
+use hyper::body::Incoming;
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::{Method, Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::Deserialize;
 use serde_json::Value;
@@ -7,10 +14,12 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::future::Future;
+use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::Mutex;
-use std::time::Duration;
-use tokio::{task_local, time::{sleep, timeout}};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use tokio::net::TcpListener;
+use tokio::{task_local, time::sleep};
 
 type FetchSpansFuture<'a> =
     Pin<Box<dyn Future<Output = Result<HashMap<String, Vec<Span>>, TraceBackendError>> + 'a>>;
@@ -118,7 +127,7 @@ impl Observe {
             return Ok(cached);
         }
 
-        let grouped = match timeout(
+        let grouped = match tokio::time::timeout(
             self.timeout,
             self.backend.fetch_spans_boxed(
                 &self.correlation_id,
@@ -534,4 +543,328 @@ fn parse_duration(value: &Value, field_name: &str) -> Result<Duration, TraceBack
     Err(TraceBackendError::new(ParseTraceError(format!(
         "Jaeger field `{field_name}` must be a non-negative microsecond duration"
     ))))
+}
+
+// ---------------------------------------------------------------------------
+// OtlpReceiver — embedded OTLP/HTTP receiver (no external backend required)
+//
+// Start one before running the system under test, then pass it as the
+// TraceBackend for Observe.  Point the system under test's OTLP exporter
+// at http://localhost:<port>.
+//
+// Protocol: POST /v1/traces with an OTLP/HTTP JSON body.
+// Spans are stored by their `eval.run_id` attribute and returned when
+// fetch_spans is called with the matching correlation_id.
+// ---------------------------------------------------------------------------
+
+/// Shared span store: `correlation_id` → flat list of spans.
+type SpanStoreInner = HashMap<String, Vec<Span>>;
+
+#[derive(Clone)]
+struct SpanStore(Arc<Mutex<SpanStoreInner>>);
+
+impl SpanStore {
+    fn new() -> Self {
+        Self(Arc::new(Mutex::new(HashMap::new())))
+    }
+
+    fn insert_spans(&self, correlation_id: String, spans: Vec<Span>) {
+        self.0
+            .lock()
+            .expect("span store poisoned")
+            .entry(correlation_id)
+            .or_default()
+            .extend(spans);
+    }
+
+    fn get_spans(&self, correlation_id: &str) -> Vec<Span> {
+        self.0
+            .lock()
+            .expect("span store poisoned")
+            .get(correlation_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
+/// An embedded OTLP/HTTP receiver that stores incoming spans in memory.
+///
+/// Use instead of `JaegerBackend` when you want evalkit to receive spans
+/// directly from the system under test rather than querying an external
+/// tracing backend.
+pub struct OtlpReceiver {
+    addr: SocketAddr,
+    store: SpanStore,
+}
+
+impl OtlpReceiver {
+    /// Start an OTLP/HTTP receiver on the default port (4318).
+    pub async fn start() -> Result<Self, TraceBackendError> {
+        Self::start_on_port(4318).await
+    }
+
+    /// Start an OTLP/HTTP receiver on the given port. Use port `0` to let the
+    /// OS pick a free port (useful in tests).
+    pub async fn start_on_port(port: u16) -> Result<Self, TraceBackendError> {
+        let listener = TcpListener::bind(("0.0.0.0", port))
+            .await
+            .map_err(TraceBackendError::new)?;
+        let addr = listener.local_addr().map_err(TraceBackendError::new)?;
+        let store = SpanStore::new();
+
+        let store_clone = store.clone();
+        tokio::spawn(async move {
+            run_otlp_server(listener, store_clone).await;
+        });
+
+        Ok(Self { addr, store })
+    }
+
+    /// Returns the port the receiver is listening on.
+    pub fn port(&self) -> u16 {
+        self.addr.port()
+    }
+}
+
+impl TraceBackend for OtlpReceiver {
+    async fn fetch_spans(
+        &self,
+        correlation_id: &str,
+        sample_attribute: &str,
+        fetch_timeout: Duration,
+    ) -> Result<HashMap<String, Vec<Span>>, TraceBackendError> {
+        let deadline = Instant::now() + fetch_timeout;
+        let poll = Duration::from_millis(200);
+
+        loop {
+            let spans = self.store.get_spans(correlation_id);
+            if !spans.is_empty() {
+                return Ok(group_by_attribute(spans, sample_attribute));
+            }
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(HashMap::new());
+            }
+            sleep(poll.min(remaining)).await;
+        }
+    }
+}
+
+async fn run_otlp_server(listener: TcpListener, store: SpanStore) {
+    loop {
+        let Ok((stream, _peer)) = listener.accept().await else {
+            break;
+        };
+        let store = store.clone();
+        tokio::spawn(async move {
+            let io = TokioIo::new(stream);
+            let _ = http1::Builder::new()
+                .serve_connection(
+                    io,
+                    service_fn(move |req| {
+                        let store = store.clone();
+                        handle_otlp_request(req, store)
+                    }),
+                )
+                .await;
+        });
+    }
+}
+
+async fn handle_otlp_request(
+    req: Request<Incoming>,
+    store: SpanStore,
+) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    if req.method() == Method::POST && req.uri().path() == "/v1/traces" {
+        let body = req.into_body().collect().await?.to_bytes();
+        if let Ok(payload) = serde_json::from_slice::<OtlpTracesPayload>(&body) {
+            ingest_payload(payload, &store);
+        }
+        Ok(Response::new(Full::new(Bytes::new())))
+    } else {
+        let mut resp = Response::new(Full::new(Bytes::new()));
+        *resp.status_mut() = StatusCode::NOT_FOUND;
+        Ok(resp)
+    }
+}
+
+fn ingest_payload(payload: OtlpTracesPayload, store: &SpanStore) {
+    for resource_span in payload.resource_spans {
+        for scope_span in resource_span.scope_spans {
+            for raw in scope_span.spans {
+                let attributes = otlp_attributes_to_map(raw.attributes);
+
+                let Some(correlation_id) =
+                    attribute_group_key(&attributes, "eval.run_id")
+                else {
+                    continue;
+                };
+
+                let Ok(start_time) = parse_unix_nanos(&raw.start_time_unix_nano) else {
+                    continue;
+                };
+                let Ok(end_time) = parse_unix_nanos(&raw.end_time_unix_nano) else {
+                    continue;
+                };
+
+                let parent_span_id = raw.parent_span_id.filter(|s| !s.is_empty());
+                let events = raw
+                    .events
+                    .into_iter()
+                    .map(|e| {
+                        let ev_attrs = otlp_attributes_to_map(e.attributes);
+                        let name = ev_attrs
+                            .get("name")
+                            .and_then(attribute_value_to_string)
+                            .or_else(|| {
+                                ev_attrs
+                                    .get("event")
+                                    .and_then(attribute_value_to_string)
+                            })
+                            .unwrap_or_else(|| e.name.clone())
+                            .to_owned();
+                        SpanEvent { name, timestamp: start_time, attributes: ev_attrs }
+                    })
+                    .collect();
+
+                let span = Span {
+                    trace_id: raw.trace_id,
+                    span_id: raw.span_id,
+                    parent_span_id,
+                    operation_name: raw.name,
+                    start_time,
+                    end_time,
+                    attributes,
+                    events,
+                };
+
+                store.insert_spans(correlation_id, vec![span]);
+            }
+        }
+    }
+}
+
+fn group_by_attribute(spans: Vec<Span>, attribute: &str) -> HashMap<String, Vec<Span>> {
+    let mut grouped: HashMap<String, Vec<Span>> = HashMap::new();
+    for span in spans {
+        let Some(key) = attribute_group_key(&span.attributes, attribute) else {
+            continue;
+        };
+        grouped.entry(key).or_default().push(span);
+    }
+    grouped
+}
+
+fn otlp_attributes_to_map(attrs: Vec<OtlpAttribute>) -> HashMap<String, Value> {
+    attrs
+        .into_iter()
+        .map(|a| (a.key, otlp_value_to_json(a.value)))
+        .collect()
+}
+
+fn otlp_value_to_json(v: OtlpAnyValue) -> Value {
+    match v {
+        OtlpAnyValue::String { string_value } => Value::String(string_value),
+        OtlpAnyValue::Bool { bool_value } => Value::Bool(bool_value),
+        OtlpAnyValue::Int { int_value } => int_value
+            .parse::<i64>()
+            .ok()
+            .map(|n| Value::Number(n.into()))
+            .unwrap_or(Value::Null),
+        OtlpAnyValue::Double { double_value } => serde_json::Number::from_f64(double_value)
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
+        OtlpAnyValue::Unknown => Value::Null,
+    }
+}
+
+fn parse_unix_nanos(v: &Value) -> Result<DateTime<Utc>, ()> {
+    let nanos: i64 = if let Some(n) = v.as_i64() {
+        n
+    } else if let Some(s) = v.as_str() {
+        s.parse().map_err(|_| ())?
+    } else {
+        return Err(());
+    };
+    Ok(DateTime::from_timestamp_nanos(nanos))
+}
+
+// ---------------------------------------------------------------------------
+// OTLP/HTTP JSON deserialization types
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct OtlpTracesPayload {
+    #[serde(rename = "resourceSpans", default)]
+    resource_spans: Vec<OtlpResourceSpan>,
+}
+
+#[derive(Deserialize)]
+struct OtlpResourceSpan {
+    #[serde(rename = "scopeSpans", default)]
+    scope_spans: Vec<OtlpScopeSpan>,
+}
+
+#[derive(Deserialize)]
+struct OtlpScopeSpan {
+    #[serde(default)]
+    spans: Vec<OtlpSpan>,
+}
+
+#[derive(Deserialize)]
+struct OtlpSpan {
+    #[serde(rename = "traceId")]
+    trace_id: String,
+    #[serde(rename = "spanId")]
+    span_id: String,
+    #[serde(rename = "parentSpanId", default)]
+    parent_span_id: Option<String>,
+    name: String,
+    #[serde(rename = "startTimeUnixNano")]
+    start_time_unix_nano: Value,
+    #[serde(rename = "endTimeUnixNano")]
+    end_time_unix_nano: Value,
+    #[serde(default)]
+    attributes: Vec<OtlpAttribute>,
+    #[serde(default)]
+    events: Vec<OtlpSpanEvent>,
+}
+
+#[derive(Deserialize)]
+struct OtlpSpanEvent {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    attributes: Vec<OtlpAttribute>,
+}
+
+#[derive(Deserialize)]
+struct OtlpAttribute {
+    key: String,
+    value: OtlpAnyValue,
+}
+
+/// OTLP AnyValue — only the scalar kinds evalkit cares about.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum OtlpAnyValue {
+    String {
+        #[serde(rename = "stringValue")]
+        string_value: String,
+    },
+    Bool {
+        #[serde(rename = "boolValue")]
+        bool_value: bool,
+    },
+    Int {
+        // int64 is encoded as a decimal string in OTLP JSON to avoid precision loss
+        #[serde(rename = "intValue")]
+        int_value: String,
+    },
+    Double {
+        #[serde(rename = "doubleValue")]
+        double_value: f64,
+    },
+    Unknown,
 }
