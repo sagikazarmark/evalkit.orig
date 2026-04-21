@@ -4,6 +4,7 @@ use crate::{
     TrialResult,
 };
 use chrono::Utc;
+use futures::{FutureExt, StreamExt, stream};
 #[cfg(feature = "otel")]
 use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
@@ -11,6 +12,7 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::future::Future;
 use std::marker::PhantomData;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -88,7 +90,7 @@ pub struct Run<I, O, R = ()> {
     definitions: Vec<ScoreDefinition>,
     executor: Box<dyn RunExecutor<I, O, R>>,
     trial_count: usize,
-    _concurrency: usize,
+    concurrency: usize,
     sample_timeout: Option<Duration>,
     acquisition_mode: &'static str,
 }
@@ -103,11 +105,12 @@ impl<I, O, R> Run<I, O, R> {
     pub async fn execute(&self) -> Result<RunResult, RunError> {
         let started_at = Utc::now();
         let started = Instant::now();
-        let mut samples = Vec::with_capacity(self.dataset.samples.len());
 
-        for sample in &self.dataset.samples {
-            samples.push(self.execute_sample(sample).await);
-        }
+        let samples = stream::iter(self.dataset.samples.iter())
+            .map(|sample| self.execute_sample(sample))
+            .buffered(self.concurrency)
+            .collect::<Vec<_>>()
+            .await;
 
         let completed_at = Utc::now();
         let duration = started.elapsed();
@@ -149,17 +152,28 @@ impl<I, O, R> Run<I, O, R> {
 
     async fn execute_trial(&self, sample: &Sample<I, R>, trial_index: usize) -> TrialResult {
         let started = Instant::now();
-        let scores = match self.acquire_output(sample).await {
-            Ok(output) => {
+
+        let scores = match AssertUnwindSafe(self.acquire_output(sample))
+            .catch_unwind()
+            .await
+        {
+            Ok(Ok(output)) => {
                 let ctx = ScorerContext {
                     input: &sample.input,
                     output: &output,
                     reference: sample.reference.as_ref(),
                 };
 
-                flatten_scores(self.executor.execute(&ctx).await)
+                match AssertUnwindSafe(self.executor.execute(&ctx))
+                    .catch_unwind()
+                    .await
+                {
+                    Ok(scores) => flatten_scores(scores),
+                    Err(_) => scorer_panic_scores(&self.definitions),
+                }
             }
-            Err(err) => acquisition_failure_scores(&self.definitions, err),
+            Ok(Err(err)) => acquisition_failure_scores(&self.definitions, err),
+            Err(_) => acquisition_failure_scores(&self.definitions, AcquisitionError::Panicked),
         };
 
         TrialResult {
@@ -487,7 +501,7 @@ impl<I: 'static, O: 'static, R: 'static> RunBuilderWithTargets<I, O, R, O, R, Un
                 targets: self.targets,
             }),
             trial_count: self.trial_count,
-            _concurrency: self.concurrency,
+            concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
             acquisition_mode: self.acquisition_mode,
         })
@@ -512,7 +526,7 @@ impl<I: 'static, O: 'static, R: 'static, O2: 'static>
                 targets: self.targets,
             }),
             trial_count: self.trial_count,
-            _concurrency: self.concurrency,
+            concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
             acquisition_mode: self.acquisition_mode,
         })
@@ -537,7 +551,7 @@ impl<I: 'static, O: 'static, R: 'static, R2: 'static>
                 targets: self.targets,
             }),
             trial_count: self.trial_count,
-            _concurrency: self.concurrency,
+            concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
             acquisition_mode: self.acquisition_mode,
         })
@@ -566,7 +580,7 @@ impl<I: 'static, O: 'static, R: 'static, O2: 'static, R2: 'static>
                 targets: self.targets,
             }),
             trial_count: self.trial_count,
-            _concurrency: self.concurrency,
+            concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
             acquisition_mode: self.acquisition_mode,
         })
@@ -766,6 +780,20 @@ fn flatten_scores(results: TrialScores) -> HashMap<String, Result<Score, ScorerE
         .collect()
 }
 
+fn scorer_panic_scores(
+    definitions: &[ScoreDefinition],
+) -> HashMap<String, Result<Score, ScorerError>> {
+    definitions
+        .iter()
+        .map(|definition| {
+            (
+                definition.name.clone(),
+                Err(ScorerError(Box::new(ScorerPanicError))),
+            )
+        })
+        .collect()
+}
+
 fn acquisition_failure_scores(
     definitions: &[ScoreDefinition],
     err: AcquisitionError,
@@ -827,6 +855,17 @@ fn validate_score(score: Score) -> Result<Score, ScorerError> {
 fn invalid_score_error(message: &'static str) -> ScorerError {
     ScorerError(Box::new(InvalidScoreError(message)))
 }
+
+#[derive(Debug)]
+struct ScorerPanicError;
+
+impl Display for ScorerPanicError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("scorer panicked")
+    }
+}
+
+impl Error for ScorerPanicError {}
 
 #[derive(Debug)]
 struct InvalidScoreError(&'static str);

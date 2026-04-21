@@ -12,6 +12,7 @@ pub enum AcquisitionError {
     },
     BackendUnavailable(Box<dyn Error + Send + Sync>),
     Timeout(Duration),
+    Panicked,
 }
 
 impl Display for AcquisitionError {
@@ -27,6 +28,7 @@ impl Display for AcquisitionError {
             ),
             Self::BackendUnavailable(err) => write!(f, "trace backend unavailable: {err}"),
             Self::Timeout(duration) => write!(f, "acquisition timed out after {duration:?}"),
+            Self::Panicked => write!(f, "acquisition panicked"),
         }
     }
 }
@@ -35,7 +37,7 @@ impl Error for AcquisitionError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::ExecutionFailed(err) | Self::BackendUnavailable(err) => Some(err.as_ref()),
-            Self::TraceNotFound { .. } | Self::Timeout(_) => None,
+            Self::TraceNotFound { .. } | Self::Timeout(_) | Self::Panicked => None,
         }
     }
 }

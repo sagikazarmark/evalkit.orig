@@ -237,11 +237,13 @@ async fn build_validates_duplicates_and_execute_validates_scores_and_timeouts() 
     let duplicate_a = Sample::builder(String::from("prompt-a"))
         .id("duplicate")
         .reference(String::from("a"))
-        .build();
+        .build()
+        .unwrap();
     let duplicate_b = Sample::builder(String::from("prompt-b"))
         .id("duplicate")
         .reference(String::from("b"))
-        .build();
+        .build()
+        .unwrap();
 
     let duplicate_sample_error = match Run::builder()
         .dataset(vec![duplicate_a, duplicate_b])

@@ -137,7 +137,7 @@ fn run_result_stats_compute_numeric_and_metric_aggregates_with_t_confidence_inte
     let stats = run.stats();
 
     assert_eq!(stats.total_samples, 2);
-    assert_eq!(stats.total_trials, 2);
+    assert_eq!(stats.trials_per_sample, 2);
     assert_eq!(stats.total_errors, 0);
 
     match stats.scorer_stats.get("accuracy").expect("accuracy stats") {
@@ -326,7 +326,7 @@ fn run_result_stats_handle_single_trial_without_special_casing() {
     let stats = run.stats_with(0.9);
 
     assert_eq!(stats.total_samples, 1);
-    assert_eq!(stats.total_trials, 1);
+    assert_eq!(stats.trials_per_sample, 1);
     assert_eq!(stats.total_errors, 0);
 
     match stats

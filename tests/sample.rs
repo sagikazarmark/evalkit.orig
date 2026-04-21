@@ -26,7 +26,8 @@ fn sample_builder_supports_explicit_id_optional_reference_and_metadata() {
     let sample = Sample::<_, ()>::builder("prompt".to_string())
         .id("sample-42")
         .metadata("difficulty", json!("easy"))
-        .build();
+        .build()
+        .unwrap();
 
     assert_eq!(sample.id, "sample-42");
     assert_eq!(sample.input, "prompt");
@@ -38,7 +39,8 @@ fn sample_builder_supports_explicit_id_optional_reference_and_metadata() {
 fn sample_builder_generates_id_when_reference_is_present() {
     let built = Sample::builder("hello".to_string())
         .reference("world".to_string())
-        .build();
+        .build()
+        .unwrap();
     let direct = Sample::new("hello".to_string(), "world".to_string());
 
     assert_eq!(built.id, direct.id);

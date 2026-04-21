@@ -171,7 +171,8 @@ fn compare_reports_direction_aware_numeric_and_metric_sample_deltas() {
         .expect("sample-a comparison should exist");
     assert_eq!(accuracy_sample_a.sample_id, "sample-a");
     assert_close(accuracy_sample_a.delta, 0.20);
-    assert_eq!(accuracy_sample_a.direction, Change::Improved);
+    // aggregate test is non-significant with only 2 samples per group
+    assert_eq!(accuracy_sample_a.direction, Change::Insignificant);
 
     let accuracy_sample_b = accuracy
         .sample_comparisons
@@ -179,7 +180,7 @@ fn compare_reports_direction_aware_numeric_and_metric_sample_deltas() {
         .expect("sample-b comparison should exist");
     assert_eq!(accuracy_sample_b.sample_id, "sample-b");
     assert_close(accuracy_sample_b.delta, -0.10);
-    assert_eq!(accuracy_sample_b.direction, Change::Regressed);
+    assert_eq!(accuracy_sample_b.direction, Change::Insignificant);
 
     let latency = comparison
         .shared_scorers
@@ -192,7 +193,7 @@ fn compare_reports_direction_aware_numeric_and_metric_sample_deltas() {
         .expect("sample-a latency comparison should exist");
     assert_eq!(latency_sample_a.sample_id, "sample-a");
     assert_close(latency_sample_a.delta, -20.0);
-    assert_eq!(latency_sample_a.direction, Change::Improved);
+    assert_eq!(latency_sample_a.direction, Change::Insignificant);
 
     let latency_sample_b = latency
         .sample_comparisons
@@ -200,7 +201,7 @@ fn compare_reports_direction_aware_numeric_and_metric_sample_deltas() {
         .expect("sample-b latency comparison should exist");
     assert_eq!(latency_sample_b.sample_id, "sample-b");
     assert_close(latency_sample_b.delta, 10.0);
-    assert_eq!(latency_sample_b.direction, Change::Regressed);
+    assert_eq!(latency_sample_b.direction, Change::Insignificant);
 }
 
 #[test]
@@ -242,7 +243,7 @@ fn compare_uses_welch_t_test_and_marks_non_significant_deltas() {
         .expect("sample comparison should exist");
     assert_eq!(sample_comparison.sample_id, "sample-a");
     assert_close(sample_comparison.delta, 0.05);
-    assert_eq!(sample_comparison.direction, Change::Improved);
+    assert_eq!(sample_comparison.direction, Change::Insignificant);
 }
 
 #[test]
@@ -292,6 +293,67 @@ fn compare_applies_the_configured_confidence_level_to_significance() {
     assert_close(relaxed.confidence_level, 0.80);
     assert_eq!(strict_accuracy.significant, Some(p_value <= 0.05));
     assert_eq!(relaxed_accuracy.significant, Some(p_value <= 0.20));
+}
+
+#[test]
+fn compare_reports_improved_and_regressed_when_aggregate_is_significant() {
+    // Many tightly-clustered trials produce a statistically significant result,
+    // which lets per-sample direction labels reach Improved/Regressed.
+    let baseline = RunResult {
+        metadata: metadata("baseline", vec![ScoreDefinition::maximize("accuracy")], 10),
+        samples: vec![
+            sample(
+                "sample-a",
+                (0..10)
+                    .map(|i| trial(vec![("accuracy", Score::Numeric(0.40 + i as f64 * 0.001))], i))
+                    .collect(),
+            ),
+            sample(
+                "sample-b",
+                (0..10)
+                    .map(|i| trial(vec![("accuracy", Score::Numeric(0.42 + i as f64 * 0.001))], i))
+                    .collect(),
+            ),
+        ],
+    };
+
+    let candidate = RunResult {
+        metadata: metadata("candidate", vec![ScoreDefinition::maximize("accuracy")], 10),
+        samples: vec![
+            sample(
+                "sample-a",
+                (0..10)
+                    .map(|i| trial(vec![("accuracy", Score::Numeric(0.80 + i as f64 * 0.001))], i))
+                    .collect(),
+            ),
+            sample(
+                "sample-b",
+                (0..10)
+                    .map(|i| trial(vec![("accuracy", Score::Numeric(0.82 + i as f64 * 0.001))], i))
+                    .collect(),
+            ),
+        ],
+    };
+
+    let comparison = compare(&baseline, &candidate, CompareConfig::default());
+    let accuracy = comparison
+        .shared_scorers
+        .get("accuracy")
+        .expect("accuracy comparison");
+
+    assert_eq!(accuracy.significant, Some(true));
+
+    let sample_a = accuracy
+        .sample_comparisons
+        .get("sample-a")
+        .expect("sample-a comparison");
+    assert_eq!(sample_a.direction, Change::Improved);
+
+    let sample_b = accuracy
+        .sample_comparisons
+        .get("sample-b")
+        .expect("sample-b comparison");
+    assert_eq!(sample_b.direction, Change::Improved);
 }
 
 #[test]
