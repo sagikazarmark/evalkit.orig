@@ -5,6 +5,12 @@ pub struct ScorerContext<'a, I, O, R = ()> {
     pub reference: Option<&'a R>,
 }
 
+impl<'a, I, O, R> ScorerContext<'a, I, O, R> {
+    pub fn new(input: &'a I, output: &'a O, reference: Option<&'a R>) -> Self {
+        Self { input, output, reference }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ScorerContext;

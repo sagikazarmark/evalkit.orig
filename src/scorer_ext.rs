@@ -3,6 +3,7 @@ use futures::join;
 use crate::{Score, ScoreDefinition, Scorer, ScorerContext, ScorerError};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
+use std::marker::PhantomData;
 
 /// Extension methods for composing scorers into new scorers.
 ///
@@ -176,6 +177,50 @@ where
                 scorer_name: self.gate.definition().name,
             }))),
         }
+    }
+
+    fn definition(&self) -> ScoreDefinition {
+        self.definition.clone()
+    }
+}
+
+// --- IgnoreReferenceScorer -----------------------------------------------
+
+/// Wraps a `Scorer<I, O>` so it can be used as a `Scorer<I, O, R>` for any R.
+///
+/// Useful when mixing reference-free scorers (like [`crate::scorers::regex`] or
+/// [`crate::scorers::json_schema`]) alongside reference-aware scorers
+/// (like [`crate::scorers::exact_match`]) in the same run.
+pub struct IgnoreReferenceScorer<I, O, R, S> {
+    inner: S,
+    definition: ScoreDefinition,
+    _marker: PhantomData<fn(I, O, R)>,
+}
+
+/// Lifts a `Scorer<I, O>` into `Scorer<I, O, R>` for any `R` by discarding the reference.
+pub fn ignore_reference<I, O, R, S>(scorer: S) -> IgnoreReferenceScorer<I, O, R, S>
+where
+    S: Scorer<I, O>,
+{
+    let definition = scorer.definition();
+    IgnoreReferenceScorer {
+        inner: scorer,
+        definition,
+        _marker: PhantomData,
+    }
+}
+
+impl<I, O, R, S> Scorer<I, O, R> for IgnoreReferenceScorer<I, O, R, S>
+where
+    S: Scorer<I, O>,
+{
+    async fn score(&self, ctx: &ScorerContext<'_, I, O, R>) -> Result<Score, ScorerError> {
+        let inner_ctx = ScorerContext {
+            input: ctx.input,
+            output: ctx.output,
+            reference: None,
+        };
+        self.inner.score(&inner_ctx).await
     }
 
     fn definition(&self) -> ScoreDefinition {
@@ -449,5 +494,32 @@ mod tests {
         let def = scorer.definition();
         assert_eq!(def.name, "format_check THEN quality");
         assert_eq!(def.direction, Some(Direction::Maximize));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ignore_reference_passes_score_through() {
+        let base = ConstScorer { score: Score::Binary(true), name: "check" };
+        let wrapped = super::ignore_reference::<(), (), String, _>(base);
+        // reference is Some(&"ref"), but the inner scorer (R=()) should not see it
+        let reference = String::from("ignored");
+        let ctx = ScorerContext { input: &(), output: &(), reference: Some(&reference) };
+        let score = wrapped.score(&ctx).await.unwrap();
+        assert_eq!(score, Score::Binary(true));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ignore_reference_works_without_reference() {
+        let base = ConstScorer { score: Score::Numeric(0.75), name: "quality" };
+        let wrapped = super::ignore_reference::<(), (), String, _>(base);
+        let ctx = ScorerContext { input: &(), output: &(), reference: None };
+        let score = wrapped.score(&ctx).await.unwrap();
+        assert_eq!(score, Score::Numeric(0.75));
+    }
+
+    #[test]
+    fn ignore_reference_inherits_inner_definition() {
+        let base = ConstScorer { score: Score::Binary(true), name: "regex" };
+        let wrapped = super::ignore_reference::<(), (), String, _>(base);
+        assert_eq!(wrapped.definition().name, "regex");
     }
 }

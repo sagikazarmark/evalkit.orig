@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "evalkit-cli"]
+resolver = "2"
+
 [package]
 name = "evalkit"
 version = "0.1.0"
