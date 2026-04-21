@@ -5,6 +5,7 @@ mod comparison;
 mod dataset;
 mod jsonl;
 mod mapper;
+mod math;
 #[cfg(feature = "otel")]
 mod otel;
 mod run;
@@ -30,7 +31,7 @@ pub use mapper::{MapError, Mapper};
 pub use otel::{JaegerBackend, Observe, Span, SpanEvent, TraceBackend, TraceBackendError};
 pub use run::{Run, RunBuildError, RunError};
 pub use run_result::{RunMetadata, RunResult, SampleResult, TrialResult};
-pub use sample::{Sample, SampleBuilder};
+pub use sample::{Sample, SampleBuildError, SampleBuilder};
 pub use score::Score;
 pub use score_definition::{Direction, ScoreDefinition};
 pub use scorer::Scorer;
@@ -41,3 +42,17 @@ pub use scorer_set::ScorerSet;
 pub use scorers::{LlmJudgeConfig, LlmJudgeScoreExtractor, llm_judge};
 pub use scorers::{contains, exact_match, json_schema, regex};
 pub use stats::{RunStats, ScorerStats};
+
+pub mod prelude {
+    pub use crate::{
+        Acquisition, AcquisitionError, Change, CompareConfig, Comparison, Dataset, Direction,
+        MapError, Mapper, Run, RunBuildError, RunError, RunMetadata, RunResult, RunStats, Sample,
+        SampleBuildError, SampleBuilder, SampleComparison, Score, ScoreDefinition, ScorerComparison,
+        ScorerContext, ScorerError, ScorerSet, ScorerStats, compare, read_jsonl, write_jsonl,
+    };
+    pub use crate::scorers::{contains, exact_match, json_schema, regex};
+    #[cfg(feature = "llm-judge")]
+    pub use crate::{LlmJudgeConfig, LlmJudgeScoreExtractor, llm_judge};
+    #[cfg(feature = "otel")]
+    pub use crate::{JaegerBackend, Observe, Span, SpanEvent, TraceBackend, TraceBackendError};
+}

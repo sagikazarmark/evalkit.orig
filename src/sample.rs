@@ -1,7 +1,23 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::hash::{Hash, Hasher};
 
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SampleBuildError {
+    EmptyId,
+}
+
+impl fmt::Display for SampleBuildError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyId => write!(f, "sample id must not be empty"),
+        }
+    }
+}
+
+impl std::error::Error for SampleBuildError {}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Sample<I, R = ()> {
@@ -61,21 +77,19 @@ impl<I, R> SampleBuilder<I, R> {
 }
 
 impl<I: Hash, R: Hash> SampleBuilder<I, R> {
-    pub fn build(self) -> Sample<I, R> {
+    pub fn build(self) -> Result<Sample<I, R>, SampleBuildError> {
         let id = match self.id {
-            Some(id) => {
-                assert!(!id.is_empty(), "sample id must not be empty");
-                id
-            }
+            Some(id) if id.is_empty() => return Err(SampleBuildError::EmptyId),
+            Some(id) => id,
             None => sample_id(&self.input, self.reference.as_ref()),
         };
 
-        Sample {
+        Ok(Sample {
             id,
             input: self.input,
             reference: self.reference,
             metadata: self.metadata,
-        }
+        })
     }
 }
 

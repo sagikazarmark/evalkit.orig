@@ -10,7 +10,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
 use std::time::Duration;
-use tokio::{task_local, time::timeout};
+use tokio::{task_local, time::{sleep, timeout}};
 
 type FetchSpansFuture<'a> =
     Pin<Box<dyn Future<Output = Result<HashMap<String, Vec<Span>>, TraceBackendError>> + 'a>>;
@@ -321,6 +321,7 @@ impl TraceBackend for JaegerBackend {
         timeout: Duration,
     ) -> Result<HashMap<String, Vec<Span>>, TraceBackendError> {
         let mut attempts_remaining = self.retry_count;
+        let mut delay = Duration::from_millis(200);
 
         loop {
             match self
@@ -329,7 +330,10 @@ impl TraceBackend for JaegerBackend {
             {
                 Ok(grouped) => return Ok(grouped),
                 Err(err) if attempts_remaining > 0 => {
+                    let _ = &err;
                     attempts_remaining -= 1;
+                    sleep(delay).await;
+                    delay = (delay * 2).min(Duration::from_secs(5));
                 }
                 Err(err) => return Err(err),
             }
