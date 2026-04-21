@@ -15,6 +15,7 @@ mod score;
 mod score_definition;
 mod scorer;
 mod scorer_context;
+mod scorer_ext;
 mod scorer_error;
 mod scorer_set;
 pub mod scorers;
@@ -36,6 +37,7 @@ pub use score::Score;
 pub use score_definition::{Direction, ScoreDefinition};
 pub use scorer::Scorer;
 pub use scorer_context::ScorerContext;
+pub use scorer_ext::{AndScorer, ScorerExt, ThenScorer, WeightedScorer};
 pub use scorer_error::ScorerError;
 pub use scorer_set::ScorerSet;
 #[cfg(feature = "llm-judge")]
@@ -45,10 +47,11 @@ pub use stats::{RunStats, ScorerStats};
 
 pub mod prelude {
     pub use crate::{
-        Acquisition, AcquisitionError, Change, CompareConfig, Comparison, Dataset, Direction,
-        MapError, Mapper, Run, RunBuildError, RunError, RunMetadata, RunResult, RunStats, Sample,
-        SampleBuildError, SampleBuilder, SampleComparison, Score, ScoreDefinition, ScorerComparison,
-        ScorerContext, ScorerError, ScorerSet, ScorerStats, compare, read_jsonl, write_jsonl,
+        Acquisition, AcquisitionError, AndScorer, Change, CompareConfig, Comparison, Dataset,
+        Direction, MapError, Mapper, Run, RunBuildError, RunError, RunMetadata, RunResult, RunStats,
+        Sample, SampleBuildError, SampleBuilder, SampleComparison, Score, ScoreDefinition,
+        ScorerComparison, ScorerContext, ScorerError, ScorerExt, ScorerSet, ScorerStats,
+        ThenScorer, WeightedScorer, compare, read_jsonl, write_jsonl,
     };
     pub use crate::scorers::{contains, exact_match, json_schema, regex};
     #[cfg(feature = "llm-judge")]
