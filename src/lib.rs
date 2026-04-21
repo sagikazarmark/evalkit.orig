@@ -4,6 +4,8 @@ mod acquisition;
 mod comparison;
 mod dataset;
 mod jsonl;
+#[cfg(feature = "langfuse")]
+mod langfuse;
 mod mapper;
 mod math;
 #[cfg(feature = "otel")]
@@ -28,6 +30,8 @@ pub use comparison::{
 pub use dataset::Dataset;
 pub use jsonl::{read_jsonl, write_jsonl};
 pub use mapper::{MapError, Mapper};
+#[cfg(feature = "langfuse")]
+pub use langfuse::{LangfuseConfig, LangfuseExportError, export_run};
 #[cfg(feature = "otel")]
 pub use otel::{JaegerBackend, Observe, OtlpReceiver, Span, SpanEvent, TraceBackend, TraceBackendError};
 pub use run::{Run, RunBuildError, RunError};
@@ -56,6 +60,8 @@ pub mod prelude {
     pub use crate::scorers::{contains, exact_match, json_schema, regex};
     #[cfg(feature = "llm-judge")]
     pub use crate::{LlmJudgeConfig, LlmJudgeScoreExtractor, llm_judge};
+    #[cfg(feature = "langfuse")]
+    pub use crate::{LangfuseConfig, LangfuseExportError, export_run};
     #[cfg(feature = "otel")]
     pub use crate::{JaegerBackend, Observe, OtlpReceiver, Span, SpanEvent, TraceBackend, TraceBackendError};
 }
