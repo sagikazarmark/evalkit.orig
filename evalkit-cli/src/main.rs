@@ -11,6 +11,8 @@ use regex::Regex;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as TokioBufReader};
+use tokio::process::Command as TokioCommand;
 
 use evalkit::{
     Acquisition, AcquisitionError, Dataset, Run, RunStats, Sample, Score, ScoreDefinition,
@@ -64,15 +66,39 @@ struct Config {
     threshold: HashMap<String, f64>,
 }
 
+/// Flat struct — either `url` (HTTP) or `command` (subprocess) must be set, not both.
 #[derive(Deserialize)]
 struct AcquisitionConfig {
-    url: String,
+    /// HTTP endpoint URL. Mutually exclusive with `command`.
+    url: Option<String>,
+    /// Subprocess command. Mutually exclusive with `url`.
+    /// A string is split on whitespace; an array is used as-is.
+    command: Option<CommandSpec>,
     #[serde(default = "default_input_field")]
     input_field: String,
     #[serde(default = "default_output_field")]
     output_field: String,
     #[serde(default = "default_timeout_secs")]
     timeout_secs: u64,
+}
+
+/// `command` can be a plain string (`"python3 model.py"`) or an array
+/// (`["python3", "model.py", "--flag"]`). Use the array form when arguments
+/// contain spaces.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum CommandSpec {
+    Str(String),
+    Vec(Vec<String>),
+}
+
+impl CommandSpec {
+    fn into_parts(self) -> Vec<String> {
+        match self {
+            Self::Str(s) => s.split_whitespace().map(str::to_owned).collect(),
+            Self::Vec(v) => v,
+        }
+    }
 }
 
 fn default_input_field() -> String {
@@ -148,14 +174,108 @@ impl Acquisition<String, String> for HttpAcquisition {
             .await
             .map_err(|e| AcquisitionError::ExecutionFailed(Box::new(e)))?;
 
-        match payload.get(&self.output_field).and_then(Value::as_str) {
-            Some(s) => Ok(s.to_owned()),
-            None => Err(AcquisitionError::ExecutionFailed(Box::new(
-                MissingOutputField(self.output_field.clone()),
-            ))),
+        extract_string_field(&payload, &self.output_field)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Subprocess acquisition
+//
+// Protocol: one JSON line written to stdin, one JSON line read from stdout.
+//
+//   stdin:  {"<input_field>": "<input text>"}\n
+//   stdout: {"<output_field>": "<output text>"}\n
+// ---------------------------------------------------------------------------
+
+struct SubprocessAcquisition {
+    program: String,
+    args: Vec<String>,
+    input_field: String,
+    output_field: String,
+    timeout: Duration,
+}
+
+impl Acquisition<String, String> for SubprocessAcquisition {
+    async fn acquire(&self, input: &String) -> Result<String, AcquisitionError> {
+        tokio::time::timeout(self.timeout, self.run(input))
+            .await
+            .map_err(|_| AcquisitionError::Timeout(self.timeout))?
+    }
+}
+
+impl SubprocessAcquisition {
+    async fn run(&self, input: &String) -> Result<String, AcquisitionError> {
+        let input_json = serde_json::to_string(&json!({ &self.input_field: input }))
+            .map_err(|e| AcquisitionError::ExecutionFailed(Box::new(e)))?;
+
+        let mut child = TokioCommand::new(&self.program)
+            .args(&self.args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| AcquisitionError::ExecutionFailed(Box::new(e)))?;
+
+        // Write input JSON line to stdin, then close it so the child sees EOF.
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(input_json.as_bytes())
+                .await
+                .map_err(|e| AcquisitionError::ExecutionFailed(Box::new(e)))?;
+            stdin
+                .write_all(b"\n")
+                .await
+                .map_err(|e| AcquisitionError::ExecutionFailed(Box::new(e)))?;
+        }
+
+        // Read the first line of stdout.
+        let stdout = child.stdout.take().expect("stdout was piped");
+        let mut reader = TokioBufReader::new(stdout);
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .await
+            .map_err(|e| AcquisitionError::ExecutionFailed(Box::new(e)))?;
+
+        // Reap the child process (ignore exit status — a non-zero exit with
+        // valid JSON output is still a valid response).
+        let _ = child.wait().await;
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Err(AcquisitionError::ExecutionFailed(Box::new(
+                EmptyProcessOutput,
+            )));
+        }
+
+        let payload: Value = serde_json::from_str(trimmed)
+            .map_err(|e| AcquisitionError::ExecutionFailed(Box::new(e)))?;
+
+        extract_string_field(&payload, &self.output_field)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unified acquisition enum
+// ---------------------------------------------------------------------------
+
+enum CliAcquisition {
+    Http(HttpAcquisition),
+    Subprocess(SubprocessAcquisition),
+}
+
+impl Acquisition<String, String> for CliAcquisition {
+    async fn acquire(&self, input: &String) -> Result<String, AcquisitionError> {
+        match self {
+            Self::Http(a) => a.acquire(input).await,
+            Self::Subprocess(a) => a.acquire(input).await,
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Error types
+// ---------------------------------------------------------------------------
 
 #[derive(Debug)]
 struct MissingOutputField(String);
@@ -167,6 +287,36 @@ impl fmt::Display for MissingOutputField {
 }
 
 impl Error for MissingOutputField {}
+
+#[derive(Debug)]
+struct EmptyProcessOutput;
+
+impl fmt::Display for EmptyProcessOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("subprocess produced no output on stdout")
+    }
+}
+
+impl Error for EmptyProcessOutput {}
+
+#[derive(Debug)]
+enum CliError {
+    Config(String),
+    Dataset(String),
+    Run(String),
+}
+
+impl fmt::Display for CliError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Config(msg) => write!(f, "config error: {msg}"),
+            Self::Dataset(msg) => write!(f, "dataset error: {msg}"),
+            Self::Run(msg) => write!(f, "run error: {msg}"),
+        }
+    }
+}
+
+impl Error for CliError {}
 
 // ---------------------------------------------------------------------------
 // CliScorer — unified enum implementing Scorer<String, String, String>
@@ -206,29 +356,6 @@ impl Scorer<String, String, String> for CliScorer {
 }
 
 // ---------------------------------------------------------------------------
-// CLI error type
-// ---------------------------------------------------------------------------
-
-#[derive(Debug)]
-enum CliError {
-    Config(String),
-    Dataset(String),
-    Run(String),
-}
-
-impl fmt::Display for CliError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Config(msg) => write!(f, "config error: {msg}"),
-            Self::Dataset(msg) => write!(f, "dataset error: {msg}"),
-            Self::Run(msg) => write!(f, "run error: {msg}"),
-        }
-    }
-}
-
-impl Error for CliError {}
-
-// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -250,9 +377,8 @@ async fn main() {
 
 async fn run_command(args: RunArgs) -> Result<bool, CliError> {
     // Read and parse config
-    let config_str = fs::read_to_string(&args.config).map_err(|e| {
-        CliError::Config(format!("cannot read {}: {e}", args.config.display()))
-    })?;
+    let config_str = fs::read_to_string(&args.config)
+        .map_err(|e| CliError::Config(format!("cannot read {}: {e}", args.config.display())))?;
     let config: Config = toml::from_str(&config_str)
         .map_err(|e| CliError::Config(format!("invalid TOML: {e}")))?;
 
@@ -265,18 +391,8 @@ async fn run_command(args: RunArgs) -> Result<bool, CliError> {
     // Load dataset
     let dataset = load_dataset(&args.dataset)?;
 
-    // Build HTTP client and acquisition
-    let client = Client::builder()
-        .timeout(Duration::from_secs(config.acquisition.timeout_secs))
-        .build()
-        .map_err(|e| CliError::Config(format!("cannot build HTTP client: {e}")))?;
-
-    let acquisition = HttpAcquisition {
-        client,
-        url: config.acquisition.url.clone(),
-        input_field: config.acquisition.input_field.clone(),
-        output_field: config.acquisition.output_field.clone(),
-    };
+    // Build acquisition
+    let acquisition = build_acquisition(config.acquisition)?;
 
     // Build scorers and scorer set
     let cli_scorers = build_cli_scorers(&config.scorers)?;
@@ -333,14 +449,10 @@ async fn run_command(args: RunArgs) -> Result<bool, CliError> {
     for (scorer_name, &threshold) in &config.threshold {
         match primary_value(&stats, scorer_name) {
             Some(actual) if actual >= threshold => {
-                eprintln!(
-                    "threshold passed: {scorer_name} = {actual:.4} >= {threshold:.4}"
-                );
+                eprintln!("threshold passed: {scorer_name} = {actual:.4} >= {threshold:.4}");
             }
             Some(actual) => {
-                eprintln!(
-                    "threshold not met: {scorer_name} = {actual:.4} < {threshold:.4}"
-                );
+                eprintln!("threshold not met: {scorer_name} = {actual:.4} < {threshold:.4}");
                 all_passed = false;
             }
             None => {
@@ -358,21 +470,58 @@ async fn run_command(args: RunArgs) -> Result<bool, CliError> {
 // Helpers
 // ---------------------------------------------------------------------------
 
+fn build_acquisition(cfg: AcquisitionConfig) -> Result<CliAcquisition, CliError> {
+    match (cfg.url, cfg.command) {
+        (Some(url), None) => {
+            let client = Client::builder()
+                .timeout(Duration::from_secs(cfg.timeout_secs))
+                .build()
+                .map_err(|e| CliError::Config(format!("cannot build HTTP client: {e}")))?;
+            Ok(CliAcquisition::Http(HttpAcquisition {
+                client,
+                url,
+                input_field: cfg.input_field,
+                output_field: cfg.output_field,
+            }))
+        }
+        (None, Some(cmd)) => {
+            let parts = cmd.into_parts();
+            if parts.is_empty() {
+                return Err(CliError::Config(
+                    "[acquisition] command must not be empty".into(),
+                ));
+            }
+            let (program, args) = (parts[0].clone(), parts[1..].to_vec());
+            Ok(CliAcquisition::Subprocess(SubprocessAcquisition {
+                program,
+                args,
+                input_field: cfg.input_field,
+                output_field: cfg.output_field,
+                timeout: Duration::from_secs(cfg.timeout_secs),
+            }))
+        }
+        (Some(_), Some(_)) => Err(CliError::Config(
+            "[acquisition] specifies both `url` and `command`; choose one".into(),
+        )),
+        (None, None) => Err(CliError::Config(
+            "[acquisition] requires either `url` (HTTP) or `command` (subprocess)".into(),
+        )),
+    }
+}
+
 fn load_dataset(path: &PathBuf) -> Result<Dataset<String, String>, CliError> {
     let file = File::open(path)
         .map_err(|e| CliError::Dataset(format!("cannot open {}: {e}", path.display())))?;
     let mut samples = Vec::new();
 
     for (idx, line) in BufReader::new(file).lines().enumerate() {
-        let line = line.map_err(|e| {
-            CliError::Dataset(format!("read error at line {}: {e}", idx + 1))
-        })?;
+        let line = line
+            .map_err(|e| CliError::Dataset(format!("read error at line {}: {e}", idx + 1)))?;
         if line.trim().is_empty() {
             continue;
         }
-        let row: DatasetRow = serde_json::from_str(&line).map_err(|e| {
-            CliError::Dataset(format!("invalid JSON at line {}: {e}", idx + 1))
-        })?;
+        let row: DatasetRow = serde_json::from_str(&line)
+            .map_err(|e| CliError::Dataset(format!("invalid JSON at line {}: {e}", idx + 1)))?;
 
         let mut builder = Sample::<String, String>::builder(row.input);
         if let Some(id) = row.id {
@@ -423,9 +572,8 @@ fn build_cli_scorer(entry: &ScorerConfigEntry) -> Result<CliScorer, CliError> {
             let pattern = entry.pattern.as_deref().ok_or_else(|| {
                 CliError::Config("regex scorer requires a `pattern` field".into())
             })?;
-            let re = Regex::new(pattern).map_err(|e| {
-                CliError::Config(format!("invalid regex `{pattern}`: {e}"))
-            })?;
+            let re = Regex::new(pattern)
+                .map_err(|e| CliError::Config(format!("invalid regex `{pattern}`: {e}")))?;
             let name = entry.name.clone().unwrap_or_else(|| "regex".to_owned());
             Ok(CliScorer {
                 definition: ScoreDefinition::new(name),
@@ -457,5 +605,14 @@ fn primary_value(stats: &RunStats, scorer_name: &str) -> Option<f64> {
         ScorerStats::Binary { pass_rate, .. } => Some(*pass_rate),
         ScorerStats::Numeric { mean, .. } | ScorerStats::Metric { mean, .. } => Some(*mean),
         ScorerStats::Label { .. } => None,
+    }
+}
+
+fn extract_string_field(payload: &Value, field: &str) -> Result<String, AcquisitionError> {
+    match payload.get(field).and_then(Value::as_str) {
+        Some(s) => Ok(s.to_owned()),
+        None => Err(AcquisitionError::ExecutionFailed(Box::new(
+            MissingOutputField(field.to_owned()),
+        ))),
     }
 }
