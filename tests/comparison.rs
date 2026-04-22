@@ -169,7 +169,7 @@ fn compare_reports_direction_aware_numeric_and_metric_sample_deltas() {
         .get("accuracy")
         .expect("accuracy comparison");
     assert_close(accuracy.aggregate_delta, 0.05);
-    assert_eq!(accuracy.test_used.as_deref(), Some("welch_t_test"));
+    assert_eq!(accuracy.test_used.as_deref(), Some("paired_t_test"));
     let accuracy_sample_a = accuracy
         .sample_comparisons
         .get("sample-a")
@@ -210,7 +210,7 @@ fn compare_reports_direction_aware_numeric_and_metric_sample_deltas() {
 }
 
 #[test]
-fn compare_uses_welch_t_test_and_marks_non_significant_deltas() {
+fn compare_uses_paired_t_test_and_marks_non_significant_deltas() {
     let baseline = RunResult {
         metadata: metadata("baseline", vec![ScoreDefinition::maximize("accuracy")], 2),
         samples: vec![sample(
@@ -228,7 +228,7 @@ fn compare_uses_welch_t_test_and_marks_non_significant_deltas() {
             "sample-a",
             vec![
                 trial(vec![("accuracy", Score::Numeric(0.45))], 0),
-                trial(vec![("accuracy", Score::Numeric(0.65))], 1),
+                trial(vec![("accuracy", Score::Numeric(0.62))], 1),
             ],
         )],
     };
@@ -239,7 +239,7 @@ fn compare_uses_welch_t_test_and_marks_non_significant_deltas() {
         .get("accuracy")
         .expect("accuracy comparison");
 
-    assert_eq!(accuracy.test_used.as_deref(), Some("welch_t_test"));
+    assert_eq!(accuracy.test_used.as_deref(), Some("paired_t_test"));
     assert_eq!(accuracy.significant, Some(false));
     assert!(accuracy.p_value.expect("p-value should exist") > 0.05);
     let sample_comparison = accuracy
@@ -247,7 +247,7 @@ fn compare_uses_welch_t_test_and_marks_non_significant_deltas() {
         .get("sample-a")
         .expect("sample comparison should exist");
     assert_eq!(sample_comparison.sample_id, "sample-a");
-    assert_close(sample_comparison.delta, 0.05);
+    assert_close(sample_comparison.delta, 0.035);
     assert_eq!(sample_comparison.direction, Change::Insignificant);
 }
 

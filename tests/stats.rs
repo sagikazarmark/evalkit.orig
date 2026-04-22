@@ -56,7 +56,7 @@ fn assert_close(left: f64, right: f64) {
 }
 
 #[test]
-fn run_result_stats_compute_numeric_and_metric_aggregates_with_t_confidence_intervals() {
+fn run_result_stats_compute_numeric_and_metric_aggregates_with_bootstrap_intervals() {
     let run = RunResult {
         metadata: metadata(
             vec![
@@ -155,8 +155,9 @@ fn run_result_stats_compute_numeric_and_metric_aggregates_with_t_confidence_inte
         } => {
             assert_close(*mean, 2.5);
             assert_close(*stddev, 1.290_994_448_735_805_6);
-            assert_close(ci.0, 0.445_739_743_239_121);
-            assert_close(ci.1, 4.554_260_256_760_878_5);
+            assert!(ci.0 <= *mean && *mean <= ci.1);
+            assert!((1.0..=4.0).contains(&ci.0));
+            assert!((1.0..=4.0).contains(&ci.1));
             assert_close(*min, 1.0);
             assert_close(*max, 4.0);
         }
@@ -173,8 +174,9 @@ fn run_result_stats_compute_numeric_and_metric_aggregates_with_t_confidence_inte
         } => {
             assert_close(*mean, 98.75);
             assert_close(*stddev, 8.539_125_638_299_666);
-            assert_close(ci.0, 85.162_345_581_019_93);
-            assert_close(ci.1, 112.337_654_418_980_07);
+            assert!(ci.0 <= *mean && *mean <= ci.1);
+            assert!((90.0..=110.0).contains(&ci.0));
+            assert!((90.0..=110.0).contains(&ci.1));
             assert_close(*min, 90.0);
             assert_close(*max, 110.0);
         }

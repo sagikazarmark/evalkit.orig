@@ -377,7 +377,7 @@ fn significance_test(baseline: &ScoreBucket, candidate: &ScoreBucket) -> Option<
     match (baseline, candidate) {
         (ScoreBucket::Numeric(left), ScoreBucket::Numeric(right))
         | (ScoreBucket::Metric(left), ScoreBucket::Metric(right)) => {
-            welch_t_test_p_value(left, right)
+            numeric_p_value(left, right)
         }
         (ScoreBucket::Binary(left), ScoreBucket::Binary(right)) => {
             fisher_exact_test_p_value(left, right)
@@ -392,7 +392,7 @@ fn test_name(baseline: &ScoreBucket, candidate: &ScoreBucket) -> Option<String> 
         | (ScoreBucket::Metric(left), ScoreBucket::Metric(right))
             if left.len() >= 2 && right.len() >= 2 =>
         {
-            Some("welch_t_test".to_owned())
+            Some(numeric_test_name(left, right).to_owned())
         }
         (ScoreBucket::Binary(left), ScoreBucket::Binary(right))
             if !left.is_empty() && !right.is_empty() =>
@@ -460,6 +460,46 @@ fn sample_variance(values: &[f64]) -> f64 {
         })
         .sum::<f64>()
         / (values.len() - 1) as f64
+}
+
+fn numeric_p_value(baseline: &[f64], candidate: &[f64]) -> Option<f64> {
+    if baseline.len() == candidate.len() {
+        paired_t_test_p_value(baseline, candidate)
+    } else {
+        welch_t_test_p_value(baseline, candidate)
+    }
+}
+
+fn numeric_test_name<'a>(baseline: &'a [f64], candidate: &'a [f64]) -> &'a str {
+    if baseline.len() == candidate.len() {
+        "paired_t_test"
+    } else {
+        "welch_t_test"
+    }
+}
+
+fn paired_t_test_p_value(baseline: &[f64], candidate: &[f64]) -> Option<f64> {
+    if baseline.len() != candidate.len() || baseline.len() < 2 {
+        return None;
+    }
+
+    let deltas = baseline
+        .iter()
+        .zip(candidate.iter())
+        .map(|(left, right)| right - left)
+        .collect::<Vec<_>>();
+    let mean_delta = mean(&deltas);
+    let variance = sample_variance(&deltas);
+
+    if variance == 0.0 {
+        return Some(if mean_delta.abs() <= f64::EPSILON { 1.0 } else { 0.0 });
+    }
+
+    let standard_error = (variance / deltas.len() as f64).sqrt();
+    let t_statistic = mean_delta.abs() / standard_error;
+    let degrees_of_freedom = (deltas.len() - 1) as f64;
+
+    Some((2.0 * (1.0 - student_t_cdf(t_statistic, degrees_of_freedom))).clamp(0.0, 1.0))
 }
 
 fn welch_t_test_p_value(baseline: &[f64], candidate: &[f64]) -> Option<f64> {

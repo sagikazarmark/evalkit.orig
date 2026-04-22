@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::math::{mean, normalize_confidence_level, student_t_cdf};
+use crate::math::{mean, normalize_confidence_level};
 use crate::{RunResult, Score};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -372,11 +372,34 @@ fn numeric_confidence_interval(values: &[f64], confidence_level: f64) -> (f64, f
         return (mean, mean);
     }
 
-    let stddev = sample_stddev(values);
-    let critical_value = inverse_student_t(0.5 + confidence_level / 2.0, values.len() - 1);
-    let margin = critical_value * stddev / (values.len() as f64).sqrt();
+    bootstrap_mean_confidence_interval(values, confidence_level)
+}
 
-    (mean - margin, mean + margin)
+fn bootstrap_mean_confidence_interval(values: &[f64], confidence_level: f64) -> (f64, f64) {
+    const BOOTSTRAP_SAMPLES: usize = 4_096;
+
+    let lower_tail = (1.0 - confidence_level) / 2.0;
+    let upper_tail = 1.0 - lower_tail;
+    let mut rng = BootstrapRng::from_values(values);
+    let mut means = Vec::with_capacity(BOOTSTRAP_SAMPLES);
+
+    for _ in 0..BOOTSTRAP_SAMPLES {
+        let mut total = 0.0;
+
+        for _ in 0..values.len() {
+            let index = rng.next_index(values.len());
+            total += values[index];
+        }
+
+        means.push(total / values.len() as f64);
+    }
+
+    means.sort_by(f64::total_cmp);
+
+    let lower_index = ((BOOTSTRAP_SAMPLES - 1) as f64 * lower_tail).round() as usize;
+    let upper_index = ((BOOTSTRAP_SAMPLES - 1) as f64 * upper_tail).round() as usize;
+
+    (means[lower_index], means[upper_index])
 }
 
 fn wilson_confidence_interval(
@@ -393,35 +416,6 @@ fn wilson_confidence_interval(
         * ((proportion * (1.0 - proportion) / n) + (z * z / (4.0 * n * n))).sqrt();
 
     (center - margin, center + margin)
-}
-
-fn inverse_student_t(probability: f64, degrees_of_freedom: usize) -> f64 {
-    if probability == 0.5 {
-        return 0.0;
-    }
-
-    if probability < 0.5 {
-        return -inverse_student_t(1.0 - probability, degrees_of_freedom);
-    }
-
-    let degrees_of_freedom = degrees_of_freedom as f64;
-    let mut low = 0.0;
-    let mut high = inverse_standard_normal(probability).abs().max(1.0);
-
-    while student_t_cdf(high, degrees_of_freedom) < probability {
-        high *= 2.0;
-    }
-
-    for _ in 0..100 {
-        let midpoint = (low + high) / 2.0;
-        if student_t_cdf(midpoint, degrees_of_freedom) < probability {
-            low = midpoint;
-        } else {
-            high = midpoint;
-        }
-    }
-
-    (low + high) / 2.0
 }
 
 fn inverse_standard_normal(probability: f64) -> f64 {
@@ -482,4 +476,34 @@ fn inverse_standard_normal(probability: f64) -> f64 {
 
     (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r + A[5]) * q
         / (((((B[0] * r + B[1]) * r + B[2]) * r + B[3]) * r + B[4]) * r + 1.0)
+}
+
+struct BootstrapRng {
+    state: u64,
+}
+
+impl BootstrapRng {
+    fn from_values(values: &[f64]) -> Self {
+        let mut state = 0xcbf2_9ce4_8422_2325_u64;
+
+        for value in values {
+            for byte in value.to_bits().to_le_bytes() {
+                state ^= u64::from(byte);
+                state = state.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+
+        Self { state }
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.state ^= self.state << 13;
+        self.state ^= self.state >> 7;
+        self.state ^= self.state << 17;
+        self.state
+    }
+
+    fn next_index(&mut self, upper_bound: usize) -> usize {
+        (self.next_u64() % upper_bound as u64) as usize
+    }
 }
