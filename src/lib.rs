@@ -13,6 +13,7 @@ mod otel;
 mod run;
 mod run_result;
 mod sample;
+mod sample_shapes;
 pub mod schema;
 mod score;
 mod score_definition;
@@ -40,6 +41,9 @@ pub use otel::{
 pub use run::{Run, RunBuildError, RunError};
 pub use run_result::{RunMetadata, RunResult, SampleResult, TokenUsage, TrialResult};
 pub use sample::{Sample, SampleBuildError, SampleBuilder};
+pub use sample_shapes::{
+    ConversationSample, ConversationTurn, ToolCall, ToolResult, TrajectorySample, TrajectoryStep,
+};
 pub use schema::RUN_RESULT_SCHEMA_VERSION;
 pub use score::Score;
 pub use score_definition::{Direction, ScoreDefinition};
@@ -64,9 +68,10 @@ pub mod prelude {
         RUN_RESULT_SCHEMA_VERSION, Run, RunBuildError, RunError, RunMetadata, RunResult, RunStats,
         Sample, SampleBuildError, SampleBuilder, SampleComparison, Score, ScoreDefinition,
         ScorerComparison, ScorerContext, ScorerError, ScorerExt, ScorerSet, ScorerStats,
-        ThenScorer, TimeoutScorer, TokenUsage, WeightedScorer, compare, ignore_reference,
-        read_jsonl, write_jsonl,
+        ThenScorer, TimeoutScorer, TokenUsage, ToolCall, ToolResult, TrajectorySample,
+        TrajectoryStep, WeightedScorer, compare, ignore_reference, read_jsonl, write_jsonl,
     };
+    pub use crate::{ConversationSample, ConversationTurn};
     #[cfg(feature = "otel")]
     pub use crate::{
         JaegerBackend, Observe, OtlpReceiver, Span, SpanEvent, TraceBackend, TraceBackendError,

@@ -89,11 +89,8 @@ Already present:
 - The kernel already has an OTLP receiver behind the `otel` feature
 
 Gaps:
-- No published schema module or versioned JSON Schema document
-- No `docs/plugin-protocol.md`
 - No formal scorer plugin protocol or conformance suite
 - Current `llm_judge` uses ad hoc HTTP instead of `anyllm`
-- No `TrajectorySample`, `ConversationSample`, or shared `ToolCall` type
 - No OTel eval-result emitter
 
 ## Phase 2 - Streaming / Online Scoring
