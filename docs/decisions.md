@@ -2,6 +2,25 @@
 
 This file records Phase 0 decisions for the `evalkit` kernel. Each entry includes one rejected alternative so later changes have context.
 
+## 2026-04-22 - Build `evalkit-scorers-llm` on `anyllm::ChatProvider` plus `ExtractExt`
+
+Decision:
+Use `anyllm`'s provider-neutral `ChatProvider` trait as the integration seam for LLM-as-a-Judge scoring, and use the `extract` feature's `ExtractExt::extract(&ChatRequest)` path for structured score extraction.
+
+Confirmed API shape from `anyllm` 0.1.1:
+- `ChatProvider` is the core trait.
+- The one-shot call path is `provider.chat(&request).await?`.
+- Structured extraction lives behind the `extract` feature and is exposed as `provider.extract::<T>(&request).await?`.
+- `ChatRequest::new(model)` plus `.user(...)`, `.temperature(...)`, `.max_tokens(...)`, `.seed(...)`, and `.reasoning(...)` covers the portable request shape we need.
+
+Why:
+- This keeps `evalkit-scorers-llm` provider-neutral instead of re-introducing an OpenAI-compatible HTTP client surface.
+- `ExtractExt` uses anyllm's native structured-output mode when supported and falls back to a forced-tool strategy when needed, which satisfies the roadmap requirement to avoid freeform score parsing.
+- `DynChatProvider` gives the scorer crate a concrete, non-generic storage type while still accepting arbitrary providers at construction time.
+
+Rejected alternative:
+Rebuild the old judge path around direct HTTP requests and ad hoc JSON parsing. That would duplicate provider logic anyllm already centralizes and would violate the Phase 1 requirement that scores come from structured output rather than freeform text parsing.
+
 ## 2026-04-22 - Keep `Scorer<I, O, R = ()>` with optional references in context
 
 Decision:

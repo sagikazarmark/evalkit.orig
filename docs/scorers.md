@@ -130,7 +130,7 @@ Depends on an embedding provider abstraction (anyllm exposes embeddings for Open
 See [ROADMAP.md § LLM-judge scorers](./ROADMAP.md#llm-judge-scorers-using-anyllm) for the design.
 
 ### Generic rubric
-- [~] `llm_judge`         — port existing impl to anyllm + structured output
+- [~] `llm_judge`         — anyllm-backed primitive landed; wrappers and full metadata plumbing still remain
 - [ ] `g_eval`            — chain-of-thought rubric; auto-generate eval steps from criteria
 - [ ] `llm_classifier`    — N-class classification
 - [ ] `rubric_dag`        — DeepEval DAG-style multi-step rubric

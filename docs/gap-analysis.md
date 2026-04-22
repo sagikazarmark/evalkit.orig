@@ -9,7 +9,7 @@ Phase 0 is complete. The next work should move into Phase 1.
 Recommended build order:
 1. Freeze and publish the run-log schema as a documented Phase 1 artifact.
 2. Formalize the subprocess plugin protocol and ship reference shims.
-3. Replace the old in-kernel LLM judge approach with the `evalkit-scorers-llm` implementation planned for Phase 1.
+3. Finish the remaining `evalkit-scorers-llm` work on top of the newly landed anyllm-backed primitive.
 
 ## Current State Summary
 
@@ -54,7 +54,7 @@ Current state:
 - `evalkit-otel` now owns Jaeger, OTLP, and `Observe`
 
 Gap to roadmap:
-- The `evalkit-scorers-llm` crate is intentionally still a Phase 1 skeleton rather than the final anyllm-backed implementation
+- The `evalkit-scorers-llm` crate now contains the first anyllm-backed `LlmJudge` implementation, but the broader Phase 1 scorer catalog is still incomplete.
 
 ### 0(d) Kernel features
 
@@ -81,10 +81,14 @@ Already present:
 - JSONL read/write helpers exist
 - `evalkit-cli` already contains subprocess acquisition support
 - `evalkit-otel` already contains the OTLP receiver and the `Observe` acquisition path
+- `evalkit-scorers-llm` now ships a provider-neutral `LlmJudge` built on `anyllm::ChatProvider` plus structured extraction via `ExtractExt`
+- The new judge implementation includes stable prompt hashing, retries, timeout support, judge model pins, and reasoning capture for numeric/binary outputs
 
 Gaps:
 - No reference TypeScript plugin shim yet
-- `evalkit-scorers-llm` is still a skeleton and does not yet ship the anyllm-backed judge primitive
+- `g_eval` and `llm_classifier` are not built on top of the new `LlmJudge` yet
+- Judge token usage and cost are only attached inside structured-score metadata today; they are not yet threaded into `SampleResult`
+- Reasoning capture is currently limited to numeric and binary judges because `Score::Structured` requires a numeric primary score
 
 ## Phase 2 - Streaming / Online Scoring
 
@@ -131,8 +135,9 @@ Gaps:
 
 ## Highest-Leverage Next Slice
 
-The best next implementation slice is Phase 1(a) plus 1(b):
-- publish the run-log schema as a frozen, documented artifact
-- formalize the subprocess plugin protocol from the existing CLI/provider behavior
+The best next implementation slice is the rest of Phase 1(c):
+- add `llm_classifier` as a label-oriented wrapper on the new `LlmJudge`
+- add a first `g_eval` scorer that builds a judge prompt from rubric criteria
+- decide whether scorer-side token usage and cost need a kernel hook or should remain structured-score metadata until a later kernel revision
 
-That sequence turns the completed Phase 0 kernel into a portable contract other crates and languages can target.
+That sequence finishes the first real scorer layer on top of the new anyllm primitive instead of leaving Phase 1(c) half-landed.
