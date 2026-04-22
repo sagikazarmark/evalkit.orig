@@ -56,10 +56,9 @@ Current state:
 - Deterministic scorers now also exist in the standalone `evalkit-scorers-text` crate
 - HTTP and subprocess acquisitions now live in `evalkit-providers`
 - `evalkit-exporters-langfuse` now exists as a standalone crate
-- OTel and the compatibility Langfuse module still live in the kernel crate behind feature flags
+- `evalkit-otel` now exists for Jaeger and OTLP backends, while the umbrella crate still carries the `Observe` compatibility path
 
 Gap to roadmap:
-- No `evalkit-otel`
 - No skeleton crates for `evalkit-scorers-llm`, `evalkit-scorers-rag`, or `evalkit-scorers-embed`
 - The umbrella crate still keeps the deterministic scorer implementations in-kernel for compatibility during the split
 - The umbrella crate still carries transitional feature-gated Langfuse and OTel modules during the split

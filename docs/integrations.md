@@ -31,8 +31,8 @@ Via anyllm this gives first-class OpenAI / Anthropic / Gemini / OpenAI-compatibl
 - [ ] `GrpcAcquisition`
 
 ### Trace-based (acquire output by fetching spans)
-- [x] `OtlpReceiver` (ingest side, already wired)
-- [x] `JaegerBackend` (shipped — lives in `evalkit-otel` after Phase 0(c))
+- [x] `OtlpReceiver` (ingest side, shipped in `evalkit-otel`)
+- [x] `JaegerBackend` (shipped in `evalkit-otel`)
 - [ ] `TempoBackend`
 - [ ] `DatadogTraceBackend`
 - [ ] `OtelCollectorBackend`  — generic OTLP-endpoint puller
@@ -135,9 +135,9 @@ Add lazily as demand appears — most users bring their own data.
 
 ## Trace backends (for `OtlpReceiver` consumers & trace-based acquisition)
 
-- [x] `OtlpReceiver`  — OTLP/HTTP ingest
+- [x] `OtlpReceiver`  — OTLP/HTTP ingest in `evalkit-otel`
 - [ ] `OtlpGrpcReceiver`
-- [ ] `JaegerBackend`  — fetch spans by id
+- [x] `JaegerBackend`  — fetch spans by id in `evalkit-otel`
 - [ ] `TempoBackend`
 - [ ] `DatadogTraceBackend`
 - [ ] `InMemoryTraceStore` — test fixture
