@@ -1,7 +1,7 @@
 You are a G-Eval style judge.
 
 Evaluate the candidate response against the rubric below.
-First derive a short internal checklist from the rubric criteria, then assign a numeric score from 0.0 to 1.0.
+Follow the explicit evaluation steps below, then assign a numeric score from 0.0 to 1.0.
 Do not return freeform output; return only structured output matching the requested schema.
 
 Rubric criteria:
@@ -10,7 +10,13 @@ Rubric criteria:
 Criteria JSON:
 {{criteria_json}}
 
-When possible, include a concise reasoning summary and echo the criteria in metadata.
+Evaluation steps:
+{{steps_numbered}}
+
+Evaluation steps JSON:
+{{steps_json}}
+
+When possible, include a concise reasoning summary and echo the criteria and steps in metadata.
 If a reference is present, use it. If it is empty, evaluate without it.
 
 Input:

@@ -63,13 +63,51 @@ where
     S: Into<String>,
 {
     let criteria = normalize_entries("criteria", criteria)?;
-    let prompt = build_g_eval_prompt(&criteria);
+    let steps = build_g_eval_steps(&criteria);
 
-    Ok(
-        LlmJudge::new(provider, model, prompt, LlmJudgeOutput::Numeric)
-            .named("g_eval")
-            .capture_reasoning(true),
-    )
+    Ok(g_eval_with_normalized_steps(
+        provider, model, criteria, steps,
+    ))
+}
+
+/// Creates a G-Eval scorer with caller-specified evaluation steps.
+pub fn g_eval_with_steps<P, I, S, J, T>(
+    provider: P,
+    model: impl Into<String>,
+    criteria: I,
+    steps: J,
+) -> Result<LlmJudge, LlmJudgeBuildError>
+where
+    P: ChatProvider + 'static,
+    P::Stream: 'static,
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+    J: IntoIterator<Item = T>,
+    T: Into<String>,
+{
+    let criteria = normalize_entries("criteria", criteria)?;
+    let steps = normalize_entries("steps", steps)?;
+
+    Ok(g_eval_with_normalized_steps(
+        provider, model, criteria, steps,
+    ))
+}
+
+fn g_eval_with_normalized_steps<P>(
+    provider: P,
+    model: impl Into<String>,
+    criteria: Vec<String>,
+    steps: Vec<String>,
+) -> LlmJudge
+where
+    P: ChatProvider + 'static,
+    P::Stream: 'static,
+{
+    let prompt = build_g_eval_prompt(&criteria, &steps);
+
+    LlmJudge::new(provider, model, prompt, LlmJudgeOutput::Numeric)
+        .named("g_eval")
+        .capture_reasoning(true)
 }
 
 /// Stable prompt template with a canonical form for hashing.
@@ -647,14 +685,33 @@ fn build_llm_classifier_prompt(labels: &[String], instructions: String) -> Promp
     PromptTemplate::new(prompt)
 }
 
-fn build_g_eval_prompt(criteria: &[String]) -> PromptTemplate {
+fn build_g_eval_prompt(criteria: &[String], steps: &[String]) -> PromptTemplate {
     let criteria_json =
         serde_json::to_string(criteria).expect("criteria serialize into JSON array");
+    let steps_json = serde_json::to_string(steps).expect("steps serialize into JSON array");
     let prompt = G_EVAL_PROMPT_TEMPLATE
         .replace("{{criteria_numbered}}", &render_numbered_list(criteria))
-        .replace("{{criteria_json}}", &criteria_json);
+        .replace("{{criteria_json}}", &criteria_json)
+        .replace("{{steps_numbered}}", &render_numbered_list(steps))
+        .replace("{{steps_json}}", &steps_json);
 
     PromptTemplate::new(prompt)
+}
+
+fn build_g_eval_steps(criteria: &[String]) -> Vec<String> {
+    let mut steps = Vec::with_capacity(criteria.len() + 2);
+    steps.push(String::from(
+        "Read the input, candidate output, and reference before scoring.",
+    ));
+    steps.extend(
+        criteria.iter().map(|criterion| {
+            format!("Assess whether the candidate output satisfies: {criterion}.")
+        }),
+    );
+    steps.push(String::from(
+        "Combine the step findings into a single score from 0.0 to 1.0.",
+    ));
+    steps
 }
 
 fn normalize_entries<I, S>(
@@ -712,7 +769,8 @@ fn render_numbered_list(entries: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        LlmJudgeBuildError, LlmJudgeOutput, PromptTemplate, g_eval, llm_classifier, llm_judge,
+        LlmJudgeBuildError, LlmJudgeOutput, PromptTemplate, g_eval, g_eval_with_steps,
+        llm_classifier, llm_judge,
     };
     use anyllm::{
         ChatCapability, ChatResponseBuilder, Error as AnyLlmError, MockProvider, ResponseFormat,
@@ -972,7 +1030,54 @@ mod tests {
         };
         assert!(rendered.contains("1. correctness"));
         assert!(rendered.contains("2. groundedness"));
+        assert!(
+            rendered.contains("Read the input, candidate output, and reference before scoring.")
+        );
+        assert!(rendered.contains("Assess whether the candidate output satisfies: correctness."));
+        assert!(
+            rendered.contains("Combine the step findings into a single score from 0.0 to 1.0.")
+        );
         assert!(rendered.contains("[\"correctness\",\"groundedness\"]"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn g_eval_with_steps_uses_custom_steps() {
+        let provider = MockProvider::with_response(
+            ChatResponseBuilder::new()
+                .text(r#"{"score":0.7,"reasoning":"custom flow","metadata":{"method":"g_eval"}}"#)
+                .build(),
+        )
+        .with_supported_chat_capabilities([ChatCapability::StructuredOutput]);
+
+        let scorer = g_eval_with_steps(
+            provider.clone(),
+            "judge-model",
+            ["correctness"],
+            [
+                "Check factual correctness against the reference.",
+                "Penalize unsupported claims.",
+            ],
+        )
+        .unwrap();
+
+        let input = "question".to_string();
+        let output = "answer".to_string();
+        let reference = "gold".to_string();
+        let ctx = ScorerContext::new(&input, &output, Some(&reference));
+
+        let _ = scorer.score(&ctx).await.unwrap();
+
+        let request = provider.last_request().unwrap();
+        let user = request.messages[0].as_user().unwrap();
+        let UserContent::Text(rendered) = user.content else {
+            panic!("expected text user content")
+        };
+        assert!(rendered.contains("Check factual correctness against the reference."));
+        assert!(rendered.contains("Penalize unsupported claims."));
+        assert!(
+            !rendered.contains("Read the input, candidate output, and reference before scoring.")
+        );
+        assert!(rendered.contains("[\"Check factual correctness against the reference.\",\"Penalize unsupported claims.\"]"));
     }
 
     #[test]

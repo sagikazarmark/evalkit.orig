@@ -86,13 +86,14 @@ Already present:
 - First-pass `llm_classifier` and `g_eval` wrappers now build on top of the shared judge primitive
 - Prompt templates now live under `evalkit-scorers-llm/prompts/` and can be overridden with `LlmJudge::with_prompt`
 - The kernel now aggregates scorer-side token usage and cost through `score_with_resources`, and judge token usage can flow into `SampleResult`
+- `g_eval` now auto-generates explicit evaluation steps from rubric criteria and also supports caller-provided step overrides
 
 Gaps:
 - No reference TypeScript plugin shim yet
 - anyllm-backed judges currently populate token usage in `SampleResult`, but not cost because the provider layer does not expose portable cost data yet
 - Reasoning capture is currently limited to numeric and binary judges because `Score::Structured` requires a numeric primary score
 - `llm_classifier` is still a thin closed-set label wrapper; richer classification metadata and calibration are still missing
-- `g_eval` is still a first-pass rubric prompt, not yet a fuller multi-step / auto-generated evaluation flow
+- `g_eval` now has explicit steps, but it is still not a fuller multi-pass or self-generated evaluation flow
 
 ## Phase 2 - Streaming / Online Scoring
 
@@ -142,6 +143,6 @@ Gaps:
 The best next implementation slice is finishing the remaining Phase 1(c) depth:
 - add portable cost reporting on top of the new scorer resource hook when provider crates can supply it
 - enrich `llm_classifier` with stronger output metadata or calibration helpers
-- deepen `g_eval` beyond a single rubric prompt into a more explicit step-driven evaluation flow
+- deepen `g_eval` beyond prompt-level step plans into a fuller multi-pass or self-generated evaluation flow
 
 That sequence turns the newly landed wrappers into a more complete LLM scorer foundation instead of stopping at the first public API shape.
