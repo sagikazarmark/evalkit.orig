@@ -25,8 +25,8 @@ Via anyllm this gives first-class OpenAI / Anthropic / Gemini / OpenAI-compatibl
 - [ ] `SglangAcquisition`      — SGLang endpoint
 
 ### Transport-level
-- [~] `HttpAcquisition`       — exists in `evalkit-cli`; move to `evalkit-providers`
-- [~] `SubprocessAcquisition` — exists in `evalkit-cli`; move to `evalkit-providers`, formalize protocol
+- [x] `HttpAcquisition`       — extracted into `evalkit-providers`
+- [x] `SubprocessAcquisition` — extracted into `evalkit-providers`; protocol documented in `docs/plugin-protocol.md`
 - [ ] `WebSocketAcquisition`
 - [ ] `GrpcAcquisition`
 
@@ -112,7 +112,7 @@ Add lazily as demand appears — most users bring their own data.
 - [ ] `write_html_report`
 
 ### Observability platforms
-- [x] `langfuse` exporter
+- [x] `langfuse` exporter     — standalone `evalkit-exporters-langfuse` crate with umbrella-crate compatibility API
 - [ ] `phoenix` exporter         — OTel spans + Arize schema
 - [ ] `braintrust` exporter      — REST API + experiments
 - [ ] `mlflow` exporter          — runs + metrics + artifacts

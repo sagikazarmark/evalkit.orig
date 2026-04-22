@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "evalkit-cli", "evalkit-providers"]
+members = [".", "evalkit-cli", "evalkit-providers", "evalkit-exporters-langfuse"]
 resolver = "2"
 
 [package]

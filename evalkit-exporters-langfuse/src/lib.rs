@@ -4,9 +4,8 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
-use crate::{RunResult, SampleResult, Score};
+use evalkit::{RunResult, SampleResult, Score};
 
-/// Error returned when a Langfuse export fails.
 #[derive(Debug)]
 pub struct LangfuseExportError(pub Box<dyn Error + Send + Sync>);
 
@@ -22,36 +21,12 @@ impl Error for LangfuseExportError {
     }
 }
 
-/// Connection settings for a Langfuse instance.
-///
-/// ```no_run
-/// use evalkit::LangfuseConfig;
-///
-/// let config = LangfuseConfig {
-///     host: "https://cloud.langfuse.com".into(),
-///     public_key: std::env::var("LANGFUSE_PUBLIC_KEY").unwrap(),
-///     secret_key: std::env::var("LANGFUSE_SECRET_KEY").unwrap(),
-/// };
-/// ```
 pub struct LangfuseConfig {
-    /// Base URL of the Langfuse instance (e.g. `"https://cloud.langfuse.com"`).
     pub host: String,
-    /// Public key (`pk-lf-...`).
     pub public_key: String,
-    /// Secret key (`sk-lf-...`).
     pub secret_key: String,
 }
 
-/// Push a completed eval run to Langfuse.
-///
-/// Creates one trace per sample and one score per scorer per sample.
-/// Scores are aggregated across trials:
-/// - `Binary` → pass rate (0.0–1.0)
-/// - `Numeric` / `Metric` → mean
-/// - `Label` → skipped (not representable as a number)
-///
-/// Events are sent in batches of up to 500 to stay within Langfuse's
-/// recommended request size.
 pub async fn export_run(
     result: &RunResult,
     config: &LangfuseConfig,
@@ -72,9 +47,9 @@ pub async fn export_run(
             .json(&json!({ "batch": chunk }))
             .send()
             .await
-            .map_err(|e| LangfuseExportError(Box::new(e)))?
+            .map_err(|source| LangfuseExportError(Box::new(source)))?
             .error_for_status()
-            .map_err(|e| LangfuseExportError(Box::new(e)))?;
+            .map_err(|source| LangfuseExportError(Box::new(source)))?;
     }
 
     Ok(())
@@ -86,7 +61,6 @@ fn build_batch(result: &RunResult) -> Vec<Value> {
     let mut batch = Vec::new();
 
     for sample in &result.samples {
-        // Trace ID is stable within a run so scores can be associated to it.
         let trace_id = format!("{run_id}/{}", sample.sample_id);
 
         batch.push(json!({
@@ -127,16 +101,16 @@ fn build_batch(result: &RunResult) -> Vec<Value> {
     batch
 }
 
-/// Aggregate trial scores for a single sample into `scorer_name → (value, comment)`.
 fn aggregate_scores(sample: &SampleResult) -> HashMap<String, (f64, String)> {
     let mut buckets: HashMap<String, Vec<f64>> = HashMap::new();
 
     for trial in &sample.trials {
         for (name, result) in &trial.scores {
-            let Some(v) = score_to_f64(result.as_ref().ok()) else {
+            let Some(value) = score_to_f64(result.as_ref().ok()) else {
                 continue;
             };
-            buckets.entry(name.clone()).or_default().push(v);
+
+            buckets.entry(name.clone()).or_default().push(value);
         }
     }
 
@@ -151,16 +125,14 @@ fn aggregate_scores(sample: &SampleResult) -> HashMap<String, (f64, String)> {
         .collect()
 }
 
-/// Convert a score to a single f64 value suitable for Langfuse.
-///
-/// Returns `None` for `Label` scores (no natural numeric representation).
 fn score_to_f64(score: Option<&Score>) -> Option<f64> {
     match score? {
-        Score::Binary(b) => Some(if *b { 1.0 } else { 0.0 }),
-        Score::Numeric(v) => Some(*v),
+        Score::Binary(value) => Some(if *value { 1.0 } else { 0.0 }),
+        Score::Numeric(value) => Some(*value),
         Score::Structured { score, .. } => Some(*score),
         Score::Metric { value, .. } => Some(*value),
         Score::Label(_) => None,
+        _ => None,
     }
 }
 
@@ -171,9 +143,8 @@ fn new_event_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{RunMetadata, RunResult, SampleResult, Score, TrialResult};
     use chrono::Utc;
-    use std::collections::HashMap;
+    use evalkit::{RunMetadata, RunResult, SampleResult, ScoreDefinition, TrialResult};
     use std::time::Duration;
 
     fn make_result(samples: Vec<(&str, Vec<HashMap<&str, Score>>)>) -> RunResult {
@@ -188,7 +159,7 @@ mod tests {
                 completed_at: now,
                 duration: Duration::from_secs(1),
                 trial_count: 1,
-                score_definitions: vec![],
+                score_definitions: vec![ScoreDefinition::new("exact_match")],
                 acquisition_mode: "inline".into(),
             },
             samples: samples
@@ -204,7 +175,10 @@ mod tests {
                         .into_iter()
                         .enumerate()
                         .map(|(i, scores)| TrialResult {
-                            scores: scores.into_iter().map(|(k, v)| (k.into(), Ok(v))).collect(),
+                            scores: scores
+                                .into_iter()
+                                .map(|(key, value)| (key.into(), Ok(value)))
+                                .collect(),
                             duration: Duration::from_millis(10),
                             trial_index: i,
                         })
@@ -270,7 +244,7 @@ mod tests {
         )]);
 
         let batch = build_batch(&result);
-        // trace-create only, no score-create for Label
+
         assert_eq!(batch.len(), 1);
         assert_eq!(batch[0]["type"], "trace-create");
     }
@@ -297,7 +271,6 @@ mod tests {
         );
 
         let batch = build_batch(&result);
-        // 10 traces + 10 scores = 20 events, well under 500
         assert_eq!(batch.len(), 20);
     }
 }

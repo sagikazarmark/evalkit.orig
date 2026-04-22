@@ -260,6 +260,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "evalkit-exporters-langfuse"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "evalkit",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "evalkit-providers"
 version = "0.1.0"
 dependencies = [

@@ -46,23 +46,23 @@ Already present:
 
 Gaps:
 - `docs/decisions.md` and `docs/stability.md` were missing
-- The current workspace still contains only the root crate and `evalkit-cli`
+- The current workspace was still monolithic, with only the root crate and `evalkit-cli`
 
 ### 0(c) Workspace split
 
-Status: not started
+Status: partial
 
 Current state:
 - Deterministic scorers still live under `src/scorers/`
-- Transport logic still lives in `evalkit-cli`
-- OTel and Langfuse code are still in the kernel crate behind feature flags
+- HTTP and subprocess acquisitions now live in `evalkit-providers`
+- `evalkit-exporters-langfuse` now exists as a standalone crate
+- OTel and the compatibility Langfuse module still live in the kernel crate behind feature flags
 
 Gap to roadmap:
 - No `evalkit-scorers-text`
-- No `evalkit-providers`
 - No `evalkit-otel`
-- No `evalkit-exporters-langfuse`
 - No skeleton crates for `evalkit-scorers-llm`, `evalkit-scorers-rag`, or `evalkit-scorers-embed`
+- The umbrella crate still carries transitional feature-gated Langfuse and OTel modules during the split
 
 ### 0(d) Kernel features
 
