@@ -37,9 +37,9 @@ impl Display for ScorerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Timeout(duration) => write!(f, "scorer timed out after {duration:?}"),
-            Self::InvalidInput(error)
-            | Self::ProviderError(error)
-            | Self::Internal(error) => Display::fmt(error, f),
+            Self::InvalidInput(error) | Self::ProviderError(error) | Self::Internal(error) => {
+                Display::fmt(error, f)
+            }
         }
     }
 }
@@ -48,9 +48,9 @@ impl Error for ScorerError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Timeout(_) => None,
-            Self::InvalidInput(error)
-            | Self::ProviderError(error)
-            | Self::Internal(error) => Some(error.as_ref()),
+            Self::InvalidInput(error) | Self::ProviderError(error) | Self::Internal(error) => {
+                Some(error.as_ref())
+            }
         }
     }
 }

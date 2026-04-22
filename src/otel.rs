@@ -695,9 +695,7 @@ fn ingest_payload(payload: OtlpTracesPayload, store: &SpanStore) {
             for raw in scope_span.spans {
                 let attributes = otlp_attributes_to_map(raw.attributes);
 
-                let Some(correlation_id) =
-                    attribute_group_key(&attributes, "eval.run_id")
-                else {
+                let Some(correlation_id) = attribute_group_key(&attributes, "eval.run_id") else {
                     continue;
                 };
 
@@ -717,14 +715,14 @@ fn ingest_payload(payload: OtlpTracesPayload, store: &SpanStore) {
                         let name = ev_attrs
                             .get("name")
                             .and_then(attribute_value_to_string)
-                            .or_else(|| {
-                                ev_attrs
-                                    .get("event")
-                                    .and_then(attribute_value_to_string)
-                            })
+                            .or_else(|| ev_attrs.get("event").and_then(attribute_value_to_string))
                             .unwrap_or_else(|| e.name.clone())
                             .to_owned();
-                        SpanEvent { name, timestamp: start_time, attributes: ev_attrs }
+                        SpanEvent {
+                            name,
+                            timestamp: start_time,
+                            attributes: ev_attrs,
+                        }
                     })
                     .collect();
 

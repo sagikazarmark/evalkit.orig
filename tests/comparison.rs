@@ -310,13 +310,23 @@ fn compare_reports_improved_and_regressed_when_aggregate_is_significant() {
             sample(
                 "sample-a",
                 (0..10)
-                    .map(|i| trial(vec![("accuracy", Score::Numeric(0.40 + i as f64 * 0.001))], i))
+                    .map(|i| {
+                        trial(
+                            vec![("accuracy", Score::Numeric(0.40 + i as f64 * 0.001))],
+                            i,
+                        )
+                    })
                     .collect(),
             ),
             sample(
                 "sample-b",
                 (0..10)
-                    .map(|i| trial(vec![("accuracy", Score::Numeric(0.42 + i as f64 * 0.001))], i))
+                    .map(|i| {
+                        trial(
+                            vec![("accuracy", Score::Numeric(0.42 + i as f64 * 0.001))],
+                            i,
+                        )
+                    })
                     .collect(),
             ),
         ],
@@ -328,13 +338,23 @@ fn compare_reports_improved_and_regressed_when_aggregate_is_significant() {
             sample(
                 "sample-a",
                 (0..10)
-                    .map(|i| trial(vec![("accuracy", Score::Numeric(0.80 + i as f64 * 0.001))], i))
+                    .map(|i| {
+                        trial(
+                            vec![("accuracy", Score::Numeric(0.80 + i as f64 * 0.001))],
+                            i,
+                        )
+                    })
                     .collect(),
             ),
             sample(
                 "sample-b",
                 (0..10)
-                    .map(|i| trial(vec![("accuracy", Score::Numeric(0.82 + i as f64 * 0.001))], i))
+                    .map(|i| {
+                        trial(
+                            vec![("accuracy", Score::Numeric(0.82 + i as f64 * 0.001))],
+                            i,
+                        )
+                    })
                     .collect(),
             ),
         ],

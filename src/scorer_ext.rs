@@ -246,11 +246,9 @@ where
             .map_err(|err| sub_scorer_error("gate", &self.gate.definition().name, err))?;
 
         match gate_score {
-            Score::Binary(true) => self
-                .secondary
-                .score(ctx)
-                .await
-                .map_err(|err| sub_scorer_error("secondary", &self.secondary.definition().name, err)),
+            Score::Binary(true) => self.secondary.score(ctx).await.map_err(|err| {
+                sub_scorer_error("secondary", &self.secondary.definition().name, err)
+            }),
             Score::Binary(false) => Ok(Score::Binary(false)),
             _ => Err(ScorerError::invalid_input(ThenGateNotBinaryError {
                 scorer_name: self.gate.definition().name,
@@ -523,8 +521,14 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn and_returns_true_when_both_pass() {
-        let scorer = ConstScorer { score: Score::Binary(true), name: "a" }
-            .and(ConstScorer { score: Score::Binary(true), name: "b" });
+        let scorer = ConstScorer {
+            score: Score::Binary(true),
+            name: "a",
+        }
+        .and(ConstScorer {
+            score: Score::Binary(true),
+            name: "b",
+        });
         let (i, o, ctx) = ctx();
         let _ = (&i, &o); // suppress unused warnings
         let score = scorer.score(&ctx).await.unwrap();
@@ -533,8 +537,14 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn and_returns_false_when_either_fails() {
-        let scorer = ConstScorer { score: Score::Binary(true), name: "a" }
-            .and(ConstScorer { score: Score::Binary(false), name: "b" });
+        let scorer = ConstScorer {
+            score: Score::Binary(true),
+            name: "a",
+        }
+        .and(ConstScorer {
+            score: Score::Binary(false),
+            name: "b",
+        });
         let (i, o, ctx) = ctx();
         let _ = (&i, &o);
         let score = scorer.score(&ctx).await.unwrap();
@@ -543,8 +553,14 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn and_errors_on_non_binary_scores() {
-        let scorer = ConstScorer { score: Score::Numeric(1.0), name: "a" }
-            .and(ConstScorer { score: Score::Numeric(0.5), name: "b" });
+        let scorer = ConstScorer {
+            score: Score::Numeric(1.0),
+            name: "a",
+        }
+        .and(ConstScorer {
+            score: Score::Numeric(0.5),
+            name: "b",
+        });
         let (i, o, ctx) = ctx();
         let _ = (&i, &o);
         assert!(scorer.score(&ctx).await.is_err());
@@ -562,8 +578,14 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn or_returns_true_when_either_passes() {
-        let scorer = ConstScorer { score: Score::Binary(false), name: "a" }
-            .or(ConstScorer { score: Score::Binary(true), name: "b" });
+        let scorer = ConstScorer {
+            score: Score::Binary(false),
+            name: "a",
+        }
+        .or(ConstScorer {
+            score: Score::Binary(true),
+            name: "b",
+        });
         let (i, o, ctx) = ctx();
         let _ = (&i, &o);
         let score = scorer.score(&ctx).await.unwrap();
@@ -572,8 +594,14 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn or_errors_on_non_binary_scores() {
-        let scorer = ConstScorer { score: Score::Numeric(1.0), name: "a" }
-            .or(ConstScorer { score: Score::Binary(true), name: "b" });
+        let scorer = ConstScorer {
+            score: Score::Numeric(1.0),
+            name: "a",
+        }
+        .or(ConstScorer {
+            score: Score::Binary(true),
+            name: "b",
+        });
         let (i, o, ctx) = ctx();
         let _ = (&i, &o);
         assert!(scorer.score(&ctx).await.is_err());
@@ -581,8 +609,18 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn weighted_returns_weighted_average() {
-        let scorer = ConstScorer { score: Score::Numeric(0.8), name: "a" }
-            .weighted(ConstScorer { score: Score::Numeric(0.4), name: "b" }, 0.7, 0.3);
+        let scorer = ConstScorer {
+            score: Score::Numeric(0.8),
+            name: "a",
+        }
+        .weighted(
+            ConstScorer {
+                score: Score::Numeric(0.4),
+                name: "b",
+            },
+            0.7,
+            0.3,
+        );
         let (i, o, ctx) = ctx();
         let _ = (&i, &o);
         let score = scorer.score(&ctx).await.unwrap();
@@ -593,12 +631,20 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn weighted_accepts_metric_scores() {
         let scorer = ConstScorer {
-            score: Score::Metric { name: "latency".into(), value: 100.0, unit: None },
+            score: Score::Metric {
+                name: "latency".into(),
+                value: 100.0,
+                unit: None,
+            },
             name: "a",
         }
         .weighted(
             ConstScorer {
-                score: Score::Metric { name: "cost".into(), value: 0.5, unit: None },
+                score: Score::Metric {
+                    name: "cost".into(),
+                    value: 0.5,
+                    unit: None,
+                },
                 name: "b",
             },
             0.5,
@@ -612,8 +658,18 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn weighted_errors_on_binary_scores() {
-        let scorer = ConstScorer { score: Score::Binary(true), name: "a" }
-            .weighted(ConstScorer { score: Score::Binary(true), name: "b" }, 0.5, 0.5);
+        let scorer = ConstScorer {
+            score: Score::Binary(true),
+            name: "a",
+        }
+        .weighted(
+            ConstScorer {
+                score: Score::Binary(true),
+                name: "b",
+            },
+            0.5,
+            0.5,
+        );
         let (i, o, ctx) = ctx();
         let _ = (&i, &o);
         assert!(scorer.score(&ctx).await.is_err());
@@ -621,8 +677,14 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn then_runs_secondary_when_gate_passes() {
-        let scorer = ConstScorer { score: Score::Binary(true), name: "gate" }
-            .then(ConstScorer { score: Score::Numeric(0.9), name: "quality" });
+        let scorer = ConstScorer {
+            score: Score::Binary(true),
+            name: "gate",
+        }
+        .then(ConstScorer {
+            score: Score::Numeric(0.9),
+            name: "quality",
+        });
         let (i, o, ctx) = ctx();
         let _ = (&i, &o);
         let score = scorer.score(&ctx).await.unwrap();
@@ -631,8 +693,11 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn then_short_circuits_when_gate_fails() {
-        let scorer = ConstScorer { score: Score::Binary(false), name: "gate" }
-            .then(FailingScorer("should_not_run"));
+        let scorer = ConstScorer {
+            score: Score::Binary(false),
+            name: "gate",
+        }
+        .then(FailingScorer("should_not_run"));
         let (i, o, ctx) = ctx();
         let _ = (&i, &o);
         let score = scorer.score(&ctx).await.unwrap();
@@ -641,8 +706,14 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn then_errors_when_gate_returns_non_binary() {
-        let scorer = ConstScorer { score: Score::Numeric(1.0), name: "gate" }
-            .then(ConstScorer { score: Score::Binary(true), name: "secondary" });
+        let scorer = ConstScorer {
+            score: Score::Numeric(1.0),
+            name: "gate",
+        }
+        .then(ConstScorer {
+            score: Score::Binary(true),
+            name: "secondary",
+        });
         let (i, o, ctx) = ctx();
         let _ = (&i, &o);
         let err = scorer.score(&ctx).await.unwrap_err();
@@ -652,7 +723,11 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn not_inverts_binary_scores() {
-        let scorer = ConstScorer { score: Score::Binary(true), name: "gate" }.not();
+        let scorer = ConstScorer {
+            score: Score::Binary(true),
+            name: "gate",
+        }
+        .not();
         let (i, o, ctx) = ctx();
         let _ = (&i, &o);
         let score = scorer.score(&ctx).await.unwrap();
@@ -661,12 +736,16 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn map_score_transforms_the_inner_score() {
-        let scorer = ConstScorer { score: Score::Numeric(0.8), name: "quality" }.map_score(
-            |score| match score {
-                Score::Numeric(value) => Ok(Score::Numeric(value * 100.0)),
-                _ => Err(ScorerError::invalid_input(std::io::Error::other("expected numeric"))),
-            },
-        );
+        let scorer = ConstScorer {
+            score: Score::Numeric(0.8),
+            name: "quality",
+        }
+        .map_score(|score| match score {
+            Score::Numeric(value) => Ok(Score::Numeric(value * 100.0)),
+            _ => Err(ScorerError::invalid_input(std::io::Error::other(
+                "expected numeric",
+            ))),
+        });
         let (i, o, ctx) = ctx();
         let _ = (&i, &o);
         let score = scorer.score(&ctx).await.unwrap();
@@ -698,9 +777,18 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn composition_is_recursive() {
         // (a AND b) THEN c — composed scorer is itself a Scorer
-        let scorer = ConstScorer { score: Score::Binary(true), name: "a" }
-            .and(ConstScorer { score: Score::Binary(true), name: "b" })
-            .then(ConstScorer { score: Score::Numeric(0.95), name: "c" });
+        let scorer = ConstScorer {
+            score: Score::Binary(true),
+            name: "a",
+        }
+        .and(ConstScorer {
+            score: Score::Binary(true),
+            name: "b",
+        })
+        .then(ConstScorer {
+            score: Score::Numeric(0.95),
+            name: "c",
+        });
         let (i, o, ctx) = ctx();
         let _ = (&i, &o);
         let score = scorer.score(&ctx).await.unwrap();
@@ -709,8 +797,14 @@ mod tests {
 
     #[test]
     fn and_definition_combines_names_and_uses_maximize() {
-        let scorer = ConstScorer { score: Score::Binary(true), name: "format" }
-            .and(ConstScorer { score: Score::Binary(true), name: "accuracy" });
+        let scorer = ConstScorer {
+            score: Score::Binary(true),
+            name: "format",
+        }
+        .and(ConstScorer {
+            score: Score::Binary(true),
+            name: "accuracy",
+        });
         let def = scorer.definition();
         assert_eq!(def.name, "format AND accuracy");
         assert_eq!(def.direction, Some(Direction::Maximize));
@@ -718,16 +812,32 @@ mod tests {
 
     #[test]
     fn weighted_definition_combines_names() {
-        let scorer = ConstScorer { score: Score::Numeric(0.8), name: "fluency" }
-            .weighted(ConstScorer { score: Score::Numeric(0.6), name: "factuality" }, 0.7, 0.3);
+        let scorer = ConstScorer {
+            score: Score::Numeric(0.8),
+            name: "fluency",
+        }
+        .weighted(
+            ConstScorer {
+                score: Score::Numeric(0.6),
+                name: "factuality",
+            },
+            0.7,
+            0.3,
+        );
         let def = scorer.definition();
         assert_eq!(def.name, "fluency+factuality");
     }
 
     #[test]
     fn then_definition_uses_secondary_direction() {
-        let scorer = ConstScorer { score: Score::Binary(true), name: "format_check" }
-            .then(ConstScorer { score: Score::Numeric(0.9), name: "quality" });
+        let scorer = ConstScorer {
+            score: Score::Binary(true),
+            name: "format_check",
+        }
+        .then(ConstScorer {
+            score: Score::Numeric(0.9),
+            name: "quality",
+        });
         let def = scorer.definition();
         assert_eq!(def.name, "format_check THEN quality");
         assert_eq!(def.direction, Some(Direction::Maximize));
@@ -735,7 +845,10 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn ignore_reference_passes_score_through() {
-        let base = ConstScorer { score: Score::Binary(true), name: "check" };
+        let base = ConstScorer {
+            score: Score::Binary(true),
+            name: "check",
+        };
         let wrapped = super::ignore_reference::<(), (), String, _>(base);
         // reference is Some(&"ref"), but the inner scorer (R=()) should not see it
         let reference = String::from("ignored");
@@ -746,7 +859,10 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn ignore_reference_works_without_reference() {
-        let base = ConstScorer { score: Score::Numeric(0.75), name: "quality" };
+        let base = ConstScorer {
+            score: Score::Numeric(0.75),
+            name: "quality",
+        };
         let wrapped = super::ignore_reference::<(), (), String, _>(base);
         let ctx = ScorerContext::new(&(), &(), None);
         let score = wrapped.score(&ctx).await.unwrap();
@@ -755,7 +871,10 @@ mod tests {
 
     #[test]
     fn ignore_reference_inherits_inner_definition() {
-        let base = ConstScorer { score: Score::Binary(true), name: "regex" };
+        let base = ConstScorer {
+            score: Score::Binary(true),
+            name: "regex",
+        };
         let wrapped = super::ignore_reference::<(), (), String, _>(base);
         assert_eq!(wrapped.definition().name, "regex");
     }

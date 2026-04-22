@@ -5,6 +5,7 @@ use crate::{
 };
 use chrono::Utc;
 use futures::{FutureExt, StreamExt, stream};
+use serde_json::{Map, Value};
 #[cfg(feature = "otel")]
 use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
@@ -16,7 +17,6 @@ use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use serde_json::{Map, Value};
 use tokio::time::timeout;
 use uuid::Uuid;
 
@@ -158,7 +158,12 @@ impl<I, O, R> Run<I, O, R> {
         }
     }
 
-    async fn execute_trial(&self, run_id: &str, sample: &Sample<I, R>, trial_index: usize) -> TrialResult {
+    async fn execute_trial(
+        &self,
+        run_id: &str,
+        sample: &Sample<I, R>,
+        trial_index: usize,
+    ) -> TrialResult {
         let started = Instant::now();
 
         let scores = match AssertUnwindSafe(self.acquire_output(sample))

@@ -8,9 +8,7 @@ use crate::{RunMetadata, RunResult, SampleResult};
 #[derive(Serialize)]
 #[serde(tag = "record_type", rename_all = "snake_case")]
 enum JsonlWriteRecord<'a> {
-    Header {
-        schema_version: &'static str,
-    },
+    Header { schema_version: &'static str },
     Metadata { metadata: &'a RunMetadata },
     Sample { sample: &'a SampleResult },
 }
@@ -18,9 +16,7 @@ enum JsonlWriteRecord<'a> {
 #[derive(Deserialize)]
 #[serde(tag = "record_type", rename_all = "snake_case")]
 enum JsonlReadRecord {
-    Header {
-        schema_version: String,
-    },
+    Header { schema_version: String },
     Metadata { metadata: RunMetadata },
     Sample { sample: SampleResult },
 }
@@ -65,12 +61,17 @@ pub fn read_jsonl(reader: impl Read) -> Result<RunResult, serde_json::Error> {
             JsonlReadRecord::Header {
                 schema_version: record_schema_version,
             } => {
-                if schema_version.replace(record_schema_version.clone()).is_some() {
+                if schema_version
+                    .replace(record_schema_version.clone())
+                    .is_some()
+                {
                     return Err(invalid_jsonl("JSONL contains multiple header records"));
                 }
 
                 if record_schema_version != RUN_RESULT_SCHEMA_VERSION {
-                    return Err(invalid_jsonl("JSONL schema version is not supported by this reader"));
+                    return Err(invalid_jsonl(
+                        "JSONL schema version is not supported by this reader",
+                    ));
                 }
             }
             JsonlReadRecord::Metadata {

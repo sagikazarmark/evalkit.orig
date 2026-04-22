@@ -4,8 +4,7 @@ use std::time::Duration;
 use chrono::{TimeZone, Utc};
 use evalkit::{
     Direction, RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, ScorerError,
-    TokenUsage,
-    TrialResult,
+    TokenUsage, TrialResult,
 };
 use serde_json::json;
 

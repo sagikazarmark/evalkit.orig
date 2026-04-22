@@ -13,9 +13,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use evalkit::{
-    Acquisition, AcquisitionError, Dataset, Run, RunStats, Sample, Score, ScoreDefinition,
-    Scorer, ScorerContext, ScorerError, ScorerSet, ScorerStats, contains, exact_match,
-    json_schema, write_jsonl,
+    Acquisition, AcquisitionError, Dataset, Run, RunStats, Sample, Score, ScoreDefinition, Scorer,
+    ScorerContext, ScorerError, ScorerSet, ScorerStats, contains, exact_match, json_schema,
+    write_jsonl,
 };
 
 // ---------------------------------------------------------------------------
@@ -244,8 +244,8 @@ async fn run_command(args: RunArgs) -> Result<bool, CliError> {
     // Read and parse config
     let config_str = fs::read_to_string(&args.config)
         .map_err(|e| CliError::Config(format!("cannot read {}: {e}", args.config.display())))?;
-    let config: Config = toml::from_str(&config_str)
-        .map_err(|e| CliError::Config(format!("invalid TOML: {e}")))?;
+    let config: Config =
+        toml::from_str(&config_str).map_err(|e| CliError::Config(format!("invalid TOML: {e}")))?;
 
     if config.scorers.is_empty() {
         return Err(CliError::Config(
@@ -337,17 +337,15 @@ async fn run_command(args: RunArgs) -> Result<bool, CliError> {
 
 fn build_acquisition(cfg: AcquisitionConfig) -> Result<CliAcquisition, CliError> {
     match (cfg.url, cfg.command) {
-        (Some(url), None) => {
-            Ok(CliAcquisition::Http(
-                HttpAcquisition::new(
-                    url,
-                    cfg.input_field,
-                    cfg.output_field,
-                    Duration::from_secs(cfg.timeout_secs),
-                )
-                .map_err(|e| CliError::Config(format!("cannot build HTTP client: {e}")))?,
-            ))
-        }
+        (Some(url), None) => Ok(CliAcquisition::Http(
+            HttpAcquisition::new(
+                url,
+                cfg.input_field,
+                cfg.output_field,
+                Duration::from_secs(cfg.timeout_secs),
+            )
+            .map_err(|e| CliError::Config(format!("cannot build HTTP client: {e}")))?,
+        )),
         (None, Some(cmd)) => {
             let parts = cmd.into_parts();
             if parts.is_empty() {
@@ -379,8 +377,8 @@ fn load_dataset(path: &PathBuf) -> Result<Dataset<String, String>, CliError> {
     let mut samples = Vec::new();
 
     for (idx, line) in BufReader::new(file).lines().enumerate() {
-        let line = line
-            .map_err(|e| CliError::Dataset(format!("read error at line {}: {e}", idx + 1)))?;
+        let line =
+            line.map_err(|e| CliError::Dataset(format!("read error at line {}: {e}", idx + 1)))?;
         if line.trim().is_empty() {
             continue;
         }
@@ -394,9 +392,11 @@ fn load_dataset(path: &PathBuf) -> Result<Dataset<String, String>, CliError> {
         if let Some(reference) = row.reference {
             builder = builder.reference(reference);
         }
-        samples.push(builder.build().map_err(|e| {
-            CliError::Dataset(format!("invalid sample at line {}: {e}", idx + 1))
-        })?);
+        samples.push(
+            builder.build().map_err(|e| {
+                CliError::Dataset(format!("invalid sample at line {}: {e}", idx + 1))
+            })?,
+        );
     }
 
     if samples.is_empty() {
@@ -423,10 +423,7 @@ fn build_cli_scorer(entry: &ScorerConfigEntry) -> Result<CliScorer, CliError> {
             })
         }
         "contains" => {
-            let name = entry
-                .name
-                .clone()
-                .unwrap_or_else(|| "contains".to_owned());
+            let name = entry.name.clone().unwrap_or_else(|| "contains".to_owned());
             Ok(CliScorer {
                 definition: ScoreDefinition::new(name),
                 kind: CliScorerKind::Contains,

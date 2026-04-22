@@ -56,10 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Results -------------------------------------------------------
     let stats = result.stats();
     println!("{}", stats.summary());
-    println!(
-        "\ntotal_trials_executed: {}",
-        stats.total_trials_executed
-    );
+    println!("\ntotal_trials_executed: {}", stats.total_trials_executed);
 
     Ok(())
 }

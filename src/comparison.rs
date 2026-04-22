@@ -153,13 +153,11 @@ impl ScoreBucket {
                     Score::Metric { value, .. } => Self::Metric(vec![*value]),
                 };
             }
-            Self::Numeric(values) => {
-                match score {
-                    Score::Numeric(value) => values.push(*value),
-                    Score::Structured { score, .. } => values.push(*score),
-                    _ => *self = Self::Mixed,
-                }
-            }
+            Self::Numeric(values) => match score {
+                Score::Numeric(value) => values.push(*value),
+                Score::Structured { score, .. } => values.push(*score),
+                _ => *self = Self::Mixed,
+            },
             Self::Binary(values) => {
                 if let Score::Binary(value) = score {
                     values.push(*value);
@@ -376,9 +374,7 @@ fn aggregate_delta(baseline: &ScoreBucket, candidate: &ScoreBucket) -> f64 {
 fn significance_test(baseline: &ScoreBucket, candidate: &ScoreBucket) -> Option<f64> {
     match (baseline, candidate) {
         (ScoreBucket::Numeric(left), ScoreBucket::Numeric(right))
-        | (ScoreBucket::Metric(left), ScoreBucket::Metric(right)) => {
-            numeric_p_value(left, right)
-        }
+        | (ScoreBucket::Metric(left), ScoreBucket::Metric(right)) => numeric_p_value(left, right),
         (ScoreBucket::Binary(left), ScoreBucket::Binary(right)) => {
             fisher_exact_test_p_value(left, right)
         }
@@ -492,7 +488,11 @@ fn paired_t_test_p_value(baseline: &[f64], candidate: &[f64]) -> Option<f64> {
     let variance = sample_variance(&deltas);
 
     if variance == 0.0 {
-        return Some(if mean_delta.abs() <= f64::EPSILON { 1.0 } else { 0.0 });
+        return Some(if mean_delta.abs() <= f64::EPSILON {
+            1.0
+        } else {
+            0.0
+        });
     }
 
     let standard_error = (variance / deltas.len() as f64).sqrt();

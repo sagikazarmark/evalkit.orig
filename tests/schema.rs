@@ -18,7 +18,10 @@ fn run_log_schema_uses_the_current_schema_version() {
         schema["$defs"]["HeaderRecord"]["properties"]["schema_version"]["const"],
         json!(RUN_RESULT_SCHEMA_VERSION)
     );
-    assert_eq!(schema["$id"], json!("https://evalkit.dev/schema/run-log-v1.schema.json"));
+    assert_eq!(
+        schema["$id"],
+        json!("https://evalkit.dev/schema/run-log-v1.schema.json")
+    );
 }
 
 #[test]

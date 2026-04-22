@@ -75,7 +75,8 @@ mod tests {
     fn scorer_context_supports_absent_reference() {
         let input = String::from("prompt");
         let output = String::from("answer");
-        let ctx: ScorerContext<'_, String, String, String> = ScorerContext::new(&input, &output, None);
+        let ctx: ScorerContext<'_, String, String, String> =
+            ScorerContext::new(&input, &output, None);
 
         assert!(ctx.reference.is_none());
     }
@@ -112,15 +113,8 @@ mod tests {
         let input = String::from("prompt");
         let output = String::from("answer");
         let metadata = HashMap::from([("topic".to_string(), serde_json::json!("math"))]);
-        let ctx: ScorerContext<'_, String, String> = ScorerContext::with_scope(
-            "run-1",
-            "sample-1",
-            2,
-            &metadata,
-            &input,
-            &output,
-            None,
-        );
+        let ctx: ScorerContext<'_, String, String> =
+            ScorerContext::with_scope("run-1", "sample-1", 2, &metadata, &input, &output, None);
 
         assert_eq!(ctx.run_id, "run-1");
         assert_eq!(ctx.sample_id, "sample-1");

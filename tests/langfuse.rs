@@ -1,7 +1,10 @@
 #![cfg(feature = "langfuse")]
 
-use evalkit::{LangfuseConfig, RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, TrialResult, export_run};
 use chrono::Utc;
+use evalkit::{
+    LangfuseConfig, RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, TrialResult,
+    export_run,
+};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -48,7 +51,9 @@ fn http_ok(body: &str) -> String {
     )
 }
 
-fn spawn_server(responses: Vec<String>) -> (String, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {
+fn spawn_server(
+    responses: Vec<String>,
+) -> (String, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = format!("http://{}", listener.local_addr().unwrap());
     let requests: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -59,7 +64,10 @@ fn spawn_server(responses: Vec<String>) -> (String, Arc<Mutex<Vec<String>>>, thr
             let (mut stream, _) = listener.accept().unwrap();
             let mut buf = vec![0u8; 16384];
             let n = stream.read(&mut buf).unwrap();
-            recorded.lock().unwrap().push(String::from_utf8_lossy(&buf[..n]).into_owned());
+            recorded
+                .lock()
+                .unwrap()
+                .push(String::from_utf8_lossy(&buf[..n]).into_owned());
             stream.write_all(response.as_bytes()).unwrap();
         }
     });
@@ -70,7 +78,8 @@ fn spawn_server(responses: Vec<String>) -> (String, Arc<Mutex<Vec<String>>>, thr
 #[tokio::test(flavor = "current_thread")]
 async fn export_run_posts_batch_to_ingestion_endpoint() {
     let result = make_result();
-    let (base_url, requests, server) = spawn_server(vec![http_ok(r#"{"successes":[],"errors":[]}"#)]);
+    let (base_url, requests, server) =
+        spawn_server(vec![http_ok(r#"{"successes":[],"errors":[]}"#)]);
 
     let config = LangfuseConfig {
         host: base_url,
