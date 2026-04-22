@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 evalkit = { path = ".." }
 evalkit-providers = { path = "../evalkit-providers" }
+evalkit-scorers-text = { path = "../evalkit-scorers-text" }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt"] }
 serde = { version = "1", features = ["derive"] }

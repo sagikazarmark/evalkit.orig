@@ -8,14 +8,14 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use evalkit_providers::{HttpAcquisition, SubprocessAcquisition, SubprocessScorer};
+use evalkit_scorers_text::{contains, exact_match, json_schema};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 
 use evalkit::{
     Acquisition, AcquisitionError, Dataset, Run, RunStats, Sample, Score, ScoreDefinition, Scorer,
-    ScorerContext, ScorerError, ScorerSet, ScorerStats, contains, exact_match, json_schema,
-    write_jsonl,
+    ScorerContext, ScorerError, ScorerSet, ScorerStats, write_jsonl,
 };
 
 // ---------------------------------------------------------------------------
