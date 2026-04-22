@@ -124,7 +124,10 @@ async fn run_builder_executes_dataset_and_returns_sample_results() {
 
     assert_eq!(result.samples.len(), 2);
     assert_eq!(result.metadata.trial_count, 1);
+    assert_eq!(result.metadata.seed, None);
     assert_eq!(result.metadata.acquisition_mode, "inline");
+    assert_eq!(result.metadata.dataset_fingerprint.len(), 16);
+    assert_eq!(result.metadata.scorer_fingerprint.len(), 16);
     assert_eq!(result.metadata.score_definitions.len(), 1);
     assert_eq!(result.metadata.score_definitions[0].name, "exact_match");
     assert_eq!(result.samples[0].sample_id, sample_ids[0]);
@@ -199,6 +202,23 @@ async fn run_accepts_multiple_scorers_and_scorer_sets() {
             .unwrap(),
         &Score::Binary(true)
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_metadata_captures_an_explicit_seed() {
+    let sample = Sample::new(String::from("prompt"), String::from("four"));
+
+    let run = Run::builder()
+        .dataset(vec![sample])
+        .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("four")) })
+        .scorer(evalkit::exact_match())
+        .seed(42)
+        .build()
+        .unwrap();
+
+    let result = run.execute().await.unwrap();
+
+    assert_eq!(result.metadata.seed, Some(42));
 }
 
 #[tokio::test(flavor = "current_thread")]

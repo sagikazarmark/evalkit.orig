@@ -13,6 +13,9 @@ fn metadata(
 ) -> RunMetadata {
     RunMetadata {
         run_id: run_id.to_owned(),
+        seed: None,
+        dataset_fingerprint: format!("dataset-{run_id}"),
+        scorer_fingerprint: format!("scorers-{run_id}"),
         started_at: Utc.with_ymd_and_hms(2026, 4, 3, 12, 0, 0).unwrap(),
         completed_at: Utc.with_ymd_and_hms(2026, 4, 3, 12, 0, 5).unwrap(),
         duration: Duration::from_secs(5),

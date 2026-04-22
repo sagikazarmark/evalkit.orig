@@ -16,6 +16,7 @@ use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use serde_json::{Map, Value};
 use tokio::time::timeout;
 use uuid::Uuid;
 
@@ -92,6 +93,7 @@ pub struct Run<I, O, R = ()> {
     trial_count: usize,
     concurrency: usize,
     sample_timeout: Option<Duration>,
+    seed: Option<u64>,
     acquisition_mode: &'static str,
 }
 
@@ -119,6 +121,9 @@ impl<I, O, R> Run<I, O, R> {
         Ok(RunResult {
             metadata: RunMetadata {
                 run_id,
+                seed: self.seed,
+                dataset_fingerprint: fingerprint_dataset(&self.dataset),
+                scorer_fingerprint: fingerprint_definitions(&self.definitions),
                 started_at,
                 completed_at,
                 duration,
@@ -255,6 +260,7 @@ impl<I, R> RunBuilderWithDataset<I, R> {
             trial_count: 1,
             concurrency: 1,
             sample_timeout: None,
+            seed: None,
             acquisition_mode,
             _mapped: PhantomData,
         }
@@ -277,6 +283,7 @@ pub struct RunBuilderConfigured<
     trial_count: usize,
     concurrency: usize,
     sample_timeout: Option<Duration>,
+    seed: Option<u64>,
     acquisition_mode: &'static str,
     _mapped: PhantomData<fn() -> (O2, R2, OutputState, ReferenceState)>,
 }
@@ -298,6 +305,7 @@ pub struct RunBuilderWithTargets<
     trial_count: usize,
     concurrency: usize,
     sample_timeout: Option<Duration>,
+    seed: Option<u64>,
     acquisition_mode: &'static str,
     _mapped: PhantomData<fn() -> (O2, R2, OutputState, ReferenceState)>,
 }
@@ -321,6 +329,7 @@ impl<I, O, R, R2, ReferenceState> RunBuilderConfigured<I, O, R, O, R2, Unmapped,
             trial_count: self.trial_count,
             concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
+            seed: self.seed,
             acquisition_mode: self.acquisition_mode,
             _mapped: PhantomData,
         }
@@ -343,6 +352,7 @@ impl<I, O, R, O2, OutputState> RunBuilderConfigured<I, O, R, O2, R, OutputState,
             trial_count: self.trial_count,
             concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
+            seed: self.seed,
             acquisition_mode: self.acquisition_mode,
             _mapped: PhantomData,
         }
@@ -368,6 +378,7 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
             trial_count: self.trial_count,
             concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
+            seed: self.seed,
             acquisition_mode: self.acquisition_mode,
             _mapped: PhantomData,
         }
@@ -391,6 +402,7 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
             trial_count: self.trial_count,
             concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
+            seed: self.seed,
             acquisition_mode: self.acquisition_mode,
             _mapped: PhantomData,
         }
@@ -431,6 +443,11 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
 
     pub fn sample_timeout(mut self, sample_timeout: Duration) -> Self {
         self.sample_timeout = Some(sample_timeout);
+        self
+    }
+
+    pub fn seed(mut self, seed: u64) -> Self {
+        self.seed = Some(seed);
         self
     }
 
@@ -494,6 +511,99 @@ fn looks_like_generated_sample_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+fn fingerprint_dataset<I, R>(dataset: &Dataset<I, R>) -> String {
+    let mut fingerprint = StableFingerprint::default();
+
+    fingerprint.write_bytes(canonical_metadata_json(&dataset.metadata).as_bytes());
+
+    for sample in &dataset.samples {
+        fingerprint.write_bytes(sample.id.as_bytes());
+        fingerprint.write_bytes(canonical_metadata_json(&sample.metadata).as_bytes());
+    }
+
+    fingerprint.finish_hex()
+}
+
+fn fingerprint_definitions(definitions: &[ScoreDefinition]) -> String {
+    let mut entries = definitions
+        .iter()
+        .map(|definition| {
+            format!(
+                "{}:{}",
+                definition.name,
+                match definition.direction {
+                    Some(crate::Direction::Maximize) => "maximize",
+                    Some(crate::Direction::Minimize) => "minimize",
+                    None => "none",
+                }
+            )
+        })
+        .collect::<Vec<_>>();
+    entries.sort();
+
+    let mut fingerprint = StableFingerprint::default();
+    for entry in entries {
+        fingerprint.write_bytes(entry.as_bytes());
+    }
+
+    fingerprint.finish_hex()
+}
+
+fn canonical_metadata_json(metadata: &HashMap<String, Value>) -> String {
+    let mut entries = metadata.iter().collect::<Vec<_>>();
+    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+    let mut object = Map::new();
+    for (key, value) in entries {
+        object.insert(key.clone(), canonicalize_value(value));
+    }
+
+    serde_json::to_string(&Value::Object(object)).expect("metadata maps are always serializable")
+}
+
+fn canonicalize_value(value: &Value) -> Value {
+    match value {
+        Value::Object(object) => {
+            let mut entries = object.iter().collect::<Vec<_>>();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+            let mut canonical = Map::new();
+            for (key, value) in entries {
+                canonical.insert(key.clone(), canonicalize_value(value));
+            }
+
+            Value::Object(canonical)
+        }
+        Value::Array(values) => Value::Array(values.iter().map(canonicalize_value).collect()),
+        _ => value.clone(),
+    }
+}
+
+#[derive(Default)]
+struct StableFingerprint {
+    state: u64,
+}
+
+impl StableFingerprint {
+    fn write_bytes(&mut self, bytes: &[u8]) {
+        const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+        const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+        if self.state == 0 {
+            self.state = OFFSET_BASIS;
+        }
+
+        for byte in bytes {
+            self.state ^= u64::from(*byte);
+            self.state = self.state.wrapping_mul(PRIME);
+        }
+    }
+
+    fn finish_hex(&self) -> String {
+        format!("{:016x}", self.state)
+    }
+}
+
 impl<I: 'static, O: 'static, R: 'static> RunBuilderWithTargets<I, O, R, O, R, Unmapped, Unmapped> {
     pub fn build(self) -> Result<Run<I, O, R>, RunBuildError> {
         let definitions = self.validate()?;
@@ -508,6 +618,7 @@ impl<I: 'static, O: 'static, R: 'static> RunBuilderWithTargets<I, O, R, O, R, Un
             trial_count: self.trial_count,
             concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
+            seed: self.seed,
             acquisition_mode: self.acquisition_mode,
         })
     }
@@ -533,6 +644,7 @@ impl<I: 'static, O: 'static, R: 'static, O2: 'static>
             trial_count: self.trial_count,
             concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
+            seed: self.seed,
             acquisition_mode: self.acquisition_mode,
         })
     }
@@ -558,6 +670,7 @@ impl<I: 'static, O: 'static, R: 'static, R2: 'static>
             trial_count: self.trial_count,
             concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
+            seed: self.seed,
             acquisition_mode: self.acquisition_mode,
         })
     }
@@ -587,6 +700,7 @@ impl<I: 'static, O: 'static, R: 'static, O2: 'static, R2: 'static>
             trial_count: self.trial_count,
             concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
+            seed: self.seed,
             acquisition_mode: self.acquisition_mode,
         })
     }

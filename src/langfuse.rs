@@ -181,6 +181,9 @@ mod tests {
         RunResult {
             metadata: RunMetadata {
                 run_id: "run-abc".into(),
+                seed: None,
+                dataset_fingerprint: "dataset-langfuse-tests".into(),
+                scorer_fingerprint: "scorers-langfuse-tests".into(),
                 started_at: now,
                 completed_at: now,
                 duration: Duration::from_secs(1),

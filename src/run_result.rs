@@ -29,6 +29,9 @@ pub struct SampleResult {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunMetadata {
     pub run_id: String,
+    pub seed: Option<u64>,
+    pub dataset_fingerprint: String,
+    pub scorer_fingerprint: String,
     pub started_at: DateTime<Utc>,
     pub completed_at: DateTime<Utc>,
     pub duration: Duration,

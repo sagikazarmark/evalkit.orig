@@ -14,6 +14,9 @@ fn make_result() -> RunResult {
     RunResult {
         metadata: RunMetadata {
             run_id: "run-test".into(),
+            seed: None,
+            dataset_fingerprint: "dataset-langfuse".into(),
+            scorer_fingerprint: "scorers-langfuse".into(),
             started_at: now,
             completed_at: now,
             duration: Duration::from_secs(1),

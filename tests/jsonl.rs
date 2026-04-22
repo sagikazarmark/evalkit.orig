@@ -12,6 +12,9 @@ fn run_result() -> RunResult {
     RunResult {
         metadata: RunMetadata {
             run_id: "run-456".to_owned(),
+            seed: Some(11),
+            dataset_fingerprint: "dataset-jsonl".to_owned(),
+            scorer_fingerprint: "scorers-jsonl".to_owned(),
             started_at: Utc.with_ymd_and_hms(2026, 4, 3, 12, 0, 0).unwrap(),
             completed_at: Utc.with_ymd_and_hms(2026, 4, 3, 12, 0, 5).unwrap(),
             duration: Duration::from_secs(5),

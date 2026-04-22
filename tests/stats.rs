@@ -10,6 +10,9 @@ use evalkit::{
 fn metadata(score_definitions: Vec<ScoreDefinition>, trial_count: usize) -> RunMetadata {
     RunMetadata {
         run_id: "run-123".to_owned(),
+        seed: None,
+        dataset_fingerprint: "dataset-stats".to_owned(),
+        scorer_fingerprint: "scorers-stats".to_owned(),
         started_at: Utc.with_ymd_and_hms(2026, 4, 3, 12, 0, 0).unwrap(),
         completed_at: Utc.with_ymd_and_hms(2026, 4, 3, 12, 0, 5).unwrap(),
         duration: Duration::from_secs(5),
