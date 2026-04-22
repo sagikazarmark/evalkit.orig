@@ -15,16 +15,18 @@ Recommended build order:
 
 ## Current State Summary
 
-The workspace is now mostly split for Phase 0:
+The workspace is now split for Phase 0:
 - Workspace members include `evalkit`, `evalkit-cli`, `evalkit-providers`, `evalkit-exporters-langfuse`, `evalkit-scorers-text`, `evalkit-otel`, `evalkit-scorers-llm`, `evalkit-scorers-rag`, and `evalkit-scorers-embed`
 - OTel support now lives in `evalkit-otel`, including the `Observe` acquisition path
+- Langfuse export now lives in `evalkit-exporters-langfuse`
+- Deterministic text scorers now live in `evalkit-scorers-text`
 - There is no tracked `README`, but there is now a roadmap plus scorer/integration backlog docs under `docs/`
 
 ## Phase 0 - API Freeze And Kernel Features
 
 ### 0(a) Public API audit
 
-Status: partial
+Status: complete
 
 Already present:
 - Core kernel types are exported from `src/lib.rs`
@@ -59,12 +61,11 @@ Current state:
 - `evalkit-otel` now owns Jaeger, OTLP, and `Observe`
 
 Gap to roadmap:
-- The umbrella crate still keeps the deterministic scorer implementations in-kernel for compatibility during the split
-- The umbrella crate still carries transitional Langfuse and LLM-judge modules during the split
+- The `evalkit-scorers-llm` crate is still a Phase 1 skeleton rather than the final anyllm-backed implementation
 
 ### 0(d) Kernel features
 
-Status: partial
+Status: complete
 
 Already present:
 - `TrialResult` records per-trial duration
@@ -77,7 +78,7 @@ Already present:
 
 Remaining work:
 - No major kernel feature gaps remain in the current Phase 0(d) checklist.
-- Phase 0 exit still depends on release and split cleanup from 0(c), including the remaining umbrella-crate compatibility layers.
+- Phase 0 exit now depends on releasing the frozen kernel API as `evalkit` 0.2.0.
 
 ## Phase 1 - Polyglot Protocol And Run-Log Schema
 

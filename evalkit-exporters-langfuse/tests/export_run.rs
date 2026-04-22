@@ -1,10 +1,6 @@
-#![cfg(feature = "langfuse")]
-
 use chrono::Utc;
-use evalkit::{
-    LangfuseConfig, RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, TrialResult,
-    export_run,
-};
+use evalkit::{RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, TrialResult};
+use evalkit_exporters_langfuse::{LangfuseConfig, export_run};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
