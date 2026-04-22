@@ -59,7 +59,6 @@ Current state:
 - `evalkit-otel` now exists for Jaeger and OTLP backends, while the umbrella crate still carries the `Observe` compatibility path
 
 Gap to roadmap:
-- No skeleton crates for `evalkit-scorers-llm`, `evalkit-scorers-rag`, or `evalkit-scorers-embed`
 - The umbrella crate still keeps the deterministic scorer implementations in-kernel for compatibility during the split
 - The umbrella crate still carries transitional feature-gated Langfuse and OTel modules during the split
 

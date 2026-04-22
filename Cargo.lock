@@ -298,6 +298,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "evalkit-scorers-embed"
+version = "0.1.0"
+
+[[package]]
+name = "evalkit-scorers-llm"
+version = "0.1.0"
+
+[[package]]
+name = "evalkit-scorers-rag"
+version = "0.1.0"
+
+[[package]]
 name = "evalkit-scorers-text"
 version = "0.1.0"
 dependencies = [
