@@ -255,6 +255,46 @@ fn compare_uses_paired_t_test_and_marks_non_significant_deltas() {
 }
 
 #[test]
+fn compare_falls_back_to_wilcoxon_for_degenerate_paired_numeric_deltas() {
+    let baseline = RunResult {
+        metadata: metadata("baseline", vec![ScoreDefinition::maximize("accuracy")], 4),
+        samples: vec![sample(
+            "sample-a",
+            vec![
+                trial(vec![("accuracy", Score::Numeric(0.10))], 0),
+                trial(vec![("accuracy", Score::Numeric(0.20))], 1),
+                trial(vec![("accuracy", Score::Numeric(0.30))], 2),
+                trial(vec![("accuracy", Score::Numeric(0.40))], 3),
+            ],
+        )],
+    };
+
+    let candidate = RunResult {
+        metadata: metadata("candidate", vec![ScoreDefinition::maximize("accuracy")], 4),
+        samples: vec![sample(
+            "sample-a",
+            vec![
+                trial(vec![("accuracy", Score::Numeric(0.20))], 0),
+                trial(vec![("accuracy", Score::Numeric(0.30))], 1),
+                trial(vec![("accuracy", Score::Numeric(0.40))], 2),
+                trial(vec![("accuracy", Score::Numeric(0.50))], 3),
+            ],
+        )],
+    };
+
+    let comparison = compare(&baseline, &candidate, CompareConfig::default());
+    let accuracy = comparison
+        .shared_scorers
+        .get("accuracy")
+        .expect("accuracy comparison");
+
+    assert_eq!(accuracy.test_used.as_deref(), Some("wilcoxon_signed_rank"));
+    assert_close(accuracy.aggregate_delta, 0.10);
+    assert_eq!(accuracy.significant, Some(false));
+    assert_close(accuracy.p_value.expect("p-value should exist"), 0.125);
+}
+
+#[test]
 fn compare_applies_the_configured_confidence_level_to_significance() {
     let baseline = RunResult {
         metadata: metadata("baseline", vec![ScoreDefinition::maximize("accuracy")], 2),

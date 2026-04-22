@@ -77,7 +77,6 @@ Already present:
 
 Missing or incomplete:
 - No automatic population of judge model pins beyond explicit builder inputs
-- No explicit Wilcoxon fallback for paired comparisons
 
 ## Phase 1 - Polyglot Protocol And Run-Log Schema
 

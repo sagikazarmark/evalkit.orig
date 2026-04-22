@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
@@ -69,7 +70,7 @@ pub fn compare(baseline: &RunResult, candidate: &RunResult, config: CompareConfi
         .map(|scorer_name| {
             let baseline_scores = collect_scores(baseline, &scorer_name);
             let candidate_scores = collect_scores(candidate, &scorer_name);
-            let p_value =
+            let (p_value, test_used) =
                 significance_test(&baseline_scores.aggregate, &candidate_scores.aggregate);
             let significant = p_value.map(|value| value <= 1.0 - confidence_level);
 
@@ -95,9 +96,6 @@ pub fn compare(baseline: &RunResult, candidate: &RunResult, config: CompareConfi
                         (sample_id, sample_comparison)
                     })
                     .collect();
-
-            let test_used = test_name(&baseline_scores.aggregate, &candidate_scores.aggregate);
-
             (
                 scorer_name,
                 ScorerComparison {
@@ -371,31 +369,26 @@ fn aggregate_delta(baseline: &ScoreBucket, candidate: &ScoreBucket) -> f64 {
     }
 }
 
-fn significance_test(baseline: &ScoreBucket, candidate: &ScoreBucket) -> Option<f64> {
+fn significance_test(
+    baseline: &ScoreBucket,
+    candidate: &ScoreBucket,
+) -> (Option<f64>, Option<String>) {
     match (baseline, candidate) {
         (ScoreBucket::Numeric(left), ScoreBucket::Numeric(right))
-        | (ScoreBucket::Metric(left), ScoreBucket::Metric(right)) => numeric_p_value(left, right),
+        | (ScoreBucket::Metric(left), ScoreBucket::Metric(right)) => {
+            numeric_significance_test(left, right)
+        }
         (ScoreBucket::Binary(left), ScoreBucket::Binary(right)) => {
-            fisher_exact_test_p_value(left, right)
+            if !left.is_empty() && !right.is_empty() {
+                (
+                    fisher_exact_test_p_value(left, right),
+                    Some("fisher_exact_test".to_owned()),
+                )
+            } else {
+                (None, None)
+            }
         }
-        _ => None,
-    }
-}
-
-fn test_name(baseline: &ScoreBucket, candidate: &ScoreBucket) -> Option<String> {
-    match (baseline, candidate) {
-        (ScoreBucket::Numeric(left), ScoreBucket::Numeric(right))
-        | (ScoreBucket::Metric(left), ScoreBucket::Metric(right))
-            if left.len() >= 2 && right.len() >= 2 =>
-        {
-            Some(numeric_test_name(left, right).to_owned())
-        }
-        (ScoreBucket::Binary(left), ScoreBucket::Binary(right))
-            if !left.is_empty() && !right.is_empty() =>
-        {
-            Some("fisher_exact_test".to_owned())
-        }
-        _ => None,
+        _ => (None, None),
     }
 }
 
@@ -458,36 +451,55 @@ fn sample_variance(values: &[f64]) -> f64 {
         / (values.len() - 1) as f64
 }
 
-fn numeric_p_value(baseline: &[f64], candidate: &[f64]) -> Option<f64> {
+fn numeric_significance_test(baseline: &[f64], candidate: &[f64]) -> (Option<f64>, Option<String>) {
+    if baseline.is_empty() || candidate.is_empty() {
+        return (None, None);
+    }
+
     if baseline.len() == candidate.len() {
-        paired_t_test_p_value(baseline, candidate)
+        paired_numeric_significance_test(baseline, candidate)
     } else {
-        welch_t_test_p_value(baseline, candidate)
+        (
+            welch_t_test_p_value(baseline, candidate),
+            if baseline.len() >= 2 && candidate.len() >= 2 {
+                Some("welch_t_test".to_owned())
+            } else {
+                None
+            },
+        )
     }
 }
 
-fn numeric_test_name<'a>(baseline: &'a [f64], candidate: &'a [f64]) -> &'a str {
-    if baseline.len() == candidate.len() {
-        "paired_t_test"
-    } else {
-        "welch_t_test"
+fn paired_numeric_significance_test(
+    baseline: &[f64],
+    candidate: &[f64],
+) -> (Option<f64>, Option<String>) {
+    let Some(deltas) = paired_deltas(baseline, candidate) else {
+        return (None, None);
+    };
+
+    if deltas.len() >= 2 && !has_effectively_zero_variance(&deltas) {
+        return (
+            paired_t_test_p_value_from_deltas(&deltas),
+            Some("paired_t_test".to_owned()),
+        );
     }
+
+    (
+        wilcoxon_signed_rank_p_value_from_deltas(&deltas),
+        Some("wilcoxon_signed_rank".to_owned()),
+    )
 }
 
-fn paired_t_test_p_value(baseline: &[f64], candidate: &[f64]) -> Option<f64> {
-    if baseline.len() != candidate.len() || baseline.len() < 2 {
+fn paired_t_test_p_value_from_deltas(deltas: &[f64]) -> Option<f64> {
+    if deltas.len() < 2 {
         return None;
     }
 
-    let deltas = baseline
-        .iter()
-        .zip(candidate.iter())
-        .map(|(left, right)| right - left)
-        .collect::<Vec<_>>();
     let mean_delta = mean(&deltas);
     let variance = sample_variance(&deltas);
 
-    if variance == 0.0 {
+    if has_effectively_zero_variance(deltas) {
         return Some(if mean_delta.abs() <= f64::EPSILON {
             1.0
         } else {
@@ -500,6 +512,119 @@ fn paired_t_test_p_value(baseline: &[f64], candidate: &[f64]) -> Option<f64> {
     let degrees_of_freedom = (deltas.len() - 1) as f64;
 
     Some((2.0 * (1.0 - student_t_cdf(t_statistic, degrees_of_freedom))).clamp(0.0, 1.0))
+}
+
+fn paired_deltas(baseline: &[f64], candidate: &[f64]) -> Option<Vec<f64>> {
+    if baseline.len() != candidate.len() {
+        return None;
+    }
+
+    Some(
+        baseline
+            .iter()
+            .zip(candidate.iter())
+            .map(|(left, right)| right - left)
+            .collect(),
+    )
+}
+
+fn has_effectively_zero_variance(values: &[f64]) -> bool {
+    sample_variance(values) <= 1e-12
+}
+
+fn wilcoxon_signed_rank_p_value_from_deltas(deltas: &[f64]) -> Option<f64> {
+    let rank_sums = wilcoxon_rank_sums(deltas)?;
+
+    if rank_sums.total_sum == 0 {
+        return Some(1.0);
+    }
+
+    let observed = rank_sums
+        .positive_sum
+        .min(rank_sums.total_sum - rank_sums.positive_sum);
+    let mut probabilities = vec![0.0; rank_sums.total_sum + 1];
+    probabilities[0] = 1.0;
+
+    for rank in rank_sums.doubled_ranks {
+        let mut next = vec![0.0; rank_sums.total_sum + 1];
+
+        for (sum, probability) in probabilities.iter().copied().enumerate() {
+            if probability == 0.0 {
+                continue;
+            }
+
+            next[sum] += probability * 0.5;
+            next[sum + rank] += probability * 0.5;
+        }
+
+        probabilities = next;
+    }
+
+    Some(
+        probabilities
+            .into_iter()
+            .enumerate()
+            .filter(|(sum, probability)| {
+                *probability > 0.0 && (*sum).min(rank_sums.total_sum - *sum) <= observed
+            })
+            .map(|(_, probability)| probability)
+            .sum::<f64>()
+            .clamp(0.0, 1.0),
+    )
+}
+
+#[derive(Debug)]
+struct WilcoxonRankSums {
+    doubled_ranks: Vec<usize>,
+    positive_sum: usize,
+    total_sum: usize,
+}
+
+fn wilcoxon_rank_sums(deltas: &[f64]) -> Option<WilcoxonRankSums> {
+    let mut ranked = deltas
+        .iter()
+        .copied()
+        .filter(|delta| delta.abs() > f64::EPSILON)
+        .map(|delta| (delta.abs(), delta > 0.0))
+        .collect::<Vec<_>>();
+
+    ranked.sort_by(|left, right| left.0.partial_cmp(&right.0).unwrap_or(Ordering::Equal));
+
+    if ranked.is_empty() {
+        return Some(WilcoxonRankSums {
+            doubled_ranks: Vec::new(),
+            positive_sum: 0,
+            total_sum: 0,
+        });
+    }
+
+    let mut doubled_ranks = Vec::with_capacity(ranked.len());
+    let mut positive_sum = 0;
+    let mut index = 0;
+
+    while index < ranked.len() {
+        let mut end = index + 1;
+        while end < ranked.len() && (ranked[end].0 - ranked[index].0).abs() <= 1e-12 {
+            end += 1;
+        }
+
+        let rank = index + end + 1;
+        for (_, positive) in &ranked[index..end] {
+            doubled_ranks.push(rank);
+            if *positive {
+                positive_sum += rank;
+            }
+        }
+
+        index = end;
+    }
+
+    let total_sum = doubled_ranks.iter().sum();
+    Some(WilcoxonRankSums {
+        doubled_ranks,
+        positive_sum,
+        total_sum,
+    })
 }
 
 fn welch_t_test_p_value(baseline: &[f64], candidate: &[f64]) -> Option<f64> {
