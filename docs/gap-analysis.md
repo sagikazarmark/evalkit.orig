@@ -91,7 +91,6 @@ Already present:
 Gaps:
 - No formal scorer plugin protocol or conformance suite
 - Current `llm_judge` uses ad hoc HTTP instead of `anyllm`
-- No OTel eval-result emitter
 
 ## Phase 2 - Streaming / Online Scoring
 

@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 pub use evalkit::{Observe, Span, SpanEvent, TraceBackend, TraceBackendError};
+use evalkit::{RunResult, Score};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -342,6 +343,168 @@ pub struct OtlpReceiver {
     store: SpanStore,
 }
 
+pub struct OtelResultEmitter {
+    namespace: String,
+}
+
+impl OtelResultEmitter {
+    pub fn new() -> Self {
+        Self {
+            namespace: String::from("evalkit"),
+        }
+    }
+
+    pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
+        self.namespace = namespace.into();
+        self
+    }
+
+    pub fn emit(&self, result: &RunResult) -> Vec<Span> {
+        let trace_id = result.metadata.run_id.clone();
+        let run_span_id = String::from("run");
+        let mut spans = Vec::with_capacity(result.samples.len() + 1);
+
+        spans.push(Span {
+            trace_id: trace_id.clone(),
+            span_id: run_span_id.clone(),
+            parent_span_id: None,
+            operation_name: String::from("eval.run"),
+            start_time: result.metadata.started_at,
+            end_time: result.metadata.completed_at,
+            attributes: self.run_attributes(result),
+            events: Vec::new(),
+        });
+
+        for (sample_index, sample) in result.samples.iter().enumerate() {
+            let mut events = Vec::new();
+
+            for trial in &sample.trials {
+                for (scorer_name, score_result) in &trial.scores {
+                    let mut attributes = HashMap::from([
+                        (self.key("scorer_name"), Value::String(scorer_name.clone())),
+                        (
+                            self.key("trial_index"),
+                            Value::from(trial.trial_index as u64),
+                        ),
+                        (
+                            self.key("trial_duration_ms"),
+                            Value::from(trial.duration.as_millis() as u64),
+                        ),
+                    ]);
+
+                    match score_result {
+                        Ok(score) => {
+                            attributes.insert(self.key("score"), score_json(score));
+                        }
+                        Err(error) => {
+                            attributes.insert(self.key("error"), Value::String(error.to_string()));
+                        }
+                    }
+
+                    events.push(SpanEvent {
+                        name: String::from("eval.score"),
+                        timestamp: result.metadata.completed_at,
+                        attributes,
+                    });
+                }
+            }
+
+            spans.push(Span {
+                trace_id: trace_id.clone(),
+                span_id: format!("sample-{}", sample_index + 1),
+                parent_span_id: Some(run_span_id.clone()),
+                operation_name: String::from("eval.sample"),
+                start_time: result.metadata.started_at,
+                end_time: result.metadata.completed_at,
+                attributes: HashMap::from([
+                    (
+                        self.key("sample_id"),
+                        Value::String(sample.sample_id.clone()),
+                    ),
+                    (
+                        self.key("trial_count"),
+                        Value::from(sample.trial_count as u64),
+                    ),
+                    (
+                        self.key("scored_count"),
+                        Value::from(sample.scored_count as u64),
+                    ),
+                    (
+                        self.key("error_count"),
+                        Value::from(sample.error_count as u64),
+                    ),
+                    (
+                        self.key("token_usage"),
+                        serde_json::to_value(&sample.token_usage).unwrap_or(Value::Null),
+                    ),
+                    (
+                        self.key("cost_usd"),
+                        serde_json::to_value(sample.cost_usd).unwrap_or(Value::Null),
+                    ),
+                ]),
+                events,
+            });
+        }
+
+        spans
+    }
+
+    fn run_attributes(&self, result: &RunResult) -> HashMap<String, Value> {
+        HashMap::from([
+            (
+                self.key("result_schema_version"),
+                Value::String(String::from("evalkit.result.v1")),
+            ),
+            (
+                self.key("run_id"),
+                Value::String(result.metadata.run_id.clone()),
+            ),
+            (
+                self.key("seed"),
+                serde_json::to_value(result.metadata.seed).unwrap_or(Value::Null),
+            ),
+            (
+                self.key("dataset_fingerprint"),
+                Value::String(result.metadata.dataset_fingerprint.clone()),
+            ),
+            (
+                self.key("scorer_fingerprint"),
+                Value::String(result.metadata.scorer_fingerprint.clone()),
+            ),
+            (
+                self.key("code_commit"),
+                serde_json::to_value(&result.metadata.code_commit).unwrap_or(Value::Null),
+            ),
+            (
+                self.key("code_fingerprint"),
+                serde_json::to_value(&result.metadata.code_fingerprint).unwrap_or(Value::Null),
+            ),
+            (
+                self.key("judge_model_pins"),
+                serde_json::to_value(&result.metadata.judge_model_pins).unwrap_or(Value::Null),
+            ),
+            (
+                self.key("trial_count"),
+                Value::from(result.metadata.trial_count as u64),
+            ),
+            (
+                self.key("acquisition_mode"),
+                Value::String(result.metadata.acquisition_mode.clone()),
+            ),
+        ])
+    }
+
+    fn key(&self, suffix: &str) -> String {
+        format!("{}.{}", self.namespace, suffix)
+    }
+}
+
+impl Default for OtelResultEmitter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OtlpReceiver {
     pub async fn start() -> Result<Self, TraceBackendError> {
         Self::start_on_port(4318).await
@@ -531,6 +694,10 @@ fn parse_unix_nanos(v: &Value) -> Result<DateTime<Utc>, ()> {
     Ok(DateTime::from_timestamp_nanos(nanos))
 }
 
+fn score_json(score: &Score) -> Value {
+    serde_json::to_value(score).unwrap_or(Value::Null)
+}
+
 #[derive(Deserialize)]
 struct OtlpTracesPayload {
     #[serde(rename = "resourceSpans", default)]
@@ -607,6 +774,7 @@ enum OtlpAnyValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evalkit::{Direction, RunMetadata, SampleResult, ScoreDefinition, TrialResult};
     use serde_json::json;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
@@ -756,6 +924,41 @@ mod tests {
 
         assert!(spans.is_empty());
         assert_eq!(requests.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn otel_result_emitter_creates_run_and_sample_spans() {
+        let emitter = OtelResultEmitter::new();
+        let result = run_result_fixture();
+
+        let spans = emitter.emit(&result);
+
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].operation_name, "eval.run");
+        assert_eq!(spans[0].attributes["evalkit.run_id"], json!("run-123"));
+        assert_eq!(spans[1].operation_name, "eval.sample");
+        assert_eq!(spans[1].parent_span_id.as_deref(), Some("run"));
+        assert_eq!(spans[1].attributes["evalkit.sample_id"], json!("sample-1"));
+    }
+
+    #[test]
+    fn otel_result_emitter_emits_score_events_for_successes_and_errors() {
+        let emitter = OtelResultEmitter::new();
+        let result = run_result_fixture();
+
+        let spans = emitter.emit(&result);
+        let sample_span = &spans[1];
+
+        assert_eq!(sample_span.events.len(), 2);
+        assert_eq!(sample_span.events[0].name, "eval.score");
+        assert!(sample_span.events.iter().any(|event| {
+            event.attributes.get("evalkit.score") == Some(&json!({"type":"binary","value":true}))
+        }));
+        assert!(
+            sample_span.events.iter().any(|event| {
+                event.attributes.get("evalkit.error") == Some(&json!("bad output"))
+            })
+        );
     }
 
     async fn post_otlp(port: u16, body: &str) {
@@ -958,6 +1161,50 @@ mod tests {
         DateTime::parse_from_rfc3339(raw)
             .unwrap()
             .with_timezone(&Utc)
+    }
+
+    fn run_result_fixture() -> RunResult {
+        RunResult {
+            metadata: RunMetadata {
+                run_id: String::from("run-123"),
+                seed: Some(7),
+                dataset_fingerprint: String::from("dataset-abc"),
+                scorer_fingerprint: String::from("scorers-abc"),
+                code_commit: Some(String::from("abc123")),
+                code_fingerprint: Some(String::from("tree:deadbeef")),
+                judge_model_pins: vec![String::from("gpt-4o@2026-04-01")],
+                started_at: parse_time("2026-04-03T10:00:00Z"),
+                completed_at: parse_time("2026-04-03T10:00:05Z"),
+                duration: Duration::from_secs(5),
+                trial_count: 1,
+                score_definitions: vec![ScoreDefinition {
+                    name: String::from("accuracy"),
+                    direction: Some(Direction::Maximize),
+                }],
+                acquisition_mode: String::from("inline"),
+            },
+            samples: vec![SampleResult {
+                sample_id: String::from("sample-1"),
+                trials: vec![TrialResult {
+                    scores: HashMap::from([
+                        (String::from("accuracy"), Ok(Score::Binary(true))),
+                        (
+                            String::from("parser"),
+                            Err(evalkit::ScorerError::internal(std::io::Error::other(
+                                "bad output",
+                            ))),
+                        ),
+                    ]),
+                    duration: Duration::from_millis(25),
+                    trial_index: 0,
+                }],
+                trial_count: 1,
+                scored_count: 1,
+                error_count: 1,
+                token_usage: Default::default(),
+                cost_usd: Some(0.002),
+            }],
+        }
     }
 
     fn http_response(status: u16, body: String) -> String {
