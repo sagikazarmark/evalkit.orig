@@ -1,3 +1,5 @@
+#[cfg(feature = "llm-judge")]
+use crate::ScorerMetadata;
 use crate::{Score, ScoreDefinition, Scorer, ScorerContext, ScorerError};
 use regex::Regex;
 #[cfg(feature = "llm-judge")]
@@ -210,6 +212,10 @@ impl Scorer<String, String, String> for LlmJudgeScorer {
 
     fn definition(&self) -> ScoreDefinition {
         ScoreDefinition::new("llm_judge")
+    }
+
+    fn metadata(&self) -> ScorerMetadata {
+        ScorerMetadata::default().judge_model_pin(self.config.model.clone())
     }
 }
 

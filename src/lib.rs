@@ -47,7 +47,7 @@ pub use sample_shapes::{
 pub use schema::RUN_RESULT_SCHEMA_VERSION;
 pub use score::Score;
 pub use score_definition::{Direction, ScoreDefinition};
-pub use scorer::Scorer;
+pub use scorer::{Scorer, ScorerMetadata};
 pub use scorer_context::ScorerContext;
 pub use scorer_error::ScorerError;
 pub use scorer_ext::{
@@ -67,8 +67,8 @@ pub mod prelude {
         Direction, IgnoreReferenceScorer, MapError, MapScoreScorer, Mapper, NotScorer, OrScorer,
         RUN_RESULT_SCHEMA_VERSION, Run, RunBuildError, RunError, RunMetadata, RunResult, RunStats,
         Sample, SampleBuildError, SampleBuilder, SampleComparison, Score, ScoreDefinition,
-        ScorerComparison, ScorerContext, ScorerError, ScorerExt, ScorerSet, ScorerStats,
-        ThenScorer, TimeoutScorer, TokenUsage, ToolCall, ToolResult, TrajectorySample,
+        ScorerComparison, ScorerContext, ScorerError, ScorerExt, ScorerMetadata, ScorerSet,
+        ScorerStats, ThenScorer, TimeoutScorer, TokenUsage, ToolCall, ToolResult, TrajectorySample,
         TrajectoryStep, WeightedScorer, compare, ignore_reference, read_jsonl, write_jsonl,
     };
     pub use crate::{ConversationSample, ConversationTurn};

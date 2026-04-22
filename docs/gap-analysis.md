@@ -75,8 +75,9 @@ Already present:
 - `SampleResult` already records `TokenUsage` and `cost_usd`
 - `Score::Structured` is available
 
-Missing or incomplete:
-- No automatic population of judge model pins beyond explicit builder inputs
+Remaining work:
+- No major kernel feature gaps remain in the current Phase 0(d) checklist.
+- Phase 0 exit still depends on release and split cleanup from 0(c), including the remaining umbrella-crate compatibility layers.
 
 ## Phase 1 - Polyglot Protocol And Run-Log Schema
 

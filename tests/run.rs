@@ -1,6 +1,6 @@
 use evalkit::{
     AcquisitionError, Direction, MapError, Run, RunBuildError, Sample, Score, ScoreDefinition,
-    Scorer, ScorerContext, ScorerError, ScorerSet,
+    Scorer, ScorerContext, ScorerError, ScorerMetadata, ScorerSet,
 };
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -96,6 +96,28 @@ impl Scorer<String, String, String> for NaNScorer {
 
     fn definition(&self) -> ScoreDefinition {
         ScoreDefinition::maximize("nan_score")
+    }
+}
+
+struct JudgePinnedScorer {
+    name: &'static str,
+    judge_model_pin: &'static str,
+}
+
+impl Scorer<String, String, String> for JudgePinnedScorer {
+    async fn score(
+        &self,
+        _ctx: &ScorerContext<'_, String, String, String>,
+    ) -> Result<Score, ScorerError> {
+        Ok(Score::Numeric(1.0))
+    }
+
+    fn definition(&self) -> ScoreDefinition {
+        ScoreDefinition::maximize(self.name)
+    }
+
+    fn metadata(&self) -> ScorerMetadata {
+        ScorerMetadata::default().judge_model_pin(self.judge_model_pin)
     }
 }
 
@@ -236,6 +258,68 @@ async fn run_metadata_auto_populates_code_identity_when_git_is_available() {
 
     assert!(result.metadata.code_commit.is_some());
     assert!(result.metadata.code_fingerprint.is_some());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_metadata_collects_judge_model_pins_from_standalone_scorers() {
+    let sample = Sample::new(String::from("prompt"), String::from("four"));
+
+    let run = Run::builder()
+        .dataset(vec![sample])
+        .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("four")) })
+        .scorer(JudgePinnedScorer {
+            name: "judge_a",
+            judge_model_pin: "gpt-4o@2026-04-01",
+        })
+        .scorer(JudgePinnedScorer {
+            name: "judge_b",
+            judge_model_pin: "claude-3.7@2026-03-01",
+        })
+        .build()
+        .unwrap();
+
+    let result = run.execute().await.unwrap();
+
+    assert_eq!(
+        result.metadata.judge_model_pins,
+        vec![
+            String::from("claude-3.7@2026-03-01"),
+            String::from("gpt-4o@2026-04-01")
+        ]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_metadata_collects_judge_model_pins_from_scorer_sets() {
+    let sample = Sample::new(String::from("prompt"), String::from("four"));
+    let scorer_set = ScorerSet::<String, String, String>::builder()
+        .scorer(JudgePinnedScorer {
+            name: "judge_a",
+            judge_model_pin: "gpt-4o@2026-04-01",
+        })
+        .scorer(JudgePinnedScorer {
+            name: "judge_b",
+            judge_model_pin: "claude-3.7@2026-03-01",
+        })
+        .build();
+
+    let run = Run::builder()
+        .dataset(vec![sample])
+        .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("four")) })
+        .scorer_set(scorer_set)
+        .judge_model_pin("gpt-4o@2026-04-01")
+        .build()
+        .unwrap();
+
+    let result = run.execute().await.unwrap();
+
+    assert_eq!(
+        result.metadata.judge_model_pins,
+        vec![
+            String::from("claude-3.7@2026-03-01"),
+            String::from("gpt-4o@2026-04-01")
+        ]
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

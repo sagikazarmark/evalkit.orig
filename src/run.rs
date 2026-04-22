@@ -399,19 +399,23 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
     where
         S: Scorer<I, O2, R2> + 'static,
     {
+        let target = ScoringTarget::from_scorer(scorer);
+        let mut judge_model_pins = self.judge_model_pins;
+        judge_model_pins.extend(target.judge_model_pins().iter().cloned());
+
         RunBuilderWithTargets {
             dataset: self.dataset,
             acquisition: self.acquisition,
             output_mapper: self.output_mapper,
             reference_mapper: self.reference_mapper,
-            targets: vec![ScoringTarget::from_scorer(scorer)],
+            targets: vec![target],
             trial_count: self.trial_count,
             concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
             seed: self.seed,
             code_commit: self.code_commit,
             code_fingerprint: self.code_fingerprint,
-            judge_model_pins: self.judge_model_pins,
+            judge_model_pins,
             acquisition_mode: self.acquisition_mode,
             _mapped: PhantomData,
         }
@@ -426,19 +430,23 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
         O2: 'static,
         R2: 'static,
     {
+        let target = ScoringTarget::from_scorer_set(scorer_set);
+        let mut judge_model_pins = self.judge_model_pins;
+        judge_model_pins.extend(target.judge_model_pins().iter().cloned());
+
         RunBuilderWithTargets {
             dataset: self.dataset,
             acquisition: self.acquisition,
             output_mapper: self.output_mapper,
             reference_mapper: self.reference_mapper,
-            targets: vec![ScoringTarget::from_scorer_set(scorer_set)],
+            targets: vec![target],
             trial_count: self.trial_count,
             concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
             seed: self.seed,
             code_commit: self.code_commit,
             code_fingerprint: self.code_fingerprint,
-            judge_model_pins: self.judge_model_pins,
+            judge_model_pins,
             acquisition_mode: self.acquisition_mode,
             _mapped: PhantomData,
         }
@@ -452,7 +460,10 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
     where
         S: Scorer<I, O2, R2> + 'static,
     {
-        self.targets.push(ScoringTarget::from_scorer(scorer));
+        let target = ScoringTarget::from_scorer(scorer);
+        self.judge_model_pins
+            .extend(target.judge_model_pins().iter().cloned());
+        self.targets.push(target);
         self
     }
 
@@ -462,8 +473,10 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
         O2: 'static,
         R2: 'static,
     {
-        self.targets
-            .push(ScoringTarget::from_scorer_set(scorer_set));
+        let target = ScoringTarget::from_scorer_set(scorer_set);
+        self.judge_model_pins
+            .extend(target.judge_model_pins().iter().cloned());
+        self.targets.push(target);
         self
     }
 
@@ -1120,6 +1133,7 @@ impl<I, O, R, O2, R2> RunExecutor<I, O, R> for FullyMappedRunExecutor<I, O, R, O
 
 struct ScoringTarget<I, O, R> {
     definitions: Vec<ScoreDefinition>,
+    judge_model_pins: Vec<String>,
     executor: Box<dyn TargetExecutor<I, O, R>>,
 }
 
@@ -1129,8 +1143,12 @@ impl<I, O, R> ScoringTarget<I, O, R> {
         S: Scorer<I, O, R> + 'static,
     {
         let definition = scorer.definition();
+        let mut judge_model_pins = scorer.metadata().judge_model_pins;
+        judge_model_pins.sort();
+        judge_model_pins.dedup();
         Self {
             definitions: vec![definition.clone()],
+            judge_model_pins,
             executor: Box::new(SingleScorerTarget { scorer, definition }),
         }
     }
@@ -1143,8 +1161,13 @@ impl<I, O, R> ScoringTarget<I, O, R> {
     {
         Self {
             definitions: scorer_set.definitions().to_vec(),
+            judge_model_pins: scorer_set.judge_model_pins().to_vec(),
             executor: Box::new(ScorerSetTarget { scorer_set }),
         }
+    }
+
+    fn judge_model_pins(&self) -> &[String] {
+        &self.judge_model_pins
     }
 }
 

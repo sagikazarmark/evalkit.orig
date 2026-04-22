@@ -1,15 +1,42 @@
 use crate::{Score, ScoreDefinition, ScorerContext, ScorerError};
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ScorerMetadata {
+    pub judge_model_pins: Vec<String>,
+}
+
+impl ScorerMetadata {
+    pub fn judge_model_pin(mut self, judge_model_pin: impl Into<String>) -> Self {
+        self.judge_model_pins.push(judge_model_pin.into());
+        self
+    }
+
+    pub fn judge_model_pins<P>(mut self, judge_model_pins: P) -> Self
+    where
+        P: IntoIterator,
+        P::Item: Into<String>,
+    {
+        self.judge_model_pins
+            .extend(judge_model_pins.into_iter().map(Into::into));
+        self
+    }
+}
+
 #[allow(async_fn_in_trait)]
 pub trait Scorer<I, O, R = ()>: Send + Sync {
     async fn score(&self, ctx: &ScorerContext<'_, I, O, R>) -> Result<Score, ScorerError>;
 
     fn definition(&self) -> ScoreDefinition;
+
+    fn metadata(&self) -> ScorerMetadata {
+        ScorerMetadata::default()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Scorer;
+    use super::{Scorer, ScorerMetadata};
     use crate::{Direction, Score, ScoreDefinition, ScorerContext, ScorerError};
     use std::error::Error;
     use std::fmt::{self, Display, Formatter};
@@ -120,5 +147,12 @@ mod tests {
         let score = scorer.score(&ctx).await.unwrap();
 
         assert_eq!(score, Score::Binary(true));
+    }
+
+    #[test]
+    fn scorer_metadata_defaults_to_no_judge_model_pins() {
+        let scorer = ContainsScorer;
+
+        assert_eq!(scorer.metadata(), ScorerMetadata::default());
     }
 }

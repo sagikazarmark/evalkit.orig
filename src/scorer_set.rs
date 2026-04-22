@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
-use crate::{MapError, Mapper, Score, ScoreDefinition, Scorer, ScorerContext, ScorerError};
+use crate::{
+    MapError, Mapper, Score, ScoreDefinition, Scorer, ScorerContext, ScorerError, ScorerMetadata,
+};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::future::Future;
@@ -13,6 +15,7 @@ type ScoreResults = Vec<(ScoreDefinition, Result<Score, ScorerError>)>;
 
 pub struct ScorerSet<I, O, R = ()> {
     definitions: Vec<ScoreDefinition>,
+    judge_model_pins: Vec<String>,
     executor: Box<dyn ScorerSetExecutor<I, O, R>>,
 }
 
@@ -27,6 +30,10 @@ impl<I, O, R> ScorerSet<I, O, R> {
 
     pub(crate) fn definitions(&self) -> &[ScoreDefinition] {
         &self.definitions
+    }
+
+    pub(crate) fn judge_model_pins(&self) -> &[String] {
+        &self.judge_model_pins
     }
 
     pub(crate) async fn score(
@@ -137,9 +144,11 @@ impl<I: 'static, O: 'static, R: 'static>
 {
     pub fn build(self) -> ScorerSet<I, O, R> {
         let definitions = collect_definitions(&self.scorers);
+        let judge_model_pins = collect_judge_model_pins(&self.scorers);
 
         ScorerSet {
             definitions,
+            judge_model_pins,
             executor: Box::new(RawExecutor {
                 scorers: self.scorers,
             }),
@@ -152,11 +161,13 @@ impl<I: 'static, O: 'static, R: 'static, O2: 'static>
 {
     pub fn build(self) -> ScorerSet<I, O, R> {
         let definitions = collect_definitions(&self.scorers);
+        let judge_model_pins = collect_judge_model_pins(&self.scorers);
         let output_mapper = self
             .output_mapper
             .expect("output mapper must exist for mapped scorer sets");
         ScorerSet {
             definitions,
+            judge_model_pins,
             executor: Box::new(OutputMappedExecutor {
                 output_mapper,
                 scorers: self.scorers,
@@ -170,11 +181,13 @@ impl<I: 'static, O: 'static, R: 'static, R2: 'static>
 {
     pub fn build(self) -> ScorerSet<I, O, R> {
         let definitions = collect_definitions(&self.scorers);
+        let judge_model_pins = collect_judge_model_pins(&self.scorers);
         let reference_mapper = self
             .reference_mapper
             .expect("reference mapper must exist for mapped scorer sets");
         ScorerSet {
             definitions,
+            judge_model_pins,
             executor: Box::new(ReferenceMappedExecutor {
                 reference_mapper,
                 scorers: self.scorers,
@@ -188,6 +201,7 @@ impl<I: 'static, O: 'static, R: 'static, O2: 'static, R2: 'static>
 {
     pub fn build(self) -> ScorerSet<I, O, R> {
         let definitions = collect_definitions(&self.scorers);
+        let judge_model_pins = collect_judge_model_pins(&self.scorers);
         let output_mapper = self
             .output_mapper
             .expect("output mapper must exist for mapped scorer sets");
@@ -196,6 +210,7 @@ impl<I: 'static, O: 'static, R: 'static, O2: 'static, R2: 'static>
             .expect("reference mapper must exist for mapped scorer sets");
         ScorerSet {
             definitions,
+            judge_model_pins,
             executor: Box::new(FullyMappedExecutor {
                 output_mapper,
                 reference_mapper,
@@ -318,6 +333,16 @@ fn collect_definitions<I, O, R>(scorers: &[ScorerEntry<I, O, R>]) -> Vec<ScoreDe
         .collect()
 }
 
+fn collect_judge_model_pins<I, O, R>(scorers: &[ScorerEntry<I, O, R>]) -> Vec<String> {
+    let mut judge_model_pins = scorers
+        .iter()
+        .flat_map(|scorer| scorer.metadata.judge_model_pins.iter().cloned())
+        .collect::<Vec<_>>();
+    judge_model_pins.sort();
+    judge_model_pins.dedup();
+    judge_model_pins
+}
+
 async fn score_entries<I, O, R>(
     scorers: &[ScorerEntry<I, O, R>],
     ctx: &ScorerContext<'_, I, O, R>,
@@ -355,6 +380,7 @@ fn mapper_failure_results<I, O, R>(
 
 struct ScorerEntry<I, O, R> {
     definition: ScoreDefinition,
+    metadata: ScorerMetadata,
     scorer: Box<dyn ErasedScorer<I, O, R>>,
 }
 
@@ -365,6 +391,7 @@ impl<I, O, R> ScorerEntry<I, O, R> {
     {
         Self {
             definition: scorer.definition(),
+            metadata: scorer.metadata(),
             scorer: Box::new(scorer),
         }
     }
