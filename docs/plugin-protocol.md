@@ -7,6 +7,7 @@ Current status:
 - Scorer plugins support a versioned handshake.
 - Structured plugin error payloads are preserved for both kinds.
 - Both plugin kinds use the canonical v1 request/response envelope.
+- A reference Python shim now lives under `python/evalkit_plugin/`.
 
 ## Scope
 
@@ -191,5 +192,8 @@ The array form is preferred when arguments contain spaces.
 - plugin kind
 - protocol schema version
 - response envelope shape
+
+Reference implementations:
+- Python: `python/evalkit_plugin/`
 
 This document is the source of truth for the protocol implemented by the acquisition path today.

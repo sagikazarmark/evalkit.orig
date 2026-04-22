@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evalkit-plugin"
+version = "0.1.0"
+description = "Reference Python shims for the evalkit subprocess plugin protocol"
+requires-python = ">=3.10"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

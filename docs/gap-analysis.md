@@ -83,7 +83,7 @@ Already present:
 - `evalkit-otel` already contains the OTLP receiver and the `Observe` acquisition path
 
 Gaps:
-- No reference Python or TypeScript plugin shims yet
+- No reference TypeScript plugin shim yet
 - `evalkit-scorers-llm` is still a skeleton and does not yet ship the anyllm-backed judge primitive
 
 ## Phase 2 - Streaming / Online Scoring
