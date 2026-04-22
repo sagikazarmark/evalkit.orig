@@ -44,10 +44,51 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
-    let labels = normalize_entries("labels", labels)?;
-    let prompt = build_llm_classifier_prompt(&labels, instructions.into());
+    let labels = normalize_classifier_labels(labels.into_iter().map(ClassifierLabel::new))?;
 
-    Ok(LlmJudge::new(provider, model, prompt, LlmJudgeOutput::Label).named("llm_classifier"))
+    Ok(llm_classifier_with_normalized_labels(
+        provider,
+        model,
+        labels,
+        instructions.into(),
+    ))
+}
+
+/// Creates a closed-set classifier with richer per-label descriptions.
+pub fn llm_classifier_with_labels<P, I>(
+    provider: P,
+    model: impl Into<String>,
+    labels: I,
+    instructions: impl Into<String>,
+) -> Result<LlmJudge, LlmJudgeBuildError>
+where
+    P: ChatProvider + 'static,
+    P::Stream: 'static,
+    I: IntoIterator<Item = ClassifierLabel>,
+{
+    let labels = normalize_classifier_labels(labels)?;
+
+    Ok(llm_classifier_with_normalized_labels(
+        provider,
+        model,
+        labels,
+        instructions.into(),
+    ))
+}
+
+fn llm_classifier_with_normalized_labels<P>(
+    provider: P,
+    model: impl Into<String>,
+    labels: Vec<ClassifierLabel>,
+    instructions: String,
+) -> LlmJudge
+where
+    P: ChatProvider + 'static,
+    P::Stream: 'static,
+{
+    let prompt = build_llm_classifier_prompt(&labels, instructions);
+
+    LlmJudge::new(provider, model, prompt, LlmJudgeOutput::Label).named("llm_classifier")
 }
 
 /// Creates a first-pass G-Eval scorer backed by `LlmJudge`.
@@ -193,6 +234,28 @@ impl From<String> for PromptTemplate {
 impl From<&str> for PromptTemplate {
     fn from(value: &str) -> Self {
         Self::new(value)
+    }
+}
+
+/// Closed-set label definition for `llm_classifier`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ClassifierLabel {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+impl ClassifierLabel {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            description: None,
+        }
+    }
+
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
     }
 }
 
@@ -660,6 +723,7 @@ impl Error for LlmJudgeConfigurationError {}
 pub enum LlmJudgeBuildError {
     EmptyEntries { field: &'static str },
     BlankEntry { field: &'static str, index: usize },
+    DuplicateEntry { field: &'static str, value: String },
 }
 
 impl Display for LlmJudgeBuildError {
@@ -669,16 +733,20 @@ impl Display for LlmJudgeBuildError {
             Self::BlankEntry { field, index } => {
                 write!(f, "{field}[{index}] must not be blank")
             }
+            Self::DuplicateEntry { field, value } => {
+                write!(f, "{field} must not contain duplicate entry '{value}'")
+            }
         }
     }
 }
 
 impl Error for LlmJudgeBuildError {}
 
-fn build_llm_classifier_prompt(labels: &[String], instructions: String) -> PromptTemplate {
-    let labels_json = serde_json::to_string(labels).expect("labels serialize into JSON array");
+fn build_llm_classifier_prompt(labels: &[ClassifierLabel], instructions: String) -> PromptTemplate {
+    let labels_json =
+        serde_json::to_string(labels).expect("labels serialize into JSON array of objects");
     let prompt = LLM_CLASSIFIER_PROMPT_TEMPLATE
-        .replace("{{labels_bullets}}", &render_bullet_list(labels))
+        .replace("{{labels_bullets}}", &render_classifier_labels(labels))
         .replace("{{labels_json}}", &labels_json)
         .replace("{{instructions}}", instructions.trim());
 
@@ -742,12 +810,69 @@ where
     Ok(normalized)
 }
 
-fn render_bullet_list(entries: &[String]) -> String {
+fn normalize_classifier_labels<I>(labels: I) -> Result<Vec<ClassifierLabel>, LlmJudgeBuildError>
+where
+    I: IntoIterator<Item = ClassifierLabel>,
+{
+    let mut normalized = Vec::new();
+
+    for (index, label) in labels.into_iter().enumerate() {
+        let name = label.label.trim();
+
+        if name.is_empty() {
+            return Err(LlmJudgeBuildError::BlankEntry {
+                field: "labels",
+                index,
+            });
+        }
+
+        if normalized
+            .iter()
+            .any(|existing: &ClassifierLabel| existing.label == name)
+        {
+            return Err(LlmJudgeBuildError::DuplicateEntry {
+                field: "labels",
+                value: name.to_owned(),
+            });
+        }
+
+        let description = match label.description {
+            Some(description) => {
+                let trimmed = description.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_owned())
+                }
+            }
+            None => None,
+        };
+
+        normalized.push(ClassifierLabel {
+            label: name.to_owned(),
+            description,
+        });
+    }
+
+    if normalized.is_empty() {
+        return Err(LlmJudgeBuildError::EmptyEntries { field: "labels" });
+    }
+
+    Ok(normalized)
+}
+
+fn render_classifier_labels(labels: &[ClassifierLabel]) -> String {
     let mut rendered = String::new();
 
-    for entry in entries {
+    for label in labels {
         rendered.push_str("- ");
-        rendered.push_str(entry);
+        rendered.push_str(&label.label);
+
+        if let Some(description) = &label.description {
+            rendered.push_str(": ");
+            rendered.push_str(description);
+        }
+
         rendered.push('\n');
     }
 
@@ -769,8 +894,8 @@ fn render_numbered_list(entries: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        LlmJudgeBuildError, LlmJudgeOutput, PromptTemplate, g_eval, g_eval_with_steps,
-        llm_classifier, llm_judge,
+        ClassifierLabel, LlmJudgeBuildError, LlmJudgeOutput, PromptTemplate, g_eval,
+        g_eval_with_steps, llm_classifier, llm_classifier_with_labels, llm_judge,
     };
     use anyllm::{
         ChatCapability, ChatResponseBuilder, Error as AnyLlmError, MockProvider, ResponseFormat,
@@ -979,8 +1104,51 @@ mod tests {
         };
         assert!(rendered.contains("- approve"));
         assert!(rendered.contains("- reject"));
-        assert!(rendered.contains("[\"approve\",\"reject\"]"));
+        assert!(rendered.contains("[{\"label\":\"approve\"},{\"label\":\"reject\"}]"));
         assert!(rendered.contains("Classify whether the answer should be accepted."));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn llm_classifier_with_labels_renders_descriptions() {
+        let provider = MockProvider::with_response(
+            ChatResponseBuilder::new()
+                .text(r#"{"label":"reject"}"#)
+                .build(),
+        )
+        .with_supported_chat_capabilities([ChatCapability::StructuredOutput]);
+
+        let scorer = llm_classifier_with_labels(
+            provider.clone(),
+            "judge-model",
+            [
+                ClassifierLabel::new("approve")
+                    .description("Use when the answer is correct and grounded."),
+                ClassifierLabel::new("reject")
+                    .description("Use when the answer is wrong or unsupported."),
+            ],
+            "Classify whether the answer should be accepted.",
+        )
+        .unwrap();
+
+        let input = "question".to_string();
+        let output = "answer".to_string();
+        let reference = "gold".to_string();
+        let ctx = ScorerContext::new(&input, &output, Some(&reference));
+
+        let score = scorer.score(&ctx).await.unwrap();
+
+        assert_eq!(score, Score::Label("reject".to_string()));
+
+        let request = provider.last_request().unwrap();
+        let user = request.messages[0].as_user().unwrap();
+        let UserContent::Text(rendered) = user.content else {
+            panic!("expected text user content")
+        };
+        assert!(rendered.contains("- approve: Use when the answer is correct and grounded."));
+        assert!(rendered.contains("- reject: Use when the answer is wrong or unsupported."));
+        assert!(
+            rendered.contains("\"description\":\"Use when the answer is wrong or unsupported.\"")
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1098,6 +1266,23 @@ mod tests {
             LlmJudgeBuildError::BlankEntry {
                 field: "criteria",
                 index: 1,
+            }
+        );
+
+        assert_eq!(
+            llm_classifier_with_labels(
+                MockProvider::empty(),
+                "judge-model",
+                [
+                    ClassifierLabel::new("approve"),
+                    ClassifierLabel::new("approve").description("duplicate"),
+                ],
+                "Classify the answer.",
+            )
+            .unwrap_err(),
+            LlmJudgeBuildError::DuplicateEntry {
+                field: "labels",
+                value: "approve".to_string(),
             }
         );
     }

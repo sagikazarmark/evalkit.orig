@@ -3,10 +3,10 @@ You are a strict evaluation classifier.
 Task:
 {{instructions}}
 
-Allowed labels:
+Allowed label definitions:
 {{labels_bullets}}
 
-Allowed labels JSON:
+Allowed label definitions JSON:
 {{labels_json}}
 
 Classify the candidate response into exactly one allowed label.
