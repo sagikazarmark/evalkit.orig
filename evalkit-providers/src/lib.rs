@@ -184,8 +184,6 @@ impl Acquisition<String, String> for HttpAcquisition {
 pub struct SubprocessAcquisition {
     program: String,
     args: Vec<String>,
-    input_field: String,
-    output_field: String,
     timeout: Duration,
 }
 
@@ -196,25 +194,19 @@ pub struct SubprocessScorer {
 }
 
 impl SubprocessAcquisition {
-    pub fn new(
-        program: impl Into<String>,
-        args: Vec<String>,
-        input_field: impl Into<String>,
-        output_field: impl Into<String>,
-        timeout: Duration,
-    ) -> Self {
+    pub fn new(program: impl Into<String>, args: Vec<String>, timeout: Duration) -> Self {
         Self {
             program: program.into(),
             args,
-            input_field: input_field.into(),
-            output_field: output_field.into(),
             timeout,
         }
     }
 
     async fn run(&self, input: &String) -> Result<String, AcquisitionError> {
-        let input_json = serde_json::to_string(&json!({ &self.input_field: input }))
-            .map_err(|source| AcquisitionError::ExecutionFailed(Box::new(source)))?;
+        let input_json = serde_json::to_string(&AcquisitionPluginRequest {
+            input: input.clone(),
+        })
+        .map_err(|source| AcquisitionError::ExecutionFailed(Box::new(source)))?;
 
         let mut child = TokioCommand::new(&self.program)
             .args(&self.args)
@@ -237,46 +229,51 @@ impl SubprocessAcquisition {
 
         let stdout = child.stdout.take().expect("stdout was piped");
         let mut reader = TokioBufReader::new(stdout);
-        let mut line = String::new();
+        let mut handshake_line = String::new();
         reader
-            .read_line(&mut line)
+            .read_line(&mut handshake_line)
             .await
             .map_err(|source| AcquisitionError::ExecutionFailed(Box::new(source)))?;
 
-        if line.trim().is_empty() {
+        if handshake_line.trim().is_empty() {
             return Err(AcquisitionError::ExecutionFailed(Box::new(
                 EmptyProcessOutput,
             )));
         }
 
-        if let Some(handshake) = parse_plugin_handshake(line.trim()).map_err(protocol_failure)? {
-            validate_plugin_handshake(&handshake, PluginKind::Acquisition)
-                .map_err(protocol_failure)?;
+        let handshake = parse_plugin_handshake(handshake_line.trim())
+            .map_err(protocol_failure)?
+            .ok_or_else(|| {
+                AcquisitionError::ExecutionFailed(Box::new(PluginProtocolError(String::from(
+                    "acquisition plugin did not emit a handshake line",
+                ))))
+            })?;
+        validate_plugin_handshake(&handshake, PluginKind::Acquisition).map_err(protocol_failure)?;
 
-            line.clear();
-            reader
-                .read_line(&mut line)
-                .await
-                .map_err(|source| AcquisitionError::ExecutionFailed(Box::new(source)))?;
-        }
+        let mut response_line = String::new();
+        reader
+            .read_line(&mut response_line)
+            .await
+            .map_err(|source| AcquisitionError::ExecutionFailed(Box::new(source)))?;
 
         let _ = child.wait().await;
 
-        let trimmed = line.trim();
+        let trimmed = response_line.trim();
         if trimmed.is_empty() {
             return Err(AcquisitionError::ExecutionFailed(Box::new(
                 EmptyProcessOutput,
             )));
         }
 
-        if let Some(response) = parse_plugin_response(trimmed).map_err(protocol_failure)? {
-            extract_plugin_response_output(response).map_err(response_failure_to_acquisition)
-        } else {
-            let payload: Value = serde_json::from_str(trimmed)
-                .map_err(|source| AcquisitionError::ExecutionFailed(Box::new(source)))?;
+        let response = parse_plugin_response(trimmed)
+            .map_err(protocol_failure)?
+            .ok_or_else(|| {
+                AcquisitionError::ExecutionFailed(Box::new(PluginProtocolError(String::from(
+                    "acquisition plugin did not emit a response line",
+                ))))
+            })?;
 
-            extract_string_field(&payload, &self.output_field)
-        }
+        extract_plugin_response_output(response).map_err(response_failure_to_acquisition)
     }
 }
 
@@ -755,8 +752,6 @@ mod tests {
                     "read line; printf '%s\n' '{\"kind\":\"acquisition\",\"name\":\"demo\",\"version\":\"0.1.0\",\"schema_version\":\"1\",\"capabilities\":[]}' '{\"output\":\"four\"}'",
                 ),
             ],
-            "input",
-            "output",
             Duration::from_secs(1),
         );
 
@@ -775,8 +770,6 @@ mod tests {
                     "read line; printf '%s\n' '{\"kind\":\"acquisition\",\"name\":\"demo\",\"version\":\"0.1.0\",\"schema_version\":\"1\",\"capabilities\":[\"structured-errors\"]}' '{\"error\":{\"code\":\"bad_input\",\"message\":\"oops\",\"details\":{\"field\":\"input\"}}}'",
                 ),
             ],
-            "input",
-            "output",
             Duration::from_secs(1),
         );
 
@@ -812,6 +805,25 @@ mod tests {
         assert_eq!(report.handshake.kind, PluginKind::Scorer);
         assert_eq!(report.handshake.name, "demo");
         assert_eq!(report.score, Score::Numeric(0.75));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn subprocess_acquisition_rejects_missing_handshake() {
+        let acquisition = SubprocessAcquisition::new(
+            "sh",
+            vec![
+                String::from("-c"),
+                String::from("read line; printf '%s\n' '{\"output\":\"four\"}'"),
+            ],
+            Duration::from_secs(1),
+        );
+
+        let err = acquisition.acquire(&String::from("2+2")).await.unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("acquisition plugin did not emit a handshake line")
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -6,8 +6,7 @@ Current status:
 - Acquisition plugins support a versioned handshake.
 - Scorer plugins support a versioned handshake.
 - Structured plugin error payloads are preserved for both kinds.
-- Legacy no-handshake subprocess acquisition plugins remain accepted for compatibility.
-- Scorer plugins use the canonical v1 request/response envelope only.
+- Both plugin kinds use the canonical v1 request/response envelope.
 
 ## Scope
 
@@ -18,8 +17,6 @@ Configured in TOML as:
 ```toml
 [acquisition]
 command = ["python3", "model.py"]
-input_field = "input"
-output_field = "output"
 timeout_secs = 30
 ```
 
@@ -29,7 +26,7 @@ timeout_secs = 30
 - `stdin` is piped to the child process.
 - `stdout` is piped from the child process.
 - `stderr` is ignored by the CLI.
-- For v1 handshake-capable acquisition plugins, the plugin writes two stdout lines after receiving the request:
+- The plugin writes two stdout lines after receiving the request:
 - line 1: handshake
 - line 2: response
 
@@ -62,11 +59,7 @@ Canonical v1 request:
 {"input":"<input text>"}
 ```
 
-Legacy compatibility:
-- Older subprocess plugins may still receive a request keyed by the configured `input_field`.
-- That legacy mode is kept only for compatibility during the protocol transition.
-
-Example with default field names:
+Example:
 
 ```json
 {"input":"What is 2 + 2?"}
@@ -94,10 +87,7 @@ Structured error response:
 }
 ```
 
-Legacy compatibility:
-- Older subprocess plugins may still emit a single response object using the configured `output_field` and no handshake line.
-
-Example with default field names:
+Example:
 
 ```json
 {"output":"4"}
@@ -105,7 +95,7 @@ Example with default field names:
 
 ## Semantics
 
-- A handshake-capable acquisition plugin must emit a valid handshake before its response line.
+- An acquisition plugin must emit a valid handshake before its response line.
 - Handshake `kind` must be `"acquisition"`.
 - Handshake `schema_version` must be `"1"`.
 - Successful plugin responses must include `output` and must not include `error`.

@@ -64,7 +64,7 @@ struct Config {
     threshold: HashMap<String, f64>,
 }
 
-/// Flat struct — either `url` (HTTP) or `command` (subprocess) must be set, not both.
+/// Flat struct — either `url` (HTTP) or `command` (subprocess plugin) must be set, not both.
 #[derive(Deserialize)]
 struct AcquisitionConfig {
     /// HTTP endpoint URL. Mutually exclusive with `command`.
@@ -357,12 +357,17 @@ fn build_acquisition(cfg: AcquisitionConfig) -> Result<CliAcquisition, CliError>
                     "[acquisition] command must not be empty".into(),
                 ));
             }
+            if cfg.input_field != default_input_field()
+                || cfg.output_field != default_output_field()
+            {
+                return Err(CliError::Config(
+                    "[acquisition] subprocess plugins always use the canonical `input`/`output` protocol fields".into(),
+                ));
+            }
             let (program, args) = (parts[0].clone(), parts[1..].to_vec());
             Ok(CliAcquisition::Subprocess(SubprocessAcquisition::new(
                 program,
                 args,
-                cfg.input_field,
-                cfg.output_field,
                 Duration::from_secs(cfg.timeout_secs),
             )))
         }
@@ -540,5 +545,27 @@ mod tests {
 
         assert_eq!(scorer.definition.name, "external_score");
         assert!(matches!(scorer.kind, CliScorerKind::Plugin(_)));
+    }
+
+    #[test]
+    fn subprocess_acquisition_rejects_custom_protocol_field_names() {
+        let err = match build_acquisition(AcquisitionConfig {
+            url: None,
+            command: Some(CommandSpec::Vec(vec![
+                String::from("python3"),
+                String::from("plugin.py"),
+            ])),
+            input_field: String::from("prompt"),
+            output_field: String::from("answer"),
+            timeout_secs: 30,
+        }) {
+            Ok(_) => panic!("expected subprocess acquisition config to fail"),
+            Err(err) => err,
+        };
+
+        assert_eq!(
+            err.to_string(),
+            "config error: [acquisition] subprocess plugins always use the canonical `input`/`output` protocol fields"
+        );
     }
 }

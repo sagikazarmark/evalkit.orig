@@ -247,6 +247,7 @@ dependencies = [
  "clap",
  "evalkit",
  "evalkit-providers",
+ "evalkit-scorers-text",
  "regex",
  "serde",
  "serde_json",
