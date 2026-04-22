@@ -49,6 +49,13 @@ fn run_result() -> RunResult {
                 trial_count: 1,
                 scored_count: 1,
                 error_count: 1,
+                token_usage: evalkit::TokenUsage {
+                    input: 12,
+                    output: 6,
+                    cache_read: 0,
+                    cache_write: 0,
+                },
+                cost_usd: Some(0.0025),
             },
             SampleResult {
                 sample_id: "sample-b".to_owned(),
@@ -60,6 +67,8 @@ fn run_result() -> RunResult {
                 trial_count: 1,
                 scored_count: 1,
                 error_count: 0,
+                token_usage: Default::default(),
+                cost_usd: None,
             },
         ],
     }
@@ -85,6 +94,8 @@ fn write_jsonl_serializes_metadata_then_samples_as_jsonl() {
     assert_eq!(metadata["metadata"]["run_id"], json!("run-456"));
     assert_eq!(sample_a["record_type"], json!("sample"));
     assert_eq!(sample_a["sample"]["sample_id"], json!("sample-a"));
+    assert_eq!(sample_a["sample"]["token_usage"]["input"], json!(12));
+    assert_eq!(sample_a["sample"]["cost_usd"], json!(0.0025));
     assert_eq!(sample_b["sample"]["sample_id"], json!("sample-b"));
     assert!(
         lines[1].find("\"latency\"").unwrap() < lines[1].find("\"parser\"").unwrap(),
@@ -106,6 +117,8 @@ fn read_jsonl_round_trips_back_to_a_typed_run_result() {
     assert_eq!(decoded.samples.len(), 2);
     assert_eq!(decoded.samples[0].sample_id, "sample-a");
     assert_eq!(decoded.samples[1].sample_id, "sample-b");
+    assert_eq!(decoded.samples[0].token_usage.input, 12);
+    assert_eq!(decoded.samples[0].cost_usd, Some(0.0025));
     assert!(matches!(
         decoded.samples[0].trials[0].scores.get("latency"),
         Some(Ok(Score::Metric { name, value, unit }))

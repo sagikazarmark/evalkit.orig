@@ -33,6 +33,8 @@ fn sample(sample_id: &str, trials: Vec<TrialResult>) -> SampleResult {
         trial_count: trials.len(),
         scored_count,
         error_count: trials.len() - scored_count,
+        token_usage: Default::default(),
+        cost_usd: None,
         trials,
     }
 }

@@ -4,6 +4,7 @@ use std::time::Duration;
 use chrono::{TimeZone, Utc};
 use evalkit::{
     Direction, RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, ScorerError,
+    TokenUsage,
     TrialResult,
 };
 use serde_json::json;
@@ -107,6 +108,13 @@ fn sample_result_can_distinguish_low_scores_from_failed_scores() {
         trial_count: 2,
         scored_count: 1,
         error_count: 1,
+        token_usage: TokenUsage {
+            input: 20,
+            output: 10,
+            cache_read: 3,
+            cache_write: 1,
+        },
+        cost_usd: Some(0.01),
     };
 
     assert!(matches!(
@@ -119,6 +127,8 @@ fn sample_result_can_distinguish_low_scores_from_failed_scores() {
     ));
     assert_eq!(sample.scored_count, 1);
     assert_eq!(sample.error_count, 1);
+    assert_eq!(sample.token_usage.input, 20);
+    assert_eq!(sample.cost_usd, Some(0.01));
 }
 
 #[test]
@@ -136,6 +146,8 @@ fn run_result_round_trips_metadata_and_sample_order() {
                 trial_count: 1,
                 scored_count: 1,
                 error_count: 0,
+                token_usage: Default::default(),
+                cost_usd: None,
             },
             SampleResult {
                 sample_id: "sample-b".to_owned(),
@@ -150,6 +162,13 @@ fn run_result_round_trips_metadata_and_sample_order() {
                 trial_count: 1,
                 scored_count: 0,
                 error_count: 1,
+                token_usage: TokenUsage {
+                    input: 7,
+                    output: 4,
+                    cache_read: 0,
+                    cache_write: 0,
+                },
+                cost_usd: Some(0.002),
             },
         ],
     };
@@ -166,6 +185,8 @@ fn run_result_round_trips_metadata_and_sample_order() {
     assert_eq!(decoded.samples.len(), 2);
     assert_eq!(decoded.samples[0].sample_id, "sample-a");
     assert_eq!(decoded.samples[1].sample_id, "sample-b");
+    assert_eq!(decoded.samples[1].token_usage.output, 4);
+    assert_eq!(decoded.samples[1].cost_usd, Some(0.002));
     assert!(matches!(
         decoded.samples[1].trials[0].scores.get("accuracy"),
         Some(Err(error)) if error.to_string() == "bad output"

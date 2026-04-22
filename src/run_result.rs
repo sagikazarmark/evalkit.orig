@@ -9,6 +9,14 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{Score, ScoreDefinition, ScorerError};
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TrialResult {
     #[serde(with = "score_results_serde")]
@@ -24,6 +32,10 @@ pub struct SampleResult {
     pub trial_count: usize,
     pub scored_count: usize,
     pub error_count: usize,
+    #[serde(default)]
+    pub token_usage: TokenUsage,
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

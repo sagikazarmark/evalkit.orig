@@ -35,7 +35,7 @@ pub use langfuse::{LangfuseConfig, LangfuseExportError, export_run};
 #[cfg(feature = "otel")]
 pub use otel::{JaegerBackend, Observe, OtlpReceiver, Span, SpanEvent, TraceBackend, TraceBackendError};
 pub use run::{Run, RunBuildError, RunError};
-pub use run_result::{RunMetadata, RunResult, SampleResult, TrialResult};
+pub use run_result::{RunMetadata, RunResult, SampleResult, TokenUsage, TrialResult};
 pub use sample::{Sample, SampleBuildError, SampleBuilder};
 pub use score::Score;
 pub use score_definition::{Direction, ScoreDefinition};
@@ -59,7 +59,7 @@ pub mod prelude {
         Run, RunBuildError, RunError,
         RunMetadata, RunResult, RunStats, Sample, SampleBuildError, SampleBuilder, SampleComparison,
         Score, ScoreDefinition, ScorerComparison, ScorerContext, ScorerError, ScorerExt, ScorerSet,
-        ScorerStats, ThenScorer, TimeoutScorer, WeightedScorer, compare, ignore_reference,
+        ScorerStats, ThenScorer, TimeoutScorer, TokenUsage, WeightedScorer, compare, ignore_reference,
         read_jsonl, write_jsonl,
     };
     pub use crate::scorers::{contains, exact_match, json_schema, regex};

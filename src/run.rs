@@ -153,6 +153,8 @@ impl<I, O, R> Run<I, O, R> {
             error_count: self.trial_count - scored_count,
             scored_count,
             trials,
+            token_usage: Default::default(),
+            cost_usd: None,
         }
     }
 

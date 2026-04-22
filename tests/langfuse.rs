@@ -29,6 +29,8 @@ fn make_result() -> RunResult {
             trial_count: 1,
             scored_count: 1,
             error_count: 0,
+            token_usage: Default::default(),
+            cost_usd: None,
             trials: vec![TrialResult {
                 scores: HashMap::from([("exact_match".into(), Ok(Score::Binary(true)))]),
                 duration: Duration::from_millis(5),

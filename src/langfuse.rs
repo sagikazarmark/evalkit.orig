@@ -198,6 +198,8 @@ mod tests {
                     trial_count: trials.len(),
                     scored_count: trials.len(),
                     error_count: 0,
+                    token_usage: Default::default(),
+                    cost_usd: None,
                     trials: trials
                         .into_iter()
                         .enumerate()
