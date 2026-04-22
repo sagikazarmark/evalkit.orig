@@ -1,0 +1,54 @@
+# Stability Policy
+
+This file defines the Phase 0 stability target for `evalkit` and the planned extension crates.
+
+## Kernel Crate
+
+`evalkit` is the semver anchor for the workspace.
+
+Stable after Phase 0:
+- Public traits and structs re-exported from `src/lib.rs`
+- `RunResult`, `SampleResult`, `TrialResult`, and `RunMetadata` field meanings
+- `AcquisitionError` and `ScorerError` variant names and semantics
+- Score names and serialized `Score` variant tags
+
+Unstable before Phase 0 exit:
+- Any API that is present only behind cargo feature flags that will be extracted into dedicated crates
+- Internal helper types not re-exported from the crate root
+
+Semver rules:
+- Removing or renaming a public item is a breaking change.
+- Adding non-`#[non_exhaustive]` enum variants is a breaking change.
+- Adding optional struct fields that change serialized output is a breaking change for persisted formats unless versioned separately.
+
+## Extension Crates
+
+Planned extension crates follow their own crate-level semver once extracted:
+- `evalkit-scorers-*`
+- `evalkit-providers`
+- `evalkit-otel`
+- `evalkit-exporters-*`
+- `evalkit-cli`
+- `evalkit-server`
+
+Rules:
+- Extension crates may release independently from the kernel.
+- Extensions must not widen kernel error semantics by inventing incompatible meanings for shared kernel types.
+- Crates that are experimental on first release should document that status in their own README and API docs rather than weakening the kernel guarantees.
+
+## Run-Log Schema
+
+The run-log schema version is independent from crate versions.
+
+Rules:
+- Schema versions use their own major versioning.
+- Readers must fail loudly on newer major schema versions.
+- Additive schema changes that preserve existing readers may bump a minor schema version.
+- A crate release may ship multiple schema readers, but writers should default to the latest stable schema version.
+
+## Workspace Policy During The Split
+
+While the monolith is being split:
+- Existing feature flags such as `otel`, `langfuse`, and `llm-judge` remain supported until their replacement crates exist.
+- Once a capability is extracted, the old in-kernel module should be deprecated first and removed in the next breaking release.
+- Re-exports from the umbrella crate should target the common 80% path and avoid hiding specialized crates from advanced callers.
