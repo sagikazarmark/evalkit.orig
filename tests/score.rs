@@ -57,3 +57,30 @@ fn score_metric_round_trips_through_json() {
     );
     assert_eq!(decoded, score);
 }
+
+#[test]
+fn score_structured_round_trips_through_json() {
+    let score = Score::Structured {
+        score: 0.75,
+        reasoning: "rubric matched expected answer".to_string(),
+        metadata: json!({ "judge": "gpt-4.1", "criteria": ["correctness"] }),
+    };
+
+    let value = serde_json::to_value(&score).expect("structured score should serialize");
+    let decoded: Score =
+        serde_json::from_value(value.clone()).expect("structured score should deserialize");
+
+    assert_eq!(
+        value,
+        json!({
+            "type": "structured",
+            "score": 0.75,
+            "reasoning": "rubric matched expected answer",
+            "metadata": {
+                "judge": "gpt-4.1",
+                "criteria": ["correctness"]
+            }
+        })
+    );
+    assert_eq!(decoded, score);
+}

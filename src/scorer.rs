@@ -80,11 +80,7 @@ mod tests {
         let output = String::from("4");
         let reference = String::from("4");
         let scorer = ExactMatchScorer;
-        let ctx = ScorerContext {
-            input: &input,
-            output: &output,
-            reference: Some(&reference),
-        };
+        let ctx = ScorerContext::new(&input, &output, Some(&reference));
 
         let score = scorer.score(&ctx).await.unwrap();
 
@@ -97,11 +93,7 @@ mod tests {
         let output = String::from("answer");
         let reference = String::from("reference");
         let scorer = FailingScorer;
-        let ctx = ScorerContext {
-            input: &input,
-            output: &output,
-            reference: Some(&reference),
-        };
+        let ctx = ScorerContext::new(&input, &output, Some(&reference));
 
         let err = scorer.score(&ctx).await.unwrap_err();
 
@@ -123,11 +115,7 @@ mod tests {
         let input = String::from("needle");
         let output = String::from("haystack with needle inside");
         let scorer = ContainsScorer;
-        let ctx: ScorerContext<'_, String, String> = ScorerContext {
-            input: &input,
-            output: &output,
-            reference: None,
-        };
+        let ctx: ScorerContext<'_, String, String> = ScorerContext::new(&input, &output, None);
 
         let score = scorer.score(&ctx).await.unwrap();
 

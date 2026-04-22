@@ -149,14 +149,15 @@ impl ScoreBucket {
                     Score::Numeric(value) => Self::Numeric(vec![*value]),
                     Score::Binary(value) => Self::Binary(vec![*value]),
                     Score::Label(value) => Self::Label(vec![value.clone()]),
+                    Score::Structured { score, .. } => Self::Numeric(vec![*score]),
                     Score::Metric { value, .. } => Self::Metric(vec![*value]),
                 };
             }
             Self::Numeric(values) => {
-                if let Score::Numeric(value) = score {
-                    values.push(*value);
-                } else {
-                    *self = Self::Mixed;
+                match score {
+                    Score::Numeric(value) => values.push(*value),
+                    Score::Structured { score, .. } => values.push(*score),
+                    _ => *self = Self::Mixed,
                 }
             }
             Self::Binary(values) => {
@@ -556,4 +557,3 @@ fn log_combination(n: usize, k: usize) -> f64 {
 
     log_gamma((n + 1) as f64) - log_gamma((k + 1) as f64) - log_gamma((n - k + 1) as f64)
 }
-

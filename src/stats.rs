@@ -182,7 +182,9 @@ enum ScorerAccumulator {
 impl ScorerAccumulator {
     fn from_score(sample_id: &str, score: &Score) -> Self {
         let mut accumulator = match score {
-            Score::Numeric(_) => Self::Numeric(NumericAccumulator::default()),
+            Score::Numeric(_) | Score::Structured { .. } => {
+                Self::Numeric(NumericAccumulator::default())
+            }
             Score::Binary(_) => Self::Binary(BinaryAccumulator::default()),
             Score::Label(_) => Self::Label(LabelAccumulator::default()),
             Score::Metric { .. } => Self::Metric(NumericAccumulator::default()),
@@ -195,6 +197,9 @@ impl ScorerAccumulator {
     fn add_score(&mut self, sample_id: &str, score: &Score) {
         match (self, score) {
             (Self::Numeric(accumulator), Score::Numeric(value)) => accumulator.values.push(*value),
+            (Self::Numeric(accumulator), Score::Structured { score, .. }) => {
+                accumulator.values.push(*score)
+            }
             (Self::Binary(accumulator), Score::Binary(value)) => {
                 accumulator.record(sample_id, *value)
             }

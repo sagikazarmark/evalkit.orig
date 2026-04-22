@@ -604,22 +604,14 @@ mod tests {
         output: &'a String,
         reference: Option<&'a String>,
     ) -> ScorerContext<'a, String, String, String> {
-        ScorerContext {
-            input,
-            output,
-            reference,
-        }
+        ScorerContext::new(input, output, reference)
     }
 
     fn string_context_without_reference<'a>(
         input: &'a String,
         output: &'a String,
     ) -> ScorerContext<'a, String, String> {
-        ScorerContext {
-            input,
-            output,
-            reference: None,
-        }
+        ScorerContext::new(input, output, None)
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -671,11 +663,7 @@ mod tests {
         let input = String::from("prompt");
         let output = String::from("answer");
         let scorer = exact_match();
-        let ctx = ScorerContext {
-            input: &input,
-            output: &output,
-            reference: None,
-        };
+        let ctx = ScorerContext::new(&input, &output, None);
 
         let err = scorer.score(&ctx).await.unwrap_err();
 

@@ -232,6 +232,10 @@ impl<I, O, R, O2> ScorerSetExecutor<I, O, R> for OutputMappedExecutor<I, O, R, O
                 Err(err) => return mapper_failure_results(&self.scorers, err),
             };
             let mapped_ctx = ScorerContext {
+                run_id: ctx.run_id,
+                sample_id: ctx.sample_id,
+                trial_index: ctx.trial_index,
+                metadata: ctx.metadata,
                 input: ctx.input,
                 output: &mapped_output,
                 reference: ctx.reference,
@@ -258,6 +262,10 @@ impl<I, O, R, R2> ScorerSetExecutor<I, O, R> for ReferenceMappedExecutor<I, O, R
                 None => None,
             };
             let mapped_ctx = ScorerContext {
+                run_id: ctx.run_id,
+                sample_id: ctx.sample_id,
+                trial_index: ctx.trial_index,
+                metadata: ctx.metadata,
                 input: ctx.input,
                 output: ctx.output,
                 reference: mapped_reference.as_ref(),
@@ -289,6 +297,10 @@ impl<I, O, R, O2, R2> ScorerSetExecutor<I, O, R> for FullyMappedExecutor<I, O, R
                 None => None,
             };
             let mapped_ctx = ScorerContext {
+                run_id: ctx.run_id,
+                sample_id: ctx.sample_id,
+                trial_index: ctx.trial_index,
+                metadata: ctx.metadata,
                 input: ctx.input,
                 output: &mapped_output,
                 reference: mapped_reference.as_ref(),
@@ -478,11 +490,7 @@ mod tests {
         let input = String::from("prompt");
         let output = String::from("four");
         let reference = String::from("size");
-        let ctx = ScorerContext {
-            input: &input,
-            output: &output,
-            reference: Some(&reference),
-        };
+        let ctx = ScorerContext::new(&input, &output, Some(&reference));
 
         let results = scorer_set.score(&ctx).await;
 
@@ -504,11 +512,7 @@ mod tests {
         let input = String::from("prompt");
         let output = String::from("four");
         let reference = String::from("size");
-        let ctx = ScorerContext {
-            input: &input,
-            output: &output,
-            reference: Some(&reference),
-        };
+        let ctx = ScorerContext::new(&input, &output, Some(&reference));
 
         let results = scorer_set.score(&ctx).await;
 
@@ -532,11 +536,7 @@ mod tests {
 
         let input = String::from("prompt");
         let output = String::from("four");
-        let ctx: ScorerContext<'_, String, String> = ScorerContext {
-            input: &input,
-            output: &output,
-            reference: None,
-        };
+        let ctx: ScorerContext<'_, String, String> = ScorerContext::new(&input, &output, None);
 
         let results = scorer_set.score(&ctx).await;
 
@@ -556,11 +556,7 @@ mod tests {
 
         let input = String::from("prompt");
         let output = String::from("four");
-        let ctx: ScorerContext<'_, String, String> = ScorerContext {
-            input: &input,
-            output: &output,
-            reference: None,
-        };
+        let ctx: ScorerContext<'_, String, String> = ScorerContext::new(&input, &output, None);
 
         let results = scorer_set.score(&ctx).await;
 

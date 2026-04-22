@@ -216,6 +216,10 @@ where
 {
     async fn score(&self, ctx: &ScorerContext<'_, I, O, R>) -> Result<Score, ScorerError> {
         let inner_ctx = ScorerContext {
+            run_id: ctx.run_id,
+            sample_id: ctx.sample_id,
+            trial_index: ctx.trial_index,
+            metadata: ctx.metadata,
             input: ctx.input,
             output: ctx.output,
             reference: None,
@@ -233,6 +237,7 @@ where
 fn numeric_value(score: Score) -> Option<f64> {
     match score {
         Score::Numeric(v) => Some(v),
+        Score::Structured { score, .. } => Some(score),
         Score::Metric { value, .. } => Some(value),
         _ => None,
     }
@@ -345,7 +350,7 @@ mod tests {
         // The context holds references, so we need the data to outlive the context.
         // This helper returns a tuple (input, output, ctx) where the context
         // points into the stack — callers use the ctx from the returned tuple.
-        ((), (), ScorerContext { input: &(), output: &(), reference: None })
+        ((), (), ScorerContext::new(&(), &(), None))
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -502,7 +507,7 @@ mod tests {
         let wrapped = super::ignore_reference::<(), (), String, _>(base);
         // reference is Some(&"ref"), but the inner scorer (R=()) should not see it
         let reference = String::from("ignored");
-        let ctx = ScorerContext { input: &(), output: &(), reference: Some(&reference) };
+        let ctx = ScorerContext::new(&(), &(), Some(&reference));
         let score = wrapped.score(&ctx).await.unwrap();
         assert_eq!(score, Score::Binary(true));
     }
@@ -511,7 +516,7 @@ mod tests {
     async fn ignore_reference_works_without_reference() {
         let base = ConstScorer { score: Score::Numeric(0.75), name: "quality" };
         let wrapped = super::ignore_reference::<(), (), String, _>(base);
-        let ctx = ScorerContext { input: &(), output: &(), reference: None };
+        let ctx = ScorerContext::new(&(), &(), None);
         let score = wrapped.score(&ctx).await.unwrap();
         assert_eq!(score, Score::Numeric(0.75));
     }

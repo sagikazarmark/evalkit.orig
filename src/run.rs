@@ -105,9 +105,10 @@ impl<I, O, R> Run<I, O, R> {
     pub async fn execute(&self) -> Result<RunResult, RunError> {
         let started_at = Utc::now();
         let started = Instant::now();
+        let run_id = Uuid::new_v4().to_string();
 
         let samples = stream::iter(self.dataset.samples.iter())
-            .map(|sample| self.execute_sample(sample))
+            .map(|sample| self.execute_sample(&run_id, sample))
             .buffered(self.concurrency)
             .collect::<Vec<_>>()
             .await;
@@ -117,7 +118,7 @@ impl<I, O, R> Run<I, O, R> {
 
         Ok(RunResult {
             metadata: RunMetadata {
-                run_id: Uuid::new_v4().to_string(),
+                run_id,
                 started_at,
                 completed_at,
                 duration,
@@ -129,11 +130,11 @@ impl<I, O, R> Run<I, O, R> {
         })
     }
 
-    async fn execute_sample(&self, sample: &Sample<I, R>) -> SampleResult {
+    async fn execute_sample(&self, run_id: &str, sample: &Sample<I, R>) -> SampleResult {
         let mut trials = Vec::with_capacity(self.trial_count);
 
         for trial_index in 0..self.trial_count {
-            trials.push(self.execute_trial(sample, trial_index).await);
+            trials.push(self.execute_trial(run_id, sample, trial_index).await);
         }
 
         let scored_count = trials
@@ -150,7 +151,7 @@ impl<I, O, R> Run<I, O, R> {
         }
     }
 
-    async fn execute_trial(&self, sample: &Sample<I, R>, trial_index: usize) -> TrialResult {
+    async fn execute_trial(&self, run_id: &str, sample: &Sample<I, R>, trial_index: usize) -> TrialResult {
         let started = Instant::now();
 
         let scores = match AssertUnwindSafe(self.acquire_output(sample))
@@ -159,6 +160,10 @@ impl<I, O, R> Run<I, O, R> {
         {
             Ok(Ok(output)) => {
                 let ctx = ScorerContext {
+                    run_id,
+                    sample_id: &sample.id,
+                    trial_index,
+                    metadata: &sample.metadata,
                     input: &sample.input,
                     output: &output,
                     reference: sample.reference.as_ref(),
@@ -628,6 +633,10 @@ impl<I, O, R, O2> RunExecutor<I, O, R> for OutputMappedRunExecutor<I, O, R, O2> 
                 Err(err) => return map_failure_results(&self.targets, err),
             };
             let mapped_ctx = ScorerContext {
+                run_id: ctx.run_id,
+                sample_id: ctx.sample_id,
+                trial_index: ctx.trial_index,
+                metadata: ctx.metadata,
                 input: ctx.input,
                 output: &mapped_output,
                 reference: ctx.reference,
@@ -654,6 +663,10 @@ impl<I, O, R, R2> RunExecutor<I, O, R> for ReferenceMappedRunExecutor<I, O, R, R
                 None => None,
             };
             let mapped_ctx = ScorerContext {
+                run_id: ctx.run_id,
+                sample_id: ctx.sample_id,
+                trial_index: ctx.trial_index,
+                metadata: ctx.metadata,
                 input: ctx.input,
                 output: ctx.output,
                 reference: mapped_reference.as_ref(),
@@ -685,6 +698,10 @@ impl<I, O, R, O2, R2> RunExecutor<I, O, R> for FullyMappedRunExecutor<I, O, R, O
                 None => None,
             };
             let mapped_ctx = ScorerContext {
+                run_id: ctx.run_id,
+                sample_id: ctx.sample_id,
+                trial_index: ctx.trial_index,
+                metadata: ctx.metadata,
                 input: ctx.input,
                 output: &mapped_output,
                 reference: mapped_reference.as_ref(),
@@ -842,6 +859,9 @@ fn validate_score(score: Score) -> Result<Score, ScorerError> {
         Score::Label(label) if label.is_empty() => {
             Err(invalid_score_error("label scores must not be empty"))
         }
+        Score::Structured { score, .. } if !score.is_finite() => Err(invalid_score_error(
+            "structured scores must have a finite score value (not NaN or infinity)",
+        )),
         Score::Metric { name, .. } if name.is_empty() => Err(invalid_score_error(
             "metric scores must have a non-empty name",
         )),

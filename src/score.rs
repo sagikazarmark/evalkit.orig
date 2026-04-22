@@ -1,4 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -6,6 +7,11 @@ pub enum Score {
     Numeric(f64),
     Binary(bool),
     Label(String),
+    Structured {
+        score: f64,
+        reasoning: String,
+        metadata: Value,
+    },
     Metric {
         name: String,
         value: f64,
@@ -25,6 +31,11 @@ enum ScoreSerde {
     Label {
         value: String,
     },
+    Structured {
+        score: f64,
+        reasoning: String,
+        metadata: Value,
+    },
     Metric {
         name: String,
         value: f64,
@@ -42,6 +53,15 @@ impl Serialize for Score {
             Self::Binary(value) => ScoreSerde::Binary { value: *value },
             Self::Label(value) => ScoreSerde::Label {
                 value: value.clone(),
+            },
+            Self::Structured {
+                score,
+                reasoning,
+                metadata,
+            } => ScoreSerde::Structured {
+                score: *score,
+                reasoning: reasoning.clone(),
+                metadata: metadata.clone(),
             },
             Self::Metric { name, value, unit } => ScoreSerde::Metric {
                 name: name.clone(),
@@ -63,6 +83,15 @@ impl<'de> Deserialize<'de> for Score {
             ScoreSerde::Numeric { value } => Self::Numeric(value),
             ScoreSerde::Binary { value } => Self::Binary(value),
             ScoreSerde::Label { value } => Self::Label(value),
+            ScoreSerde::Structured {
+                score,
+                reasoning,
+                metadata,
+            } => Self::Structured {
+                score,
+                reasoning,
+                metadata,
+            },
             ScoreSerde::Metric { name, value, unit } => Self::Metric { name, value, unit },
         })
     }
