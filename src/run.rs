@@ -14,7 +14,9 @@ use std::fmt::{self, Display, Formatter};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::panic::AssertUnwindSafe;
+use std::path::Path;
 use std::pin::Pin;
+use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::timeout;
@@ -567,6 +569,20 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
         self.judge_model_pins.dedup();
         self
     }
+
+    fn resolved_code_identity(mut self) -> Self {
+        let detected = detect_code_identity_from_current_dir();
+
+        if self.code_commit.is_none() {
+            self.code_commit = detected.code_commit;
+        }
+
+        if self.code_fingerprint.is_none() {
+            self.code_fingerprint = detected.code_fingerprint;
+        }
+
+        self
+    }
 }
 
 fn looks_like_generated_sample_id(id: &str) -> bool {
@@ -669,9 +685,101 @@ impl StableFingerprint {
     }
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct DetectedCodeIdentity {
+    code_commit: Option<String>,
+    code_fingerprint: Option<String>,
+}
+
+fn detect_code_identity_from_current_dir() -> DetectedCodeIdentity {
+    std::env::current_dir()
+        .ok()
+        .map(|cwd| detect_code_identity(&cwd))
+        .unwrap_or_default()
+}
+
+fn detect_code_identity(cwd: &Path) -> DetectedCodeIdentity {
+    let code_commit = git_stdout(cwd, &["rev-parse", "--verify", "HEAD"]);
+    let tree = git_stdout(cwd, &["rev-parse", "--verify", "HEAD^{tree}"]);
+    let diff = git_stdout_bytes(cwd, &["diff", "--binary", "--no-ext-diff", "HEAD", "--"])
+        .unwrap_or_default();
+    let untracked = git_stdout_bytes(cwd, &["ls-files", "--others", "--exclude-standard", "-z"])
+        .unwrap_or_default();
+    let code_fingerprint = fingerprint_git_state(cwd, tree.as_deref(), &diff, &untracked);
+
+    DetectedCodeIdentity {
+        code_commit,
+        code_fingerprint,
+    }
+}
+
+fn fingerprint_git_state(
+    cwd: &Path,
+    tree: Option<&str>,
+    diff: &[u8],
+    untracked: &[u8],
+) -> Option<String> {
+    let mut has_untracked = false;
+    let mut dirty = StableFingerprint::default();
+
+    if !diff.is_empty() {
+        dirty.write_bytes(diff);
+    }
+
+    for path in untracked
+        .split(|byte| *byte == b'\0')
+        .filter(|entry| !entry.is_empty())
+    {
+        has_untracked = true;
+        dirty.write_bytes(path);
+
+        let relative_path = String::from_utf8_lossy(path);
+        let absolute_path = cwd.join(relative_path.as_ref());
+        let contents = std::fs::read(&absolute_path).ok()?;
+        dirty.write_bytes(&contents);
+    }
+
+    if diff.is_empty() && !has_untracked {
+        return tree.map(|tree| format!("tree:{tree}"));
+    }
+
+    let dirty_hash = dirty.finish_hex();
+    Some(match tree {
+        Some(tree) => format!("tree:{tree}+dirty:{dirty_hash}"),
+        None => format!("dirty:{dirty_hash}"),
+    })
+}
+
+fn git_stdout(cwd: &Path, args: &[&str]) -> Option<String> {
+    let output = git_stdout_bytes(cwd, args)?;
+    let text = String::from_utf8(output).ok()?;
+    let trimmed = text.trim();
+
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
+fn git_stdout_bytes(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        Some(output.stdout)
+    } else {
+        None
+    }
+}
+
 impl<I: 'static, O: 'static, R: 'static> RunBuilderWithTargets<I, O, R, O, R, Unmapped, Unmapped> {
     pub fn build(self) -> Result<Run<I, O, R>, RunBuildError> {
-        let this = self.normalized_judge_model_pins();
+        let this = self.resolved_code_identity().normalized_judge_model_pins();
         let definitions = this.validate()?;
 
         Ok(Run {
@@ -697,7 +805,7 @@ impl<I: 'static, O: 'static, R: 'static, O2: 'static>
     RunBuilderWithTargets<I, O, R, O2, R, Mapped, Unmapped>
 {
     pub fn build(self) -> Result<Run<I, O, R>, RunBuildError> {
-        let this = self.normalized_judge_model_pins();
+        let this = self.resolved_code_identity().normalized_judge_model_pins();
         let definitions = this.validate()?;
         let output_mapper = this
             .output_mapper
@@ -727,7 +835,7 @@ impl<I: 'static, O: 'static, R: 'static, R2: 'static>
     RunBuilderWithTargets<I, O, R, O, R2, Unmapped, Mapped>
 {
     pub fn build(self) -> Result<Run<I, O, R>, RunBuildError> {
-        let this = self.normalized_judge_model_pins();
+        let this = self.resolved_code_identity().normalized_judge_model_pins();
         let definitions = this.validate()?;
         let reference_mapper = this
             .reference_mapper
@@ -757,7 +865,7 @@ impl<I: 'static, O: 'static, R: 'static, O2: 'static, R2: 'static>
     RunBuilderWithTargets<I, O, R, O2, R2, Mapped, Mapped>
 {
     pub fn build(self) -> Result<Run<I, O, R>, RunBuildError> {
-        let this = self.normalized_judge_model_pins();
+        let this = self.resolved_code_identity().normalized_judge_model_pins();
         let definitions = this.validate()?;
         let output_mapper = this
             .output_mapper
@@ -798,6 +906,109 @@ where
 {
     fn acquire_boxed<'a>(&'a self, input: &'a I) -> AcquisitionFuture<'a, O> {
         Box::pin(async move { self.acquire(input).await })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{detect_code_identity, git_stdout};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn detect_code_identity_uses_head_and_tree_for_clean_repos() {
+        let repo = temp_git_repo("clean");
+        fs::write(repo.join("tracked.txt"), "clean state\n").expect("write tracked file");
+        git(&repo, &["add", "tracked.txt"]);
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=Evalkit Tests",
+                "-c",
+                "user.email=tests@example.com",
+                "commit",
+                "--quiet",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let detected = detect_code_identity(&repo);
+        let commit = git_stdout(&repo, &["rev-parse", "--verify", "HEAD"]).expect("head sha");
+        let tree = git_stdout(&repo, &["rev-parse", "--verify", "HEAD^{tree}"]).expect("tree sha");
+
+        assert_eq!(detected.code_commit.as_deref(), Some(commit.as_str()));
+        assert_eq!(
+            detected.code_fingerprint.as_deref(),
+            Some(format!("tree:{tree}").as_str())
+        );
+
+        fs::remove_dir_all(repo).expect("remove temp repo");
+    }
+
+    #[test]
+    fn detect_code_identity_hashes_dirty_changes_against_the_head_tree() {
+        let repo = temp_git_repo("dirty");
+        fs::write(repo.join("tracked.txt"), "clean state\n").expect("write tracked file");
+        git(&repo, &["add", "tracked.txt"]);
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=Evalkit Tests",
+                "-c",
+                "user.email=tests@example.com",
+                "commit",
+                "--quiet",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let clean = detect_code_identity(&repo);
+        fs::write(repo.join("tracked.txt"), "dirty state\n").expect("mutate tracked file");
+        fs::write(repo.join("notes.txt"), "untracked\n").expect("write untracked file");
+
+        let dirty = detect_code_identity(&repo);
+        let tree = git_stdout(&repo, &["rev-parse", "--verify", "HEAD^{tree}"]).expect("tree sha");
+        let dirty_fingerprint = dirty
+            .code_fingerprint
+            .as_deref()
+            .expect("dirty fingerprint should exist");
+
+        assert_eq!(dirty.code_commit, clean.code_commit);
+        assert_ne!(dirty.code_fingerprint, clean.code_fingerprint);
+        assert!(dirty_fingerprint.starts_with(&format!("tree:{tree}+dirty:")));
+
+        fs::remove_dir_all(repo).expect("remove temp repo");
+    }
+
+    fn temp_git_repo(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time after unix epoch")
+            .as_nanos();
+        let repo = std::env::temp_dir().join(format!(
+            "evalkit-run-tests-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&repo).expect("create temp repo");
+        git(&repo, &["init", "--quiet"]);
+        repo
+    }
+
+    fn git(repo: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .status()
+            .expect("git command should run");
+
+        assert!(status.success(), "git command failed: {:?}", args);
     }
 }
 

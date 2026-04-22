@@ -222,6 +222,23 @@ async fn run_metadata_captures_an_explicit_seed() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn run_metadata_auto_populates_code_identity_when_git_is_available() {
+    let sample = Sample::new(String::from("prompt"), String::from("four"));
+
+    let run = Run::builder()
+        .dataset(vec![sample])
+        .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("four")) })
+        .scorer(evalkit::exact_match())
+        .build()
+        .unwrap();
+
+    let result = run.execute().await.unwrap();
+
+    assert!(result.metadata.code_commit.is_some());
+    assert!(result.metadata.code_fingerprint.is_some());
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn run_metadata_captures_explicit_reproducibility_fields() {
     let sample = Sample::new(String::from("prompt"), String::from("four"));
 

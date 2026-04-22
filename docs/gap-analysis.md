@@ -76,7 +76,7 @@ Already present:
 - `Score::Structured` is available
 
 Missing or incomplete:
-- No automatic population of code identity or judge model pins beyond explicit builder inputs
+- No automatic population of judge model pins beyond explicit builder inputs
 - No explicit Wilcoxon fallback for paired comparisons
 
 ## Phase 1 - Polyglot Protocol And Run-Log Schema
