@@ -1,7 +1,7 @@
 use futures::join;
 use tokio::time::timeout;
 
-use crate::{Score, ScoreDefinition, Scorer, ScorerContext, ScorerError};
+use crate::{Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerContext, ScorerError};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::marker::PhantomData;
@@ -149,13 +149,29 @@ where
     B: Scorer<I, O, R>,
 {
     async fn score(&self, ctx: &ScorerContext<'_, I, O, R>) -> Result<Score, ScorerError> {
-        let (left_result, right_result) = join!(self.left.score(ctx), self.right.score(ctx));
-        let left_score = left_result
+        Ok(self.score_with_resources(ctx).await?.score)
+    }
+
+    async fn score_with_resources(
+        &self,
+        ctx: &ScorerContext<'_, I, O, R>,
+    ) -> Result<ScoreOutcome, ScorerError> {
+        let (left_result, right_result) = join!(
+            self.left.score_with_resources(ctx),
+            self.right.score_with_resources(ctx)
+        );
+        let left = left_result
             .map_err(|err| sub_scorer_error("left", &self.left.definition().name, err))?;
-        let right_score = right_result
+        let right = right_result
             .map_err(|err| sub_scorer_error("right", &self.right.definition().name, err))?;
-        match (left_score, right_score) {
-            (Score::Binary(a), Score::Binary(b)) => Ok(Score::Binary(a && b)),
+
+        let mut resources = left.resources.clone();
+        resources.merge(&right.resources);
+
+        match (left.score, right.score) {
+            (Score::Binary(a), Score::Binary(b)) => {
+                Ok(ScoreOutcome::new(Score::Binary(a && b)).with_resources(resources))
+            }
             _ => Err(ScorerError::invalid_input(AndTypeMismatchError)),
         }
     }
@@ -171,13 +187,29 @@ where
     B: Scorer<I, O, R>,
 {
     async fn score(&self, ctx: &ScorerContext<'_, I, O, R>) -> Result<Score, ScorerError> {
-        let (left_result, right_result) = join!(self.left.score(ctx), self.right.score(ctx));
-        let left_score = left_result
+        Ok(self.score_with_resources(ctx).await?.score)
+    }
+
+    async fn score_with_resources(
+        &self,
+        ctx: &ScorerContext<'_, I, O, R>,
+    ) -> Result<ScoreOutcome, ScorerError> {
+        let (left_result, right_result) = join!(
+            self.left.score_with_resources(ctx),
+            self.right.score_with_resources(ctx)
+        );
+        let left = left_result
             .map_err(|err| sub_scorer_error("left", &self.left.definition().name, err))?;
-        let right_score = right_result
+        let right = right_result
             .map_err(|err| sub_scorer_error("right", &self.right.definition().name, err))?;
-        match (left_score, right_score) {
-            (Score::Binary(a), Score::Binary(b)) => Ok(Score::Binary(a || b)),
+
+        let mut resources = left.resources.clone();
+        resources.merge(&right.resources);
+
+        match (left.score, right.score) {
+            (Score::Binary(a), Score::Binary(b)) => {
+                Ok(ScoreOutcome::new(Score::Binary(a || b)).with_resources(resources))
+            }
             _ => Err(ScorerError::invalid_input(OrTypeMismatchError)),
         }
     }
@@ -203,21 +235,35 @@ where
     B: Scorer<I, O, R>,
 {
     async fn score(&self, ctx: &ScorerContext<'_, I, O, R>) -> Result<Score, ScorerError> {
-        let (left_result, right_result) = join!(self.left.score(ctx), self.right.score(ctx));
-        let left_score = left_result
+        Ok(self.score_with_resources(ctx).await?.score)
+    }
+
+    async fn score_with_resources(
+        &self,
+        ctx: &ScorerContext<'_, I, O, R>,
+    ) -> Result<ScoreOutcome, ScorerError> {
+        let (left_result, right_result) = join!(
+            self.left.score_with_resources(ctx),
+            self.right.score_with_resources(ctx)
+        );
+        let left = left_result
             .map_err(|err| sub_scorer_error("left", &self.left.definition().name, err))?;
-        let right_score = right_result
+        let right = right_result
             .map_err(|err| sub_scorer_error("right", &self.right.definition().name, err))?;
 
-        let left_value = numeric_value(left_score)
+        let left_value = numeric_value(left.score)
             .ok_or_else(|| ScorerError::invalid_input(WeightedTypeMismatchError))?;
-        let right_value = numeric_value(right_score)
+        let right_value = numeric_value(right.score)
             .ok_or_else(|| ScorerError::invalid_input(WeightedTypeMismatchError))?;
 
+        let mut resources = left.resources.clone();
+        resources.merge(&right.resources);
+
         let total_weight = self.left_weight + self.right_weight;
-        Ok(Score::Numeric(
+        Ok(ScoreOutcome::new(Score::Numeric(
             (left_value * self.left_weight + right_value * self.right_weight) / total_weight,
         ))
+        .with_resources(resources))
     }
 
     fn definition(&self) -> ScoreDefinition {
@@ -239,17 +285,39 @@ where
     S: Scorer<I, O, R>,
 {
     async fn score(&self, ctx: &ScorerContext<'_, I, O, R>) -> Result<Score, ScorerError> {
-        let gate_score = self
+        Ok(self.score_with_resources(ctx).await?.score)
+    }
+
+    async fn score_with_resources(
+        &self,
+        ctx: &ScorerContext<'_, I, O, R>,
+    ) -> Result<ScoreOutcome, ScorerError> {
+        let gate = self
             .gate
-            .score(ctx)
+            .score_with_resources(ctx)
             .await
             .map_err(|err| sub_scorer_error("gate", &self.gate.definition().name, err))?;
 
-        match gate_score {
-            Score::Binary(true) => self.secondary.score(ctx).await.map_err(|err| {
-                sub_scorer_error("secondary", &self.secondary.definition().name, err)
-            }),
-            Score::Binary(false) => Ok(Score::Binary(false)),
+        match gate.score {
+            Score::Binary(true) => {
+                let secondary = self
+                    .secondary
+                    .score_with_resources(ctx)
+                    .await
+                    .map_err(|err| {
+                        sub_scorer_error("secondary", &self.secondary.definition().name, err)
+                    })?;
+                let mut resources = gate.resources.clone();
+                resources.merge(&secondary.resources);
+
+                Ok(ScoreOutcome {
+                    score: secondary.score,
+                    resources,
+                })
+            }
+            Score::Binary(false) => {
+                Ok(ScoreOutcome::new(Score::Binary(false)).with_resources(gate.resources))
+            }
             _ => Err(ScorerError::invalid_input(ThenGateNotBinaryError {
                 scorer_name: self.gate.definition().name,
             })),
@@ -271,8 +339,18 @@ where
     S: Scorer<I, O, R>,
 {
     async fn score(&self, ctx: &ScorerContext<'_, I, O, R>) -> Result<Score, ScorerError> {
-        match self.inner.score(ctx).await? {
-            Score::Binary(value) => Ok(Score::Binary(!value)),
+        Ok(self.score_with_resources(ctx).await?.score)
+    }
+
+    async fn score_with_resources(
+        &self,
+        ctx: &ScorerContext<'_, I, O, R>,
+    ) -> Result<ScoreOutcome, ScorerError> {
+        let outcome = self.inner.score_with_resources(ctx).await?;
+        match outcome.score {
+            Score::Binary(value) => {
+                Ok(ScoreOutcome::new(Score::Binary(!value)).with_resources(outcome.resources))
+            }
             _ => Err(ScorerError::invalid_input(NotTypeMismatchError)),
         }
     }
@@ -294,9 +372,17 @@ where
     F: Fn(Score) -> Result<Score, ScorerError> + Send + Sync,
 {
     async fn score(&self, ctx: &ScorerContext<'_, I, O, R>) -> Result<Score, ScorerError> {
-        let score = self.inner.score(ctx).await?;
+        Ok(self.score_with_resources(ctx).await?.score)
+    }
 
-        (self.map)(score)
+    async fn score_with_resources(
+        &self,
+        ctx: &ScorerContext<'_, I, O, R>,
+    ) -> Result<ScoreOutcome, ScorerError> {
+        let outcome = self.inner.score_with_resources(ctx).await?;
+        let score = (self.map)(outcome.score)?;
+
+        Ok(ScoreOutcome::new(score).with_resources(outcome.resources))
     }
 
     fn definition(&self) -> ScoreDefinition {
@@ -315,7 +401,14 @@ where
     S: Scorer<I, O, R>,
 {
     async fn score(&self, ctx: &ScorerContext<'_, I, O, R>) -> Result<Score, ScorerError> {
-        match timeout(self.duration, self.inner.score(ctx)).await {
+        Ok(self.score_with_resources(ctx).await?.score)
+    }
+
+    async fn score_with_resources(
+        &self,
+        ctx: &ScorerContext<'_, I, O, R>,
+    ) -> Result<ScoreOutcome, ScorerError> {
+        match timeout(self.duration, self.inner.score_with_resources(ctx)).await {
             Ok(result) => result,
             Err(_) => Err(ScorerError::Timeout(self.duration)),
         }
@@ -357,6 +450,13 @@ where
     S: Scorer<I, O>,
 {
     async fn score(&self, ctx: &ScorerContext<'_, I, O, R>) -> Result<Score, ScorerError> {
+        Ok(self.score_with_resources(ctx).await?.score)
+    }
+
+    async fn score_with_resources(
+        &self,
+        ctx: &ScorerContext<'_, I, O, R>,
+    ) -> Result<ScoreOutcome, ScorerError> {
         let inner_ctx = ScorerContext {
             run_id: ctx.run_id,
             sample_id: ctx.sample_id,
@@ -366,7 +466,7 @@ where
             output: ctx.output,
             reference: None,
         };
-        self.inner.score(&inner_ctx).await
+        self.inner.score_with_resources(&inner_ctx).await
     }
 
     fn definition(&self) -> ScoreDefinition {
@@ -480,7 +580,10 @@ impl Error for ThenGateNotBinaryError {}
 #[cfg(test)]
 mod tests {
     use super::ScorerExt;
-    use crate::{Direction, Score, ScoreDefinition, Scorer, ScorerContext, ScorerError};
+    use crate::{
+        Direction, Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerContext, ScorerError,
+        ScorerResources, TokenUsage,
+    };
     use std::time::Duration;
     use tokio::time::sleep;
 
@@ -508,6 +611,39 @@ mod tests {
 
         fn definition(&self) -> ScoreDefinition {
             ScoreDefinition::new(self.0)
+        }
+    }
+
+    struct ResourceScorer {
+        score: Score,
+        input_tokens: u64,
+        output_tokens: u64,
+        cost_usd: f64,
+    }
+
+    impl Scorer<(), ()> for ResourceScorer {
+        async fn score(&self, _ctx: &ScorerContext<'_, (), ()>) -> Result<Score, ScorerError> {
+            Ok(self.score.clone())
+        }
+
+        async fn score_with_resources(
+            &self,
+            _ctx: &ScorerContext<'_, (), ()>,
+        ) -> Result<ScoreOutcome, ScorerError> {
+            Ok(ScoreOutcome::new(self.score.clone()).with_resources(
+                ScorerResources::default()
+                    .token_usage(TokenUsage {
+                        input: self.input_tokens,
+                        output: self.output_tokens,
+                        cache_read: 0,
+                        cache_write: 0,
+                    })
+                    .cost_usd(self.cost_usd),
+            ))
+        }
+
+        fn definition(&self) -> ScoreDefinition {
+            ScoreDefinition::maximize("resource")
         }
     }
 
@@ -673,6 +809,34 @@ mod tests {
         let (i, o, ctx) = ctx();
         let _ = (&i, &o);
         assert!(scorer.score(&ctx).await.is_err());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn weighted_combines_sub_scorer_resources() {
+        let scorer = ResourceScorer {
+            score: Score::Numeric(0.8),
+            input_tokens: 11,
+            output_tokens: 3,
+            cost_usd: 0.01,
+        }
+        .weighted(
+            ResourceScorer {
+                score: Score::Numeric(0.4),
+                input_tokens: 7,
+                output_tokens: 5,
+                cost_usd: 0.02,
+            },
+            0.5,
+            0.5,
+        );
+        let (i, o, ctx) = ctx();
+        let _ = (&i, &o);
+        let outcome = scorer.score_with_resources(&ctx).await.unwrap();
+
+        assert!(matches!(outcome.score, Score::Numeric(v) if (v - 0.6).abs() < 1e-10));
+        assert_eq!(outcome.resources.token_usage.input, 18);
+        assert_eq!(outcome.resources.token_usage.output, 8);
+        assert_eq!(outcome.resources.cost_usd, Some(0.03));
     }
 
     #[tokio::test(flavor = "current_thread")]

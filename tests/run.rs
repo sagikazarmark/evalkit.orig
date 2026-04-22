@@ -1,6 +1,7 @@
 use evalkit::{
     AcquisitionError, Direction, MapError, Run, RunBuildError, Sample, Score, ScoreDefinition,
-    Scorer, ScorerContext, ScorerError, ScorerMetadata, ScorerSet,
+    ScoreOutcome, Scorer, ScorerContext, ScorerError, ScorerMetadata, ScorerResources, ScorerSet,
+    TokenUsage,
 };
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -117,6 +118,38 @@ impl Scorer<String, String, String> for NaNScorer {
 struct JudgePinnedScorer {
     name: &'static str,
     judge_model_pin: &'static str,
+}
+
+struct ResourceReportingScorer {
+    name: &'static str,
+    score: Score,
+    token_usage: TokenUsage,
+    cost_usd: Option<f64>,
+}
+
+impl Scorer<String, String, String> for ResourceReportingScorer {
+    async fn score(
+        &self,
+        _ctx: &ScorerContext<'_, String, String, String>,
+    ) -> Result<Score, ScorerError> {
+        Ok(self.score.clone())
+    }
+
+    async fn score_with_resources(
+        &self,
+        _ctx: &ScorerContext<'_, String, String, String>,
+    ) -> Result<ScoreOutcome, ScorerError> {
+        let mut resources = ScorerResources::default().token_usage(self.token_usage.clone());
+        if let Some(cost_usd) = self.cost_usd {
+            resources = resources.cost_usd(cost_usd);
+        }
+
+        Ok(ScoreOutcome::new(self.score.clone()).with_resources(resources))
+    }
+
+    fn definition(&self) -> ScoreDefinition {
+        ScoreDefinition::maximize(self.name)
+    }
 }
 
 impl Scorer<String, String, String> for JudgePinnedScorer {
@@ -239,6 +272,52 @@ async fn run_accepts_multiple_scorers_and_scorer_sets() {
             .unwrap(),
         &Score::Binary(true)
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_aggregates_scorer_resources_into_sample_results() {
+    let sample = Sample::new(String::from("prompt"), String::from("reference"));
+    let scorer_set = ScorerSet::<String, String, String>::builder()
+        .scorer(ResourceReportingScorer {
+            name: "judge_b",
+            score: Score::Numeric(0.8),
+            token_usage: TokenUsage {
+                input: 7,
+                output: 5,
+                cache_read: 2,
+                cache_write: 1,
+            },
+            cost_usd: Some(0.02),
+        })
+        .build();
+
+    let run = Run::builder()
+        .dataset(vec![sample])
+        .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("output")) })
+        .scorer(ResourceReportingScorer {
+            name: "judge_a",
+            score: Score::Numeric(0.5),
+            token_usage: TokenUsage {
+                input: 11,
+                output: 3,
+                cache_read: 1,
+                cache_write: 0,
+            },
+            cost_usd: Some(0.01),
+        })
+        .scorer_set(scorer_set)
+        .trials(2)
+        .build()
+        .unwrap();
+
+    let result = run.execute().await.unwrap();
+    let sample = &result.samples[0];
+
+    assert_eq!(sample.token_usage.input, 36);
+    assert_eq!(sample.token_usage.output, 16);
+    assert_eq!(sample.token_usage.cache_read, 6);
+    assert_eq!(sample.token_usage.cache_write, 2);
+    assert_eq!(sample.cost_usd, Some(0.06));
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -85,10 +85,11 @@ Already present:
 - The new judge implementation includes stable prompt hashing, retries, timeout support, judge model pins, and reasoning capture for numeric/binary outputs
 - First-pass `llm_classifier` and `g_eval` wrappers now build on top of the shared judge primitive
 - Prompt templates now live under `evalkit-scorers-llm/prompts/` and can be overridden with `LlmJudge::with_prompt`
+- The kernel now aggregates scorer-side token usage and cost through `score_with_resources`, and judge token usage can flow into `SampleResult`
 
 Gaps:
 - No reference TypeScript plugin shim yet
-- Judge token usage and cost are only attached inside structured-score metadata today; they are not yet threaded into `SampleResult`
+- anyllm-backed judges currently populate token usage in `SampleResult`, but not cost because the provider layer does not expose portable cost data yet
 - Reasoning capture is currently limited to numeric and binary judges because `Score::Structured` requires a numeric primary score
 - `llm_classifier` is still a thin closed-set label wrapper; richer classification metadata and calibration are still missing
 - `g_eval` is still a first-pass rubric prompt, not yet a fuller multi-step / auto-generated evaluation flow
@@ -139,7 +140,7 @@ Gaps:
 ## Highest-Leverage Next Slice
 
 The best next implementation slice is finishing the remaining Phase 1(c) depth:
-- thread judge token usage and cost into kernel run results instead of only structured-score metadata
+- add portable cost reporting on top of the new scorer resource hook when provider crates can supply it
 - enrich `llm_classifier` with stronger output metadata or calibration helpers
 - deepen `g_eval` beyond a single rubric prompt into a more explicit step-driven evaluation flow
 

@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 
 use crate::{
-    MapError, Mapper, Score, ScoreDefinition, Scorer, ScorerContext, ScorerError, ScorerMetadata,
+    MapError, Mapper, ScoreDefinition, ScoreOutcome, Scorer, ScorerContext, ScorerError,
+    ScorerMetadata,
 };
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -11,7 +12,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 type ScoreFuture<'a> = Pin<Box<dyn Future<Output = ScoreResults> + 'a>>;
-type ScoreResults = Vec<(ScoreDefinition, Result<Score, ScorerError>)>;
+type ScoreResults = Vec<(ScoreDefinition, Result<ScoreOutcome, ScorerError>)>;
 
 pub struct ScorerSet<I, O, R = ()> {
     definitions: Vec<ScoreDefinition>,
@@ -39,7 +40,7 @@ impl<I, O, R> ScorerSet<I, O, R> {
     pub(crate) async fn score(
         &self,
         ctx: &ScorerContext<'_, I, O, R>,
-    ) -> Vec<(ScoreDefinition, Result<Score, ScorerError>)> {
+    ) -> Vec<(ScoreDefinition, Result<ScoreOutcome, ScorerError>)> {
         self.executor.execute(ctx).await
     }
 }
@@ -401,7 +402,7 @@ trait ErasedScorer<I, O, R>: Send + Sync {
     fn score_boxed<'a>(
         &'a self,
         ctx: &'a ScorerContext<'a, I, O, R>,
-    ) -> Pin<Box<dyn Future<Output = Result<Score, ScorerError>> + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<ScoreOutcome, ScorerError>> + 'a>>;
 }
 
 impl<I, O, R, S> ErasedScorer<I, O, R> for S
@@ -411,8 +412,8 @@ where
     fn score_boxed<'a>(
         &'a self,
         ctx: &'a ScorerContext<'a, I, O, R>,
-    ) -> Pin<Box<dyn Future<Output = Result<Score, ScorerError>> + 'a>> {
-        Box::pin(self.score(ctx))
+    ) -> Pin<Box<dyn Future<Output = Result<ScoreOutcome, ScorerError>> + 'a>> {
+        Box::pin(self.score_with_resources(ctx))
     }
 }
 
@@ -527,8 +528,8 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].0.name, "len_a");
         assert_eq!(results[1].0.name, "len_b");
-        assert_eq!(results[0].1.as_ref().unwrap(), &Score::Binary(true));
-        assert_eq!(results[1].1.as_ref().unwrap(), &Score::Binary(true));
+        assert_eq!(results[0].1.as_ref().unwrap().score, Score::Binary(true));
+        assert_eq!(results[1].1.as_ref().unwrap().score, Score::Binary(true));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -547,7 +548,7 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0.name, "reference_length");
-        assert_eq!(results[0].1.as_ref().unwrap(), &Score::Binary(true));
+        assert_eq!(results[0].1.as_ref().unwrap().score, Score::Binary(true));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -571,8 +572,8 @@ mod tests {
 
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0].1.as_ref().unwrap(), &Score::Numeric(4.0));
-        assert_eq!(results[1].1.as_ref().unwrap(), &Score::Numeric(4.0));
+        assert_eq!(results[0].1.as_ref().unwrap().score, Score::Numeric(4.0));
+        assert_eq!(results[1].1.as_ref().unwrap().score, Score::Numeric(4.0));
     }
 
     #[tokio::test(flavor = "current_thread")]

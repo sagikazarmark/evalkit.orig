@@ -1,7 +1,10 @@
 use anyllm::{
     ChatProvider, ChatRequest, DynChatProvider, ExtractExt, ProviderIdentity, ReasoningConfig,
 };
-use evalkit::{Score, ScoreDefinition, Scorer, ScorerContext, ScorerError, ScorerMetadata};
+use evalkit::{
+    Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerContext, ScorerError, ScorerMetadata,
+    ScorerResources, TokenUsage,
+};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -352,6 +355,13 @@ where
     R: Serialize,
 {
     async fn score(&self, ctx: &ScorerContext<'_, I, O, R>) -> Result<Score, ScorerError> {
+        Ok(self.score_with_resources(ctx).await?.score)
+    }
+
+    async fn score_with_resources(
+        &self,
+        ctx: &ScorerContext<'_, I, O, R>,
+    ) -> Result<ScoreOutcome, ScorerError> {
         if self.capture_reasoning && self.output == LlmJudgeOutput::Label {
             return Err(ScorerError::invalid_input(
                 LlmJudgeConfigurationError::LabelReasoningCaptureUnsupported,
@@ -389,7 +399,8 @@ where
                 let extracted = self
                     .extract_with_retry::<LabelJudgeResponse>(&request)
                     .await?;
-                Ok(Score::Label(extracted.value.label))
+                Ok(ScoreOutcome::new(Score::Label(extracted.value.label))
+                    .with_resources(response_resources(&extracted.response)))
             }
         }
     }
@@ -432,9 +443,11 @@ fn binary_score(
     prompt: &PromptTemplate,
     provider: &DynChatProvider,
     capture_reasoning: bool,
-) -> Score {
+) -> ScoreOutcome {
+    let resources = response_resources(response);
+
     if capture_reasoning {
-        Score::Structured {
+        ScoreOutcome::new(Score::Structured {
             score: if result.score { 1.0 } else { 0.0 },
             reasoning: result.reasoning.unwrap_or_default(),
             metadata: judge_metadata(
@@ -445,9 +458,10 @@ fn binary_score(
                 json!({ "binary": result.score }),
                 result.metadata,
             ),
-        }
+        })
+        .with_resources(resources)
     } else {
-        Score::Binary(result.score)
+        ScoreOutcome::new(Score::Binary(result.score)).with_resources(resources)
     }
 }
 
@@ -457,9 +471,11 @@ fn numeric_score(
     prompt: &PromptTemplate,
     provider: &DynChatProvider,
     capture_reasoning: bool,
-) -> Score {
+) -> ScoreOutcome {
+    let resources = response_resources(response);
+
     if capture_reasoning {
-        Score::Structured {
+        ScoreOutcome::new(Score::Structured {
             score: result.score,
             reasoning: result.reasoning.unwrap_or_default(),
             metadata: judge_metadata(
@@ -470,10 +486,24 @@ fn numeric_score(
                 json!({ "score": result.score }),
                 result.metadata,
             ),
-        }
+        })
+        .with_resources(resources)
     } else {
-        Score::Numeric(result.score)
+        ScoreOutcome::new(Score::Numeric(result.score)).with_resources(resources)
     }
+}
+
+fn response_resources(response: &anyllm::ChatResponse) -> ScorerResources {
+    let Some(usage) = response.usage.as_ref() else {
+        return ScorerResources::default();
+    };
+
+    ScorerResources::default().token_usage(TokenUsage {
+        input: usage.input_tokens.unwrap_or(0),
+        output: usage.output_tokens.unwrap_or(0),
+        cache_read: usage.cached_input_tokens.unwrap_or(0),
+        cache_write: usage.cache_creation_input_tokens.unwrap_or(0),
+    })
 }
 
 fn judge_metadata(
@@ -731,9 +761,9 @@ mod tests {
         let reference = "gold".to_string();
         let ctx = ScorerContext::new(&input, &output, Some(&reference));
 
-        let score = scorer.score(&ctx).await.unwrap();
+        let outcome = scorer.score_with_resources(&ctx).await.unwrap();
 
-        match score {
+        match outcome.score {
             Score::Structured {
                 score,
                 reasoning,
@@ -752,6 +782,10 @@ mod tests {
             }
             other => panic!("expected structured score, got {other:?}"),
         }
+
+        assert_eq!(outcome.resources.token_usage.input, 12);
+        assert_eq!(outcome.resources.token_usage.output, 4);
+        assert_eq!(outcome.resources.token_usage.cache_read, 2);
 
         let request = provider.last_request().unwrap();
         assert_eq!(request.model, "judge-model");

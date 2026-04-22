@@ -1,7 +1,7 @@
 use crate::{
     Acquisition, AcquisitionError, Dataset, MapError, Mapper, RunMetadata, RunResult, Sample,
-    SampleResult, Score, ScoreDefinition, Scorer, ScorerContext, ScorerError, ScorerSet,
-    TrialResult,
+    SampleResult, Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerContext, ScorerError,
+    ScorerResources, ScorerSet, TrialResult,
 };
 use chrono::Utc;
 use futures::{FutureExt, StreamExt, stream};
@@ -20,9 +20,19 @@ use std::time::{Duration, Instant};
 use tokio::time::timeout;
 use uuid::Uuid;
 
-type TrialScores = Vec<(ScoreDefinition, Result<Score, ScorerError>)>;
+type TrialScores = Vec<(ScoreDefinition, Result<ScoreOutcome, ScorerError>)>;
 type TrialFuture<'a> = Pin<Box<dyn Future<Output = TrialScores> + 'a>>;
 type AcquisitionFuture<'a, O> = Pin<Box<dyn Future<Output = Result<O, AcquisitionError>> + 'a>>;
+
+struct ExecutedTrial {
+    result: TrialResult,
+    resources: ScorerResources,
+}
+
+struct FlattenedTrial {
+    scores: HashMap<String, Result<Score, ScorerError>>,
+    resources: ScorerResources,
+}
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -143,9 +153,12 @@ impl<I, O, R> Run<I, O, R> {
 
     async fn execute_sample(&self, run_id: &str, sample: &Sample<I, R>) -> SampleResult {
         let mut trials = Vec::with_capacity(self.trial_count);
+        let mut resources = ScorerResources::default();
 
         for trial_index in 0..self.trial_count {
-            trials.push(self.execute_trial(run_id, sample, trial_index).await);
+            let trial = self.execute_trial(run_id, sample, trial_index).await;
+            resources.merge(&trial.resources);
+            trials.push(trial.result);
         }
 
         let scored_count = trials
@@ -159,8 +172,8 @@ impl<I, O, R> Run<I, O, R> {
             error_count: self.trial_count - scored_count,
             scored_count,
             trials,
-            token_usage: Default::default(),
-            cost_usd: None,
+            token_usage: resources.token_usage,
+            cost_usd: resources.cost_usd,
         }
     }
 
@@ -169,10 +182,10 @@ impl<I, O, R> Run<I, O, R> {
         run_id: &str,
         sample: &Sample<I, R>,
         trial_index: usize,
-    ) -> TrialResult {
+    ) -> ExecutedTrial {
         let started = Instant::now();
 
-        let scores = match AssertUnwindSafe(self.acquire_output(sample))
+        let flattened = match AssertUnwindSafe(self.acquire_output(sample))
             .catch_unwind()
             .await
         {
@@ -192,17 +205,29 @@ impl<I, O, R> Run<I, O, R> {
                     .await
                 {
                     Ok(scores) => flatten_scores(scores),
-                    Err(_) => scorer_panic_scores(&self.definitions),
+                    Err(_) => FlattenedTrial {
+                        scores: scorer_panic_scores(&self.definitions),
+                        resources: ScorerResources::default(),
+                    },
                 }
             }
-            Ok(Err(err)) => acquisition_failure_scores(&self.definitions, err),
-            Err(_) => acquisition_failure_scores(&self.definitions, AcquisitionError::Panicked),
+            Ok(Err(err)) => FlattenedTrial {
+                scores: acquisition_failure_scores(&self.definitions, err),
+                resources: ScorerResources::default(),
+            },
+            Err(_) => FlattenedTrial {
+                scores: acquisition_failure_scores(&self.definitions, AcquisitionError::Panicked),
+                resources: ScorerResources::default(),
+            },
         };
 
-        TrialResult {
-            scores,
-            duration: started.elapsed(),
-            trial_index,
+        ExecutedTrial {
+            result: TrialResult {
+                scores: flattened.scores,
+                duration: started.elapsed(),
+                trial_index,
+            },
+            resources: flattened.resources,
         }
     }
 
@@ -1170,7 +1195,12 @@ where
     S: Scorer<I, O, R> + Send + Sync,
 {
     fn execute<'a>(&'a self, ctx: &'a ScorerContext<'a, I, O, R>) -> TrialFuture<'a> {
-        Box::pin(async move { vec![(self.definition.clone(), self.scorer.score(ctx).await)] })
+        Box::pin(async move {
+            vec![(
+                self.definition.clone(),
+                self.scorer.score_with_resources(ctx).await,
+            )]
+        })
     }
 }
 
@@ -1197,18 +1227,23 @@ async fn execute_targets<I, O, R>(
     results
 }
 
-fn flatten_scores(results: TrialScores) -> HashMap<String, Result<Score, ScorerError>> {
-    results
-        .into_iter()
-        .map(|(definition, result)| {
-            let validated = match result {
-                Ok(score) => validate_score(score),
-                Err(err) => Err(err),
-            };
+fn flatten_scores(results: TrialScores) -> FlattenedTrial {
+    let mut scores = HashMap::with_capacity(results.len());
+    let mut resources = ScorerResources::default();
 
-            (definition.name, validated)
-        })
-        .collect()
+    for (definition, result) in results {
+        let validated = match result {
+            Ok(outcome) => {
+                resources.merge(&outcome.resources);
+                validate_score(outcome.score)
+            }
+            Err(err) => Err(err),
+        };
+
+        scores.insert(definition.name, validated);
+    }
+
+    FlattenedTrial { scores, resources }
 }
 
 fn scorer_panic_scores(

@@ -1,4 +1,64 @@
-use crate::{Score, ScoreDefinition, ScorerContext, ScorerError};
+use crate::{Score, ScoreDefinition, ScorerContext, ScorerError, TokenUsage};
+
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct ScorerResources {
+    pub token_usage: TokenUsage,
+    pub cost_usd: Option<f64>,
+}
+
+impl ScorerResources {
+    pub fn token_usage(mut self, token_usage: TokenUsage) -> Self {
+        self.token_usage = token_usage;
+        self
+    }
+
+    pub fn cost_usd(mut self, cost_usd: f64) -> Self {
+        self.cost_usd = Some(cost_usd);
+        self
+    }
+
+    pub fn merge(&mut self, other: &Self) {
+        self.token_usage.input += other.token_usage.input;
+        self.token_usage.output += other.token_usage.output;
+        self.token_usage.cache_read += other.token_usage.cache_read;
+        self.token_usage.cache_write += other.token_usage.cache_write;
+
+        self.cost_usd = match (self.cost_usd, other.cost_usd) {
+            (Some(left), Some(right)) => Some(left + right),
+            (Some(left), None) => Some(left),
+            (None, Some(right)) => Some(right),
+            (None, None) => None,
+        };
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ScoreOutcome {
+    pub score: Score,
+    pub resources: ScorerResources,
+}
+
+impl ScoreOutcome {
+    pub fn new(score: Score) -> Self {
+        Self {
+            score,
+            resources: ScorerResources::default(),
+        }
+    }
+
+    pub fn with_resources(mut self, resources: ScorerResources) -> Self {
+        self.resources = resources;
+        self
+    }
+}
+
+impl From<Score> for ScoreOutcome {
+    fn from(score: Score) -> Self {
+        Self::new(score)
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -27,6 +87,13 @@ impl ScorerMetadata {
 pub trait Scorer<I, O, R = ()>: Send + Sync {
     async fn score(&self, ctx: &ScorerContext<'_, I, O, R>) -> Result<Score, ScorerError>;
 
+    async fn score_with_resources(
+        &self,
+        ctx: &ScorerContext<'_, I, O, R>,
+    ) -> Result<ScoreOutcome, ScorerError> {
+        self.score(ctx).await.map(ScoreOutcome::from)
+    }
+
     fn definition(&self) -> ScoreDefinition;
 
     fn metadata(&self) -> ScorerMetadata {
@@ -36,7 +103,7 @@ pub trait Scorer<I, O, R = ()>: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::{Scorer, ScorerMetadata};
+    use super::{ScoreOutcome, Scorer, ScorerMetadata};
     use crate::{Direction, Score, ScoreDefinition, ScorerContext, ScorerError};
     use std::error::Error;
     use std::fmt::{self, Display, Formatter};
@@ -147,6 +214,18 @@ mod tests {
         let score = scorer.score(&ctx).await.unwrap();
 
         assert_eq!(score, Score::Binary(true));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn scorer_score_with_resources_defaults_to_empty_resources() {
+        let input = String::from("needle");
+        let output = String::from("haystack with needle inside");
+        let scorer = ContainsScorer;
+        let ctx: ScorerContext<'_, String, String> = ScorerContext::new(&input, &output, None);
+
+        let outcome = scorer.score_with_resources(&ctx).await.unwrap();
+
+        assert_eq!(outcome, ScoreOutcome::new(Score::Binary(true)));
     }
 
     #[test]

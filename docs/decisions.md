@@ -2,6 +2,19 @@
 
 This file records Phase 0 decisions for the `evalkit` kernel. Each entry includes one rejected alternative so later changes have context.
 
+## 2026-04-22 - Add `score_with_resources` instead of changing `Scorer::score` return types
+
+Decision:
+Keep `Scorer::score(&ScorerContext) -> Result<Score, ScorerError>` as the stable primary trait method, and add a default `score_with_resources(&ScorerContext) -> Result<ScoreOutcome, ScorerError>` hook for scorers that need to report token usage or cost.
+
+Why:
+- This lets `Run` aggregate scorer-side `token_usage` and `cost_usd` into `SampleResult` without breaking every existing scorer implementation.
+- Wrapper scorers in `scorer_ext.rs` can override the richer hook to preserve usage through composition.
+- LLM judge scorers can now surface provider token usage in kernel results while keeping the simple `Score` API intact for callers that do not care about resource accounting.
+
+Rejected alternative:
+Change `Scorer::score` itself to return a richer result object. That would be cleaner in isolation, but it would force a broad API break across the kernel, built-in scorers, examples, and downstream implementations for a problem that a default companion method solves with much smaller churn.
+
 ## 2026-04-22 - Build `evalkit-scorers-llm` on `anyllm::ChatProvider` plus `ExtractExt`
 
 Decision:
