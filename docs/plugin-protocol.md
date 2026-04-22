@@ -1,17 +1,16 @@
 # Subprocess Plugin Protocol
 
-This document describes the subprocess acquisition protocol implemented today by `evalkit-cli`.
+This document describes the versioned subprocess plugin protocol implemented by the acquisition path today.
 
-It is intentionally narrow:
-- It supports the `Acquisition` role only.
-- It does not yet implement a versioned handshake.
-- It does not yet support scorer plugins.
-
-Those are planned roadmap items. This document freezes the behavior that already exists so it can be migrated cleanly into the future formal plugin spec.
+Current status:
+- Acquisition plugins support a versioned handshake.
+- Structured plugin error payloads are preserved.
+- Legacy no-handshake subprocess plugins remain accepted for compatibility.
+- Scorer plugins are specified here as a protocol shape, but the runtime integration is not wired yet.
 
 ## Scope
 
-The CLI can execute an external command as the acquisition step for a run.
+The CLI can execute an external command as the acquisition step for a run, and `evalkit-providers` exposes typed protocol structs plus an acquisition-plugin conformance check.
 
 Configured in TOML as:
 
@@ -29,14 +28,42 @@ timeout_secs = 30
 - `stdin` is piped to the child process.
 - `stdout` is piped from the child process.
 - `stderr` is ignored by the CLI.
+- For v1 handshake-capable acquisition plugins, the plugin writes two stdout lines after receiving the request:
+- line 1: handshake
+- line 2: response
 
-## Request Format
+## Handshake
 
-The CLI writes exactly one JSON object line to the child process:
+Handshake line:
 
 ```json
-{"<input_field>": "<input text>"}
+{
+  "kind": "acquisition",
+  "name": "demo-plugin",
+  "version": "0.1.0",
+  "schema_version": "1",
+  "capabilities": ["structured-errors"]
+}
 ```
+
+Fields:
+- `kind`: `"acquisition"` or `"scorer"`
+- `name`: stable plugin name
+- `version`: plugin implementation version
+- `schema_version`: plugin protocol version, currently `"1"`
+- `capabilities`: optional string list
+
+## Acquisition Request Format
+
+Canonical v1 request:
+
+```json
+{"input":"<input text>"}
+```
+
+Legacy compatibility:
+- Older subprocess plugins may still receive a request keyed by the configured `input_field`.
+- That legacy mode is kept only for compatibility during the protocol transition.
 
 Example with default field names:
 
@@ -46,13 +73,28 @@ Example with default field names:
 
 After the JSON line is written, the CLI closes `stdin` so the child sees EOF.
 
-## Response Format
+## Acquisition Response Format
 
-The CLI reads the first line from `stdout` and expects exactly one JSON object containing the configured output field:
+Success response:
 
 ```json
-{"<output_field>": "<output text>"}
+{"output":"<output text>"}
 ```
+
+Structured error response:
+
+```json
+{
+  "error": {
+    "code": "bad_input",
+    "message": "input failed validation",
+    "details": {"field":"input"}
+  }
+}
+```
+
+Legacy compatibility:
+- Older subprocess plugins may still emit a single response object using the configured `output_field` and no handshake line.
 
 Example with default field names:
 
@@ -62,13 +104,50 @@ Example with default field names:
 
 ## Semantics
 
-- The configured `input_field` controls the request key.
-- The configured `output_field` controls the response key.
-- The output value must be a JSON string.
+- A handshake-capable acquisition plugin must emit a valid handshake before its response line.
+- Handshake `kind` must be `"acquisition"`.
+- Handshake `schema_version` must be `"1"`.
+- Successful plugin responses must include `output` and must not include `error`.
+- Failed plugin responses must include `error` and must not include `output`.
 - Empty stdout is treated as an acquisition failure.
 - Invalid JSON is treated as an acquisition failure.
-- Missing `output_field` is treated as an acquisition failure.
 - A timeout is enforced by the CLI using `timeout_secs`.
+
+## Scorer Plugin Shape
+
+The protocol reserves `kind: "scorer"` for scorer plugins.
+
+Planned canonical request shape:
+
+```json
+{
+  "input": "<input text>",
+  "output": "<candidate output>",
+  "reference": "<optional reference>",
+  "run_id": "<optional run id>",
+  "sample_id": "<optional sample id>",
+  "trial_index": 0,
+  "metadata": {"...":"..."}
+}
+```
+
+Planned canonical response shape:
+
+```json
+{"score": {"type":"binary","value":true}}
+```
+
+or:
+
+```json
+{
+  "error": {
+    "code": "invalid_output",
+    "message": "candidate output was not valid JSON",
+    "details": {}
+  }
+}
+```
 
 ## Exit Status
 
@@ -79,6 +158,8 @@ The CLI waits for the child process to exit, but a non-zero exit status does not
 The CLI maps subprocess failures into `AcquisitionError`:
 
 - spawn / IO / JSON parse / missing field -> `AcquisitionError::ExecutionFailed`
+- plugin handshake / protocol violations -> `AcquisitionError::ExecutionFailed`
+- structured plugin error payloads -> `AcquisitionError::ExecutionFailed` with the plugin payload preserved in the boxed source error
 - timeout -> `AcquisitionError::Timeout`
 
 ## Command Encoding
@@ -97,13 +178,12 @@ command = ["python3", "model.py"]
 
 The array form is preferred when arguments contain spaces.
 
-## Future Extension
+## Conformance
 
-The Phase 1 roadmap target extends this current protocol with:
-- a versioned handshake
-- explicit plugin kind metadata
-- scorer plugins in addition to acquisition plugins
-- capability negotiation
-- preserved structured plugin error payloads
+`evalkit-providers` exposes an acquisition-plugin conformance check that validates:
+- the handshake line
+- plugin kind
+- protocol schema version
+- response envelope shape
 
-Until that lands, this document is the source of truth for the protocol implemented by `evalkit-cli` today.
+This document is the source of truth for the protocol implemented by the acquisition path today.
