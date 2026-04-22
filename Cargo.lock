@@ -251,12 +251,22 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "evalkit",
+ "evalkit-providers",
  "regex",
- "reqwest",
  "serde",
  "serde_json",
  "tokio",
  "toml",
+]
+
+[[package]]
+name = "evalkit-providers"
+version = "0.1.0"
+dependencies = [
+ "evalkit",
+ "reqwest",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

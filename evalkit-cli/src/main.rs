@@ -7,12 +7,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
+use evalkit_providers::{HttpAcquisition, SubprocessAcquisition};
 use regex::Regex;
-use reqwest::Client;
 use serde::Deserialize;
-use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as TokioBufReader};
-use tokio::process::Command as TokioCommand;
+use serde_json::Value;
 
 use evalkit::{
     Acquisition, AcquisitionError, Dataset, Run, RunStats, Sample, Score, ScoreDefinition,
@@ -148,114 +146,6 @@ struct DatasetRow {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP acquisition
-// ---------------------------------------------------------------------------
-
-struct HttpAcquisition {
-    client: Client,
-    url: String,
-    input_field: String,
-    output_field: String,
-}
-
-impl Acquisition<String, String> for HttpAcquisition {
-    async fn acquire(&self, input: &String) -> Result<String, AcquisitionError> {
-        let body = json!({ &self.input_field: input });
-        let response = self
-            .client
-            .post(&self.url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AcquisitionError::ExecutionFailed(Box::new(e)))?;
-
-        let payload: Value = response
-            .json()
-            .await
-            .map_err(|e| AcquisitionError::ExecutionFailed(Box::new(e)))?;
-
-        extract_string_field(&payload, &self.output_field)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Subprocess acquisition
-//
-// Protocol: one JSON line written to stdin, one JSON line read from stdout.
-//
-//   stdin:  {"<input_field>": "<input text>"}\n
-//   stdout: {"<output_field>": "<output text>"}\n
-// ---------------------------------------------------------------------------
-
-struct SubprocessAcquisition {
-    program: String,
-    args: Vec<String>,
-    input_field: String,
-    output_field: String,
-    timeout: Duration,
-}
-
-impl Acquisition<String, String> for SubprocessAcquisition {
-    async fn acquire(&self, input: &String) -> Result<String, AcquisitionError> {
-        tokio::time::timeout(self.timeout, self.run(input))
-            .await
-            .map_err(|_| AcquisitionError::Timeout(self.timeout))?
-    }
-}
-
-impl SubprocessAcquisition {
-    async fn run(&self, input: &String) -> Result<String, AcquisitionError> {
-        let input_json = serde_json::to_string(&json!({ &self.input_field: input }))
-            .map_err(|e| AcquisitionError::ExecutionFailed(Box::new(e)))?;
-
-        let mut child = TokioCommand::new(&self.program)
-            .args(&self.args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| AcquisitionError::ExecutionFailed(Box::new(e)))?;
-
-        // Write input JSON line to stdin, then close it so the child sees EOF.
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(input_json.as_bytes())
-                .await
-                .map_err(|e| AcquisitionError::ExecutionFailed(Box::new(e)))?;
-            stdin
-                .write_all(b"\n")
-                .await
-                .map_err(|e| AcquisitionError::ExecutionFailed(Box::new(e)))?;
-        }
-
-        // Read the first line of stdout.
-        let stdout = child.stdout.take().expect("stdout was piped");
-        let mut reader = TokioBufReader::new(stdout);
-        let mut line = String::new();
-        reader
-            .read_line(&mut line)
-            .await
-            .map_err(|e| AcquisitionError::ExecutionFailed(Box::new(e)))?;
-
-        // Reap the child process (ignore exit status — a non-zero exit with
-        // valid JSON output is still a valid response).
-        let _ = child.wait().await;
-
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return Err(AcquisitionError::ExecutionFailed(Box::new(
-                EmptyProcessOutput,
-            )));
-        }
-
-        let payload: Value = serde_json::from_str(trimmed)
-            .map_err(|e| AcquisitionError::ExecutionFailed(Box::new(e)))?;
-
-        extract_string_field(&payload, &self.output_field)
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Unified acquisition enum
 // ---------------------------------------------------------------------------
 
@@ -274,31 +164,6 @@ impl Acquisition<String, String> for CliAcquisition {
 }
 
 // ---------------------------------------------------------------------------
-// Error types
-// ---------------------------------------------------------------------------
-
-#[derive(Debug)]
-struct MissingOutputField(String);
-
-impl fmt::Display for MissingOutputField {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "response JSON is missing the `{}` field", self.0)
-    }
-}
-
-impl Error for MissingOutputField {}
-
-#[derive(Debug)]
-struct EmptyProcessOutput;
-
-impl fmt::Display for EmptyProcessOutput {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("subprocess produced no output on stdout")
-    }
-}
-
-impl Error for EmptyProcessOutput {}
-
 #[derive(Debug)]
 enum CliError {
     Config(String),
@@ -473,16 +338,15 @@ async fn run_command(args: RunArgs) -> Result<bool, CliError> {
 fn build_acquisition(cfg: AcquisitionConfig) -> Result<CliAcquisition, CliError> {
     match (cfg.url, cfg.command) {
         (Some(url), None) => {
-            let client = Client::builder()
-                .timeout(Duration::from_secs(cfg.timeout_secs))
-                .build()
-                .map_err(|e| CliError::Config(format!("cannot build HTTP client: {e}")))?;
-            Ok(CliAcquisition::Http(HttpAcquisition {
-                client,
-                url,
-                input_field: cfg.input_field,
-                output_field: cfg.output_field,
-            }))
+            Ok(CliAcquisition::Http(
+                HttpAcquisition::new(
+                    url,
+                    cfg.input_field,
+                    cfg.output_field,
+                    Duration::from_secs(cfg.timeout_secs),
+                )
+                .map_err(|e| CliError::Config(format!("cannot build HTTP client: {e}")))?,
+            ))
         }
         (None, Some(cmd)) => {
             let parts = cmd.into_parts();
@@ -492,13 +356,13 @@ fn build_acquisition(cfg: AcquisitionConfig) -> Result<CliAcquisition, CliError>
                 ));
             }
             let (program, args) = (parts[0].clone(), parts[1..].to_vec());
-            Ok(CliAcquisition::Subprocess(SubprocessAcquisition {
+            Ok(CliAcquisition::Subprocess(SubprocessAcquisition::new(
                 program,
                 args,
-                input_field: cfg.input_field,
-                output_field: cfg.output_field,
-                timeout: Duration::from_secs(cfg.timeout_secs),
-            }))
+                cfg.input_field,
+                cfg.output_field,
+                Duration::from_secs(cfg.timeout_secs),
+            )))
         }
         (Some(_), Some(_)) => Err(CliError::Config(
             "[acquisition] specifies both `url` and `command`; choose one".into(),
@@ -605,14 +469,5 @@ fn primary_value(stats: &RunStats, scorer_name: &str) -> Option<f64> {
         ScorerStats::Binary { pass_rate, .. } => Some(*pass_rate),
         ScorerStats::Numeric { mean, .. } | ScorerStats::Metric { mean, .. } => Some(*mean),
         ScorerStats::Label { .. } => None,
-    }
-}
-
-fn extract_string_field(payload: &Value, field: &str) -> Result<String, AcquisitionError> {
-    match payload.get(field).and_then(Value::as_str) {
-        Some(s) => Ok(s.to_owned()),
-        None => Err(AcquisitionError::ExecutionFailed(Box::new(
-            MissingOutputField(field.to_owned()),
-        ))),
     }
 }
