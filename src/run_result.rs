@@ -44,6 +44,12 @@ pub struct RunMetadata {
     pub seed: Option<u64>,
     pub dataset_fingerprint: String,
     pub scorer_fingerprint: String,
+    #[serde(default)]
+    pub code_commit: Option<String>,
+    #[serde(default)]
+    pub code_fingerprint: Option<String>,
+    #[serde(default)]
+    pub judge_model_pins: Vec<String>,
     pub started_at: DateTime<Utc>,
     pub completed_at: DateTime<Utc>,
     pub duration: Duration,

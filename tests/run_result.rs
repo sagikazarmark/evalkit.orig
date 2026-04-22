@@ -14,6 +14,9 @@ fn metadata() -> RunMetadata {
         seed: Some(7),
         dataset_fingerprint: "dataset-abc".to_owned(),
         scorer_fingerprint: "scorers-abc".to_owned(),
+        code_commit: Some("abc123".to_owned()),
+        code_fingerprint: Some("tree:deadbeef".to_owned()),
+        judge_model_pins: vec!["gpt-4o@2026-04-01".to_owned()],
         started_at: Utc.with_ymd_and_hms(2026, 4, 3, 10, 0, 0).unwrap(),
         completed_at: Utc.with_ymd_and_hms(2026, 4, 3, 10, 0, 5).unwrap(),
         duration: Duration::from_secs(5),
@@ -180,6 +183,15 @@ fn run_result_round_trips_metadata_and_sample_order() {
     assert_eq!(decoded.metadata.seed, Some(7));
     assert_eq!(decoded.metadata.dataset_fingerprint, "dataset-abc");
     assert_eq!(decoded.metadata.scorer_fingerprint, "scorers-abc");
+    assert_eq!(decoded.metadata.code_commit.as_deref(), Some("abc123"));
+    assert_eq!(
+        decoded.metadata.code_fingerprint.as_deref(),
+        Some("tree:deadbeef")
+    );
+    assert_eq!(
+        decoded.metadata.judge_model_pins,
+        vec![String::from("gpt-4o@2026-04-01")]
+    );
     assert_eq!(decoded.metadata.score_definitions.len(), 1);
     assert_eq!(decoded.samples.len(), 2);
     assert_eq!(decoded.samples[0].sample_id, "sample-a");

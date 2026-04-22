@@ -15,6 +15,9 @@ fn run_result() -> RunResult {
             seed: Some(11),
             dataset_fingerprint: "dataset-jsonl".to_owned(),
             scorer_fingerprint: "scorers-jsonl".to_owned(),
+            code_commit: Some("deadbeef".to_owned()),
+            code_fingerprint: Some("tree:1234abcd".to_owned()),
+            judge_model_pins: vec!["gpt-4o@2026-04-01".to_owned()],
             started_at: Utc.with_ymd_and_hms(2026, 4, 3, 12, 0, 0).unwrap(),
             completed_at: Utc.with_ymd_and_hms(2026, 4, 3, 12, 0, 5).unwrap(),
             duration: Duration::from_secs(5),
@@ -95,6 +98,11 @@ fn write_jsonl_serializes_metadata_then_samples_as_jsonl() {
     assert_eq!(header["schema_version"], json!(RUN_RESULT_SCHEMA_VERSION));
     assert_eq!(metadata["record_type"], json!("metadata"));
     assert_eq!(metadata["metadata"]["run_id"], json!("run-456"));
+    assert_eq!(metadata["metadata"]["code_commit"], json!("deadbeef"));
+    assert_eq!(
+        metadata["metadata"]["judge_model_pins"],
+        json!(["gpt-4o@2026-04-01"])
+    );
     assert_eq!(sample_a["record_type"], json!("sample"));
     assert_eq!(sample_a["sample"]["sample_id"], json!("sample-a"));
     assert_eq!(sample_a["sample"]["token_usage"]["input"], json!(12));
@@ -118,6 +126,8 @@ fn read_jsonl_round_trips_back_to_a_typed_run_result() {
     assert_eq!(decoded.metadata.run_id, expected.metadata.run_id);
     assert_eq!(decoded.metadata.score_definitions.len(), 1);
     assert_eq!(decoded.samples.len(), 2);
+    assert_eq!(decoded.metadata.code_commit.as_deref(), Some("deadbeef"));
+    assert_eq!(decoded.metadata.judge_model_pins.len(), 1);
     assert_eq!(decoded.samples[0].sample_id, "sample-a");
     assert_eq!(decoded.samples[1].sample_id, "sample-b");
     assert_eq!(decoded.samples[0].token_usage.input, 12);
@@ -143,6 +153,9 @@ fn read_jsonl_supports_legacy_metadata_first_files() {
     let decoded = read_jsonl(legacy.as_bytes()).expect("legacy jsonl should deserialize");
 
     assert_eq!(decoded.metadata.run_id, "run-legacy");
+    assert_eq!(decoded.metadata.code_commit, None);
+    assert_eq!(decoded.metadata.code_fingerprint, None);
+    assert!(decoded.metadata.judge_model_pins.is_empty());
     assert_eq!(decoded.samples.len(), 1);
 }
 

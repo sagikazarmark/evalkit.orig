@@ -94,6 +94,9 @@ pub struct Run<I, O, R = ()> {
     concurrency: usize,
     sample_timeout: Option<Duration>,
     seed: Option<u64>,
+    code_commit: Option<String>,
+    code_fingerprint: Option<String>,
+    judge_model_pins: Vec<String>,
     acquisition_mode: &'static str,
 }
 
@@ -124,6 +127,9 @@ impl<I, O, R> Run<I, O, R> {
                 seed: self.seed,
                 dataset_fingerprint: fingerprint_dataset(&self.dataset),
                 scorer_fingerprint: fingerprint_definitions(&self.definitions),
+                code_commit: self.code_commit.clone(),
+                code_fingerprint: self.code_fingerprint.clone(),
+                judge_model_pins: self.judge_model_pins.clone(),
                 started_at,
                 completed_at,
                 duration,
@@ -268,6 +274,9 @@ impl<I, R> RunBuilderWithDataset<I, R> {
             concurrency: 1,
             sample_timeout: None,
             seed: None,
+            code_commit: None,
+            code_fingerprint: None,
+            judge_model_pins: Vec::new(),
             acquisition_mode,
             _mapped: PhantomData,
         }
@@ -291,6 +300,9 @@ pub struct RunBuilderConfigured<
     concurrency: usize,
     sample_timeout: Option<Duration>,
     seed: Option<u64>,
+    code_commit: Option<String>,
+    code_fingerprint: Option<String>,
+    judge_model_pins: Vec<String>,
     acquisition_mode: &'static str,
     _mapped: PhantomData<fn() -> (O2, R2, OutputState, ReferenceState)>,
 }
@@ -313,6 +325,9 @@ pub struct RunBuilderWithTargets<
     concurrency: usize,
     sample_timeout: Option<Duration>,
     seed: Option<u64>,
+    code_commit: Option<String>,
+    code_fingerprint: Option<String>,
+    judge_model_pins: Vec<String>,
     acquisition_mode: &'static str,
     _mapped: PhantomData<fn() -> (O2, R2, OutputState, ReferenceState)>,
 }
@@ -337,6 +352,9 @@ impl<I, O, R, R2, ReferenceState> RunBuilderConfigured<I, O, R, O, R2, Unmapped,
             concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
             seed: self.seed,
+            code_commit: self.code_commit,
+            code_fingerprint: self.code_fingerprint,
+            judge_model_pins: self.judge_model_pins,
             acquisition_mode: self.acquisition_mode,
             _mapped: PhantomData,
         }
@@ -360,6 +378,9 @@ impl<I, O, R, O2, OutputState> RunBuilderConfigured<I, O, R, O2, R, OutputState,
             concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
             seed: self.seed,
+            code_commit: self.code_commit,
+            code_fingerprint: self.code_fingerprint,
+            judge_model_pins: self.judge_model_pins,
             acquisition_mode: self.acquisition_mode,
             _mapped: PhantomData,
         }
@@ -386,6 +407,9 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
             concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
             seed: self.seed,
+            code_commit: self.code_commit,
+            code_fingerprint: self.code_fingerprint,
+            judge_model_pins: self.judge_model_pins,
             acquisition_mode: self.acquisition_mode,
             _mapped: PhantomData,
         }
@@ -410,6 +434,9 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
             concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
             seed: self.seed,
+            code_commit: self.code_commit,
+            code_fingerprint: self.code_fingerprint,
+            judge_model_pins: self.judge_model_pins,
             acquisition_mode: self.acquisition_mode,
             _mapped: PhantomData,
         }
@@ -455,6 +482,31 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
 
     pub fn seed(mut self, seed: u64) -> Self {
         self.seed = Some(seed);
+        self
+    }
+
+    pub fn code_commit(mut self, code_commit: impl Into<String>) -> Self {
+        self.code_commit = Some(code_commit.into());
+        self
+    }
+
+    pub fn code_fingerprint(mut self, code_fingerprint: impl Into<String>) -> Self {
+        self.code_fingerprint = Some(code_fingerprint.into());
+        self
+    }
+
+    pub fn judge_model_pin(mut self, judge_model_pin: impl Into<String>) -> Self {
+        self.judge_model_pins.push(judge_model_pin.into());
+        self
+    }
+
+    pub fn judge_model_pins<P>(mut self, judge_model_pins: P) -> Self
+    where
+        P: IntoIterator,
+        P::Item: Into<String>,
+    {
+        self.judge_model_pins
+            .extend(judge_model_pins.into_iter().map(Into::into));
         self
     }
 
@@ -508,6 +560,12 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
         }
 
         Ok(definitions)
+    }
+
+    fn normalized_judge_model_pins(mut self) -> Self {
+        self.judge_model_pins.sort();
+        self.judge_model_pins.dedup();
+        self
     }
 }
 
@@ -613,20 +671,24 @@ impl StableFingerprint {
 
 impl<I: 'static, O: 'static, R: 'static> RunBuilderWithTargets<I, O, R, O, R, Unmapped, Unmapped> {
     pub fn build(self) -> Result<Run<I, O, R>, RunBuildError> {
-        let definitions = self.validate()?;
+        let this = self.normalized_judge_model_pins();
+        let definitions = this.validate()?;
 
         Ok(Run {
-            dataset: self.dataset,
-            acquisition: self.acquisition,
+            dataset: this.dataset,
+            acquisition: this.acquisition,
             definitions,
             executor: Box::new(RawRunExecutor {
-                targets: self.targets,
+                targets: this.targets,
             }),
-            trial_count: self.trial_count,
-            concurrency: self.concurrency,
-            sample_timeout: self.sample_timeout,
-            seed: self.seed,
-            acquisition_mode: self.acquisition_mode,
+            trial_count: this.trial_count,
+            concurrency: this.concurrency,
+            sample_timeout: this.sample_timeout,
+            seed: this.seed,
+            code_commit: this.code_commit,
+            code_fingerprint: this.code_fingerprint,
+            judge_model_pins: this.judge_model_pins,
+            acquisition_mode: this.acquisition_mode,
         })
     }
 }
@@ -635,24 +697,28 @@ impl<I: 'static, O: 'static, R: 'static, O2: 'static>
     RunBuilderWithTargets<I, O, R, O2, R, Mapped, Unmapped>
 {
     pub fn build(self) -> Result<Run<I, O, R>, RunBuildError> {
-        let definitions = self.validate()?;
-        let output_mapper = self
+        let this = self.normalized_judge_model_pins();
+        let definitions = this.validate()?;
+        let output_mapper = this
             .output_mapper
             .expect("global output mapper must exist for mapped runs");
 
         Ok(Run {
-            dataset: self.dataset,
-            acquisition: self.acquisition,
+            dataset: this.dataset,
+            acquisition: this.acquisition,
             definitions,
             executor: Box::new(OutputMappedRunExecutor {
                 output_mapper,
-                targets: self.targets,
+                targets: this.targets,
             }),
-            trial_count: self.trial_count,
-            concurrency: self.concurrency,
-            sample_timeout: self.sample_timeout,
-            seed: self.seed,
-            acquisition_mode: self.acquisition_mode,
+            trial_count: this.trial_count,
+            concurrency: this.concurrency,
+            sample_timeout: this.sample_timeout,
+            seed: this.seed,
+            code_commit: this.code_commit,
+            code_fingerprint: this.code_fingerprint,
+            judge_model_pins: this.judge_model_pins,
+            acquisition_mode: this.acquisition_mode,
         })
     }
 }
@@ -661,24 +727,28 @@ impl<I: 'static, O: 'static, R: 'static, R2: 'static>
     RunBuilderWithTargets<I, O, R, O, R2, Unmapped, Mapped>
 {
     pub fn build(self) -> Result<Run<I, O, R>, RunBuildError> {
-        let definitions = self.validate()?;
-        let reference_mapper = self
+        let this = self.normalized_judge_model_pins();
+        let definitions = this.validate()?;
+        let reference_mapper = this
             .reference_mapper
             .expect("global reference mapper must exist for mapped runs");
 
         Ok(Run {
-            dataset: self.dataset,
-            acquisition: self.acquisition,
+            dataset: this.dataset,
+            acquisition: this.acquisition,
             definitions,
             executor: Box::new(ReferenceMappedRunExecutor {
                 reference_mapper,
-                targets: self.targets,
+                targets: this.targets,
             }),
-            trial_count: self.trial_count,
-            concurrency: self.concurrency,
-            sample_timeout: self.sample_timeout,
-            seed: self.seed,
-            acquisition_mode: self.acquisition_mode,
+            trial_count: this.trial_count,
+            concurrency: this.concurrency,
+            sample_timeout: this.sample_timeout,
+            seed: this.seed,
+            code_commit: this.code_commit,
+            code_fingerprint: this.code_fingerprint,
+            judge_model_pins: this.judge_model_pins,
+            acquisition_mode: this.acquisition_mode,
         })
     }
 }
@@ -687,28 +757,32 @@ impl<I: 'static, O: 'static, R: 'static, O2: 'static, R2: 'static>
     RunBuilderWithTargets<I, O, R, O2, R2, Mapped, Mapped>
 {
     pub fn build(self) -> Result<Run<I, O, R>, RunBuildError> {
-        let definitions = self.validate()?;
-        let output_mapper = self
+        let this = self.normalized_judge_model_pins();
+        let definitions = this.validate()?;
+        let output_mapper = this
             .output_mapper
             .expect("global output mapper must exist for mapped runs");
-        let reference_mapper = self
+        let reference_mapper = this
             .reference_mapper
             .expect("global reference mapper must exist for mapped runs");
 
         Ok(Run {
-            dataset: self.dataset,
-            acquisition: self.acquisition,
+            dataset: this.dataset,
+            acquisition: this.acquisition,
             definitions,
             executor: Box::new(FullyMappedRunExecutor {
                 output_mapper,
                 reference_mapper,
-                targets: self.targets,
+                targets: this.targets,
             }),
-            trial_count: self.trial_count,
-            concurrency: self.concurrency,
-            sample_timeout: self.sample_timeout,
-            seed: self.seed,
-            acquisition_mode: self.acquisition_mode,
+            trial_count: this.trial_count,
+            concurrency: this.concurrency,
+            sample_timeout: this.sample_timeout,
+            seed: this.seed,
+            code_commit: this.code_commit,
+            code_fingerprint: this.code_fingerprint,
+            judge_model_pins: this.judge_model_pins,
+            acquisition_mode: this.acquisition_mode,
         })
     }
 }

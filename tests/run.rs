@@ -222,6 +222,38 @@ async fn run_metadata_captures_an_explicit_seed() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn run_metadata_captures_explicit_reproducibility_fields() {
+    let sample = Sample::new(String::from("prompt"), String::from("four"));
+
+    let run = Run::builder()
+        .dataset(vec![sample])
+        .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("four")) })
+        .scorer(evalkit::exact_match())
+        .code_commit("abc123")
+        .code_fingerprint("tree:deadbeef")
+        .judge_model_pin("gpt-4o@2026-04-01")
+        .judge_model_pin("claude-3.7@2026-03-01")
+        .judge_model_pin("gpt-4o@2026-04-01")
+        .build()
+        .unwrap();
+
+    let result = run.execute().await.unwrap();
+
+    assert_eq!(result.metadata.code_commit.as_deref(), Some("abc123"));
+    assert_eq!(
+        result.metadata.code_fingerprint.as_deref(),
+        Some("tree:deadbeef")
+    );
+    assert_eq!(
+        result.metadata.judge_model_pins,
+        vec![
+            String::from("claude-3.7@2026-03-01"),
+            String::from("gpt-4o@2026-04-01")
+        ]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn global_mappers_apply_before_standalone_scorers_and_scorer_sets() {
     let sample = Sample::new(String::from("prompt"), String::from("four"));
     let scorer_set = ScorerSet::<String, usize, usize>::builder()

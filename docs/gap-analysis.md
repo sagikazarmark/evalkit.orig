@@ -68,19 +68,16 @@ Status: partial
 
 Already present:
 - `TrialResult` records per-trial duration
-- `RunMetadata` records timing, acquisition mode, trial count, and score definitions
+- `RunMetadata` records timing, acquisition mode, trial count, score definitions, seed, fingerprints, and explicit reproducibility metadata fields
 - `stats.rs` already computes Wilson confidence intervals for binary scores
 - `comparison.rs` already runs a paired t-test-style significance check for aggregate deltas
-- `scorer_ext.rs` already ships `.and()`, `.weighted()`, `.then()`, and `ignore_reference`
+- `scorer_ext.rs` already ships `.and()`, `.or()`, `.not()`, `.map_score()`, `.timeout()`, `.weighted()`, `.then()`, and `ignore_reference`
+- `SampleResult` already records `TokenUsage` and `cost_usd`
+- `Score::Structured` is available
 
 Missing or incomplete:
-- `RunMetadata` does not carry dataset hash, commit identity, model pins, seed, or scorer fingerprints
-- No deterministic seeding on `Run::builder()`
-- No `TokenUsage` or `cost_usd`
-- No bootstrap confidence intervals for numeric scores
+- No automatic population of code identity or judge model pins beyond explicit builder inputs
 - No explicit Wilcoxon fallback for paired comparisons
-- No `.or()`, `.not()`, `.map_score()`, or scorer-level `.timeout()` operator
-- No `Score::Structured`
 
 ## Phase 1 - Polyglot Protocol And Run-Log Schema
 

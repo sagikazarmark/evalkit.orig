@@ -34,4 +34,19 @@ fn run_log_schema_exposes_run_result_and_jsonl_record_shapes() {
     assert!(schema["$defs"].get("TrialResult").is_some());
     assert!(schema["$defs"].get("Score").is_some());
     assert!(schema["$defs"].get("RunMetadata").is_some());
+    assert!(
+        schema["$defs"]["RunMetadata"]["properties"]
+            .get("code_commit")
+            .is_some()
+    );
+    assert!(
+        schema["$defs"]["RunMetadata"]["properties"]
+            .get("code_fingerprint")
+            .is_some()
+    );
+    assert!(
+        schema["$defs"]["RunMetadata"]["properties"]
+            .get("judge_model_pins")
+            .is_some()
+    );
 }
