@@ -28,7 +28,7 @@ pub use comparison::{
     Change, CompareConfig, Comparison, SampleComparison, ScorerComparison, compare,
 };
 pub use dataset::Dataset;
-pub use jsonl::{read_jsonl, write_jsonl};
+pub use jsonl::{RUN_RESULT_SCHEMA_VERSION, read_jsonl, write_jsonl};
 pub use mapper::{MapError, Mapper};
 #[cfg(feature = "langfuse")]
 pub use langfuse::{LangfuseConfig, LangfuseExportError, export_run};
@@ -59,8 +59,8 @@ pub mod prelude {
         Run, RunBuildError, RunError,
         RunMetadata, RunResult, RunStats, Sample, SampleBuildError, SampleBuilder, SampleComparison,
         Score, ScoreDefinition, ScorerComparison, ScorerContext, ScorerError, ScorerExt, ScorerSet,
-        ScorerStats, ThenScorer, TimeoutScorer, TokenUsage, WeightedScorer, compare, ignore_reference,
-        read_jsonl, write_jsonl,
+        RUN_RESULT_SCHEMA_VERSION, ScorerStats, ThenScorer, TimeoutScorer, TokenUsage,
+        WeightedScorer, compare, ignore_reference, read_jsonl, write_jsonl,
     };
     pub use crate::scorers::{contains, exact_match, json_schema, regex};
     #[cfg(feature = "llm-judge")]

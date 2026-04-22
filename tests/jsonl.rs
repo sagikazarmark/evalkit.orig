@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
 use evalkit::{
-    Direction, RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, ScorerError,
-    TrialResult, read_jsonl, write_jsonl,
+    Direction, RUN_RESULT_SCHEMA_VERSION, RunMetadata, RunResult, SampleResult, Score,
+    ScoreDefinition, ScorerError, TrialResult, read_jsonl, write_jsonl,
 };
 use serde_json::json;
 
@@ -84,12 +84,15 @@ fn write_jsonl_serializes_metadata_then_samples_as_jsonl() {
     let encoded = String::from_utf8(buffer).expect("writer should contain utf-8 json");
     let lines: Vec<_> = encoded.lines().collect();
 
-    assert_eq!(lines.len(), 3);
+    assert_eq!(lines.len(), 4);
 
-    let metadata = serde_json::from_str::<serde_json::Value>(lines[0]).expect("metadata json");
-    let sample_a = serde_json::from_str::<serde_json::Value>(lines[1]).expect("sample a json");
-    let sample_b = serde_json::from_str::<serde_json::Value>(lines[2]).expect("sample b json");
+    let header = serde_json::from_str::<serde_json::Value>(lines[0]).expect("header json");
+    let metadata = serde_json::from_str::<serde_json::Value>(lines[1]).expect("metadata json");
+    let sample_a = serde_json::from_str::<serde_json::Value>(lines[2]).expect("sample a json");
+    let sample_b = serde_json::from_str::<serde_json::Value>(lines[3]).expect("sample b json");
 
+    assert_eq!(header["record_type"], json!("header"));
+    assert_eq!(header["schema_version"], json!(RUN_RESULT_SCHEMA_VERSION));
     assert_eq!(metadata["record_type"], json!("metadata"));
     assert_eq!(metadata["metadata"]["run_id"], json!("run-456"));
     assert_eq!(sample_a["record_type"], json!("sample"));
@@ -98,7 +101,7 @@ fn write_jsonl_serializes_metadata_then_samples_as_jsonl() {
     assert_eq!(sample_a["sample"]["cost_usd"], json!(0.0025));
     assert_eq!(sample_b["sample"]["sample_id"], json!("sample-b"));
     assert!(
-        lines[1].find("\"latency\"").unwrap() < lines[1].find("\"parser\"").unwrap(),
+        lines[2].find("\"latency\"").unwrap() < lines[2].find("\"parser\"").unwrap(),
         "existing sorted scorer ordering should be preserved inside each sample line"
     );
 }
@@ -128,4 +131,29 @@ fn read_jsonl_round_trips_back_to_a_typed_run_result() {
         decoded.samples[0].trials[0].scores.get("parser"),
         Some(Err(error)) if error.to_string() == "bad trace"
     ));
+}
+
+#[test]
+fn read_jsonl_supports_legacy_metadata_first_files() {
+    let legacy = concat!(
+        "{\"record_type\":\"metadata\",\"metadata\":{\"run_id\":\"run-legacy\",\"seed\":null,\"dataset_fingerprint\":\"dataset-legacy\",\"scorer_fingerprint\":\"scorers-legacy\",\"started_at\":\"2026-04-03T12:00:00Z\",\"completed_at\":\"2026-04-03T12:00:05Z\",\"duration\":{\"secs\":5,\"nanos\":0},\"trial_count\":1,\"score_definitions\":[],\"acquisition_mode\":\"inline\"}}\n",
+        "{\"record_type\":\"sample\",\"sample\":{\"sample_id\":\"sample-1\",\"trials\":[],\"trial_count\":0,\"scored_count\":0,\"error_count\":0,\"token_usage\":{\"input\":0,\"output\":0,\"cache_read\":0,\"cache_write\":0},\"cost_usd\":null}}\n"
+    );
+
+    let decoded = read_jsonl(legacy.as_bytes()).expect("legacy jsonl should deserialize");
+
+    assert_eq!(decoded.metadata.run_id, "run-legacy");
+    assert_eq!(decoded.samples.len(), 1);
+}
+
+#[test]
+fn read_jsonl_rejects_unknown_schema_versions() {
+    let invalid = concat!(
+        "{\"record_type\":\"header\",\"schema_version\":\"99\"}\n",
+        "{\"record_type\":\"metadata\",\"metadata\":{\"run_id\":\"run-legacy\",\"seed\":null,\"dataset_fingerprint\":\"dataset-legacy\",\"scorer_fingerprint\":\"scorers-legacy\",\"started_at\":\"2026-04-03T12:00:00Z\",\"completed_at\":\"2026-04-03T12:00:05Z\",\"duration\":{\"secs\":5,\"nanos\":0},\"trial_count\":1,\"score_definitions\":[],\"acquisition_mode\":\"inline\"}}\n"
+    );
+
+    let err = read_jsonl(invalid.as_bytes()).expect_err("unknown schema version should fail");
+
+    assert!(err.to_string().contains("schema version"));
 }
