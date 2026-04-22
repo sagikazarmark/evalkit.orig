@@ -6,8 +6,6 @@ use crate::{
 use chrono::Utc;
 use futures::{FutureExt, StreamExt, stream};
 use serde_json::{Map, Value};
-#[cfg(feature = "otel")]
-use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -209,16 +207,11 @@ impl<I, O, R> Run<I, O, R> {
     }
 
     async fn acquire_output(&self, sample: &Sample<I, R>) -> Result<O, AcquisitionError> {
-        #[cfg(feature = "otel")]
-        if self.acquisition_mode == "observe" {
-            return crate::otel::with_observe_sample_id(
-                &sample.id,
-                self.acquire_output_inner(&sample.input),
-            )
-            .await;
-        }
-
-        self.acquire_output_inner(&sample.input).await
+        crate::acquisition::with_current_sample_id(
+            &sample.id,
+            self.acquire_output_inner(&sample.input),
+        )
+        .await
     }
 
     async fn acquire_output_inner(&self, input: &I) -> Result<O, AcquisitionError> {
@@ -257,15 +250,7 @@ impl<I, R> RunBuilderWithDataset<I, R> {
         A: Acquisition<I, O> + 'static,
         O: 'static,
     {
-        #[cfg(feature = "otel")]
-        let acquisition_mode = if TypeId::of::<A>() == TypeId::of::<crate::otel::Observe>() {
-            "observe"
-        } else {
-            "inline"
-        };
-
-        #[cfg(not(feature = "otel"))]
-        let acquisition_mode = "inline";
+        let acquisition_mode = acquisition.metadata().mode;
 
         RunBuilderConfigured::<I, O, R> {
             dataset: self.dataset,

@@ -6,6 +6,39 @@ use std::time::Duration;
 
 use evalkit::prelude::*;
 
+struct ExactMatchScorer;
+
+impl Scorer<String, String, String> for ExactMatchScorer {
+    async fn score(
+        &self,
+        ctx: &ScorerContext<'_, String, String, String>,
+    ) -> Result<Score, ScorerError> {
+        Ok(Score::Binary(ctx.reference == Some(ctx.output)))
+    }
+
+    fn definition(&self) -> ScoreDefinition {
+        ScoreDefinition::maximize("exact_match")
+    }
+}
+
+struct ContainsReferenceScorer;
+
+impl Scorer<String, String, String> for ContainsReferenceScorer {
+    async fn score(
+        &self,
+        ctx: &ScorerContext<'_, String, String, String>,
+    ) -> Result<Score, ScorerError> {
+        Ok(Score::Binary(
+            ctx.reference
+                .is_some_and(|reference| ctx.output.contains(reference)),
+        ))
+    }
+
+    fn definition(&self) -> ScoreDefinition {
+        ScoreDefinition::maximize("contains")
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Dataset -------------------------------------------------------
@@ -44,9 +77,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .dataset(dataset)
         .acquisition(acquisition)
         // exact_match: output must equal reference exactly.
-        .scorer(exact_match())
+        .scorer(ExactMatchScorer)
         // contains: output must contain the reference as a substring.
-        .scorer(contains())
+        .scorer(ContainsReferenceScorer)
         .trials(3)
         .sample_timeout(Duration::from_secs(5))
         .build()?;

@@ -1,7 +1,8 @@
 use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-pub use evalkit::{Observe, Span, SpanEvent, TraceBackend, TraceBackendError};
-use evalkit::{RunResult, Score};
+use evalkit::{
+    Acquisition, AcquisitionError, AcquisitionMetadata, RunResult, Score, current_sample_id,
+};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -14,11 +15,236 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::time::sleep;
+
+type FetchSpansFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<HashMap<String, Vec<Span>>, TraceBackendError>> + 'a>>;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Span {
+    pub trace_id: String,
+    pub span_id: String,
+    pub parent_span_id: Option<String>,
+    pub operation_name: String,
+    pub start_time: DateTime<Utc>,
+    pub end_time: DateTime<Utc>,
+    pub attributes: HashMap<String, Value>,
+    pub events: Vec<SpanEvent>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpanEvent {
+    pub name: String,
+    pub timestamp: DateTime<Utc>,
+    pub attributes: HashMap<String, Value>,
+}
+
+#[derive(Debug)]
+pub struct TraceBackendError(pub Box<dyn Error + Send + Sync>);
+
+impl Display for TraceBackendError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Display::fmt(&self.0, f)
+    }
+}
+
+impl Error for TraceBackendError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
+#[allow(async_fn_in_trait)]
+pub trait TraceBackend: Send + Sync {
+    async fn fetch_spans(
+        &self,
+        correlation_id: &str,
+        sample_attribute: &str,
+        timeout: Duration,
+    ) -> Result<HashMap<String, Vec<Span>>, TraceBackendError>;
+}
+
+trait ErasedTraceBackend: Send + Sync {
+    fn fetch_spans_boxed<'a>(
+        &'a self,
+        correlation_id: &'a str,
+        sample_attribute: &'a str,
+        timeout: Duration,
+    ) -> FetchSpansFuture<'a>;
+}
+
+impl<B> ErasedTraceBackend for B
+where
+    B: TraceBackend,
+{
+    fn fetch_spans_boxed<'a>(
+        &'a self,
+        correlation_id: &'a str,
+        sample_attribute: &'a str,
+        timeout: Duration,
+    ) -> FetchSpansFuture<'a> {
+        Box::pin(async move {
+            self.fetch_spans(correlation_id, sample_attribute, timeout)
+                .await
+        })
+    }
+}
+
+pub struct Observe {
+    backend: Box<dyn ErasedTraceBackend>,
+    correlation_id: String,
+    sample_attribute: String,
+    timeout: Duration,
+    cached_spans: Mutex<Option<HashMap<String, Vec<Span>>>>,
+}
+
+impl Observe {
+    pub fn builder() -> ObserveBuilder {
+        ObserveBuilder
+    }
+
+    async fn grouped_spans(&self) -> Result<HashMap<String, Vec<Span>>, AcquisitionError> {
+        if let Some(cached) = self
+            .cached_spans
+            .lock()
+            .expect("observe cache poisoned")
+            .clone()
+        {
+            return Ok(cached);
+        }
+
+        let grouped = match tokio::time::timeout(
+            self.timeout,
+            self.backend.fetch_spans_boxed(
+                &self.correlation_id,
+                &self.sample_attribute,
+                self.timeout,
+            ),
+        )
+        .await
+        {
+            Ok(Ok(grouped)) => grouped,
+            Ok(Err(err)) => return Err(AcquisitionError::BackendUnavailable(Box::new(err))),
+            Err(_) => return Err(AcquisitionError::Timeout(self.timeout)),
+        };
+
+        *self.cached_spans.lock().expect("observe cache poisoned") = Some(grouped.clone());
+
+        Ok(grouped)
+    }
+}
+
+impl<I> Acquisition<I, Vec<Span>> for Observe {
+    async fn acquire(&self, _input: &I) -> Result<Vec<Span>, AcquisitionError> {
+        let sample_id = current_sample_id().ok_or_else(|| {
+            AcquisitionError::ExecutionFailed(Box::new(ParseTraceError(String::from(
+                "observe acquisition requires Run to provide the current sample id",
+            ))))
+        })?;
+        let grouped = self.grouped_spans().await?;
+
+        grouped
+            .get(&sample_id)
+            .cloned()
+            .ok_or_else(|| AcquisitionError::TraceNotFound {
+                correlation_id: self.correlation_id.clone(),
+                sample_id,
+            })
+    }
+
+    fn metadata(&self) -> AcquisitionMetadata {
+        AcquisitionMetadata::default().mode("observe")
+    }
+}
+
+pub struct ObserveBuilder;
+
+impl ObserveBuilder {
+    pub fn backend<B>(self, backend: B) -> ObserveBuilderWithBackend
+    where
+        B: TraceBackend + 'static,
+    {
+        ObserveBuilderWithBackend {
+            backend: Box::new(backend),
+        }
+    }
+}
+
+pub struct ObserveBuilderWithBackend {
+    backend: Box<dyn ErasedTraceBackend>,
+}
+
+impl ObserveBuilderWithBackend {
+    pub fn correlation_id(
+        self,
+        correlation_id: impl Into<String>,
+    ) -> ObserveBuilderWithCorrelationId {
+        ObserveBuilderWithCorrelationId {
+            backend: self.backend,
+            correlation_id: correlation_id.into(),
+        }
+    }
+}
+
+pub struct ObserveBuilderWithCorrelationId {
+    backend: Box<dyn ErasedTraceBackend>,
+    correlation_id: String,
+}
+
+impl ObserveBuilderWithCorrelationId {
+    pub fn sample_attribute(
+        self,
+        sample_attribute: impl Into<String>,
+    ) -> ObserveBuilderWithSampleAttribute {
+        ObserveBuilderWithSampleAttribute {
+            backend: self.backend,
+            correlation_id: self.correlation_id,
+            sample_attribute: sample_attribute.into(),
+        }
+    }
+}
+
+pub struct ObserveBuilderWithSampleAttribute {
+    backend: Box<dyn ErasedTraceBackend>,
+    correlation_id: String,
+    sample_attribute: String,
+}
+
+impl ObserveBuilderWithSampleAttribute {
+    pub fn timeout(self, timeout: Duration) -> ObserveBuilderReady {
+        ObserveBuilderReady {
+            backend: self.backend,
+            correlation_id: self.correlation_id,
+            sample_attribute: self.sample_attribute,
+            timeout,
+        }
+    }
+}
+
+pub struct ObserveBuilderReady {
+    backend: Box<dyn ErasedTraceBackend>,
+    correlation_id: String,
+    sample_attribute: String,
+    timeout: Duration,
+}
+
+impl ObserveBuilderReady {
+    pub fn build(self) -> Observe {
+        Observe {
+            backend: self.backend,
+            correlation_id: self.correlation_id,
+            sample_attribute: self.sample_attribute,
+            timeout: self.timeout,
+            cached_spans: Mutex::new(None),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct JaegerBackend {

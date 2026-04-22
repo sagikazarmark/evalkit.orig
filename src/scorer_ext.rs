@@ -330,9 +330,9 @@ where
 
 /// Wraps a `Scorer<I, O>` so it can be used as a `Scorer<I, O, R>` for any R.
 ///
-/// Useful when mixing reference-free scorers (like [`crate::scorers::regex`] or
-/// [`crate::scorers::json_schema`]) alongside reference-aware scorers
-/// (like [`crate::scorers::exact_match`]) in the same run.
+/// Useful when mixing reference-free scorers (for example regex or JSON-schema
+/// scorers from `evalkit-scorers-text`) alongside reference-aware scorers
+/// (for example exact-match scorers) in the same run.
 pub struct IgnoreReferenceScorer<I, O, R, S> {
     inner: S,
     definition: ScoreDefinition,

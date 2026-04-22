@@ -15,9 +15,9 @@ Recommended build order:
 
 ## Current State Summary
 
-The current repository is still mostly pre-split:
-- Workspace members: `evalkit`, `evalkit-cli`
-- Feature-gated modules still live inside the kernel for OTel, Langfuse, and the LLM judge
+The workspace is now mostly split for Phase 0:
+- Workspace members include `evalkit`, `evalkit-cli`, `evalkit-providers`, `evalkit-exporters-langfuse`, `evalkit-scorers-text`, `evalkit-otel`, `evalkit-scorers-llm`, `evalkit-scorers-rag`, and `evalkit-scorers-embed`
+- OTel support now lives in `evalkit-otel`, including the `Observe` acquisition path
 - There is no tracked `README`, but there is now a roadmap plus scorer/integration backlog docs under `docs/`
 
 ## Phase 0 - API Freeze And Kernel Features
@@ -56,11 +56,11 @@ Current state:
 - Deterministic scorers now also exist in the standalone `evalkit-scorers-text` crate
 - HTTP and subprocess acquisitions now live in `evalkit-providers`
 - `evalkit-exporters-langfuse` now exists as a standalone crate
-- `evalkit-otel` now exists for Jaeger and OTLP backends, while the umbrella crate still carries the `Observe` compatibility path
+- `evalkit-otel` now owns Jaeger, OTLP, and `Observe`
 
 Gap to roadmap:
 - The umbrella crate still keeps the deterministic scorer implementations in-kernel for compatibility during the split
-- The umbrella crate still carries transitional feature-gated Langfuse and OTel modules during the split
+- The umbrella crate still carries transitional Langfuse and LLM-judge modules during the split
 
 ### 0(d) Kernel features
 

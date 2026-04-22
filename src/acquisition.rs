@@ -2,6 +2,30 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::future::Future;
 use std::time::Duration;
+use tokio::task_local;
+
+task_local! {
+    static CURRENT_SAMPLE_ID: String;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AcquisitionMetadata {
+    pub mode: &'static str,
+}
+
+impl Default for AcquisitionMetadata {
+    fn default() -> Self {
+        Self { mode: "inline" }
+    }
+}
+
+impl AcquisitionMetadata {
+    pub fn mode(mut self, mode: &'static str) -> Self {
+        self.mode = mode;
+        self
+    }
+}
 
 #[derive(Debug)]
 pub enum AcquisitionError {
@@ -45,6 +69,10 @@ impl Error for AcquisitionError {
 #[allow(async_fn_in_trait)]
 pub trait Acquisition<I, O>: Send + Sync {
     async fn acquire(&self, input: &I) -> Result<O, AcquisitionError>;
+
+    fn metadata(&self) -> AcquisitionMetadata {
+        AcquisitionMetadata::default()
+    }
 }
 
 impl<I, O, F, Fut> Acquisition<I, O> for F
@@ -55,6 +83,17 @@ where
     async fn acquire(&self, input: &I) -> Result<O, AcquisitionError> {
         self(input).await
     }
+}
+
+pub fn current_sample_id() -> Option<String> {
+    CURRENT_SAMPLE_ID.try_with(Clone::clone).ok()
+}
+
+pub(crate) async fn with_current_sample_id<Fut>(sample_id: &str, future: Fut) -> Fut::Output
+where
+    Fut: Future,
+{
+    CURRENT_SAMPLE_ID.scope(sample_id.to_string(), future).await
 }
 
 #[cfg(test)]

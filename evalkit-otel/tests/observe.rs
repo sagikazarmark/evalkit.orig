@@ -1,14 +1,28 @@
-#![cfg(feature = "otel")]
-
 use chrono::{DateTime, Utc};
 use evalkit::{
-    AcquisitionError, Observe, Run, RunBuildError, Sample, Span, SpanEvent, TraceBackend,
-    TraceBackendError,
+    AcquisitionError, Run, RunBuildError, Sample, Score, ScoreDefinition, Scorer, ScorerContext,
+    ScorerError,
 };
+use evalkit_otel::{Observe, Span, SpanEvent, TraceBackend, TraceBackendError};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+struct ExactMatchScorer;
+
+impl Scorer<String, String, String> for ExactMatchScorer {
+    async fn score(
+        &self,
+        ctx: &ScorerContext<'_, String, String, String>,
+    ) -> Result<Score, ScorerError> {
+        Ok(Score::Binary(ctx.reference == Some(ctx.output)))
+    }
+
+    fn definition(&self) -> ScoreDefinition {
+        ScoreDefinition::maximize("exact_match")
+    }
+}
 
 struct RecordingBackend {
     grouped_spans: HashMap<String, Vec<Span>>,
@@ -72,7 +86,7 @@ async fn observe_mode_runs_from_grouped_spans_and_scores_like_inline_mode() {
         .dataset(vec![sample])
         .acquisition(observe)
         .map_output(|spans: &Vec<Span>| Ok(output_attribute(spans)))
-        .scorer(evalkit::exact_match())
+        .scorer(ExactMatchScorer)
         .trials(2)
         .build()
         .unwrap();
@@ -90,7 +104,7 @@ async fn observe_mode_runs_from_grouped_spans_and_scores_like_inline_mode() {
             .unwrap()
             .as_ref()
             .unwrap(),
-        &evalkit::Score::Binary(true)
+        &Score::Binary(true)
     );
     assert_eq!(
         calls.lock().unwrap().as_slice(),
@@ -126,7 +140,7 @@ async fn observe_mode_maps_missing_sample_spans_to_trace_not_found() {
         .dataset(vec![sample])
         .acquisition(observe)
         .map_output(|spans: &Vec<Span>| Ok(output_attribute(spans)))
-        .scorer(evalkit::exact_match())
+        .scorer(ExactMatchScorer)
         .build()
         .unwrap();
 
@@ -170,7 +184,7 @@ async fn observe_mode_uses_collection_timeout_for_backend_fetches() {
         .dataset(vec![sample])
         .acquisition(observe)
         .map_output(|spans: &Vec<Span>| Ok(output_attribute(spans)))
-        .scorer(evalkit::exact_match())
+        .scorer(ExactMatchScorer)
         .sample_timeout(Duration::from_millis(50))
         .build()
         .unwrap();
@@ -208,7 +222,7 @@ fn observe_mode_requires_non_generated_sample_ids() {
         )])
         .acquisition(observe)
         .map_output(|spans: &Vec<Span>| Ok(output_attribute(spans)))
-        .scorer(evalkit::exact_match())
+        .scorer(ExactMatchScorer)
         .build()
     {
         Err(err) => err,

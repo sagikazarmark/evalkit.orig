@@ -84,6 +84,21 @@ impl Scorer<String, usize, usize> for ReferenceLengthScorer {
     }
 }
 
+struct ExactMatchScorer;
+
+impl Scorer<String, String, String> for ExactMatchScorer {
+    async fn score(
+        &self,
+        ctx: &ScorerContext<'_, String, String, String>,
+    ) -> Result<Score, ScorerError> {
+        Ok(Score::Binary(ctx.reference == Some(ctx.output)))
+    }
+
+    fn definition(&self) -> ScoreDefinition {
+        ScoreDefinition::maximize("exact_match")
+    }
+}
+
 struct NaNScorer;
 
 impl Scorer<String, String, String> for NaNScorer {
@@ -138,7 +153,7 @@ async fn run_builder_executes_dataset_and_returns_sample_results() {
             };
             async move { Ok::<_, AcquisitionError>(output) }
         })
-        .scorer(evalkit::exact_match())
+        .scorer(ExactMatchScorer)
         .build()
         .unwrap();
 
@@ -191,7 +206,7 @@ async fn run_accepts_multiple_scorers_and_scorer_sets() {
     let run = Run::builder()
         .dataset(vec![sample])
         .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("four")) })
-        .scorer(evalkit::exact_match())
+        .scorer(ExactMatchScorer)
         .scorer_set(scorer_set)
         .trials(2)
         .concurrency(4)
@@ -233,7 +248,7 @@ async fn run_metadata_captures_an_explicit_seed() {
     let run = Run::builder()
         .dataset(vec![sample])
         .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("four")) })
-        .scorer(evalkit::exact_match())
+        .scorer(ExactMatchScorer)
         .seed(42)
         .build()
         .unwrap();
@@ -250,7 +265,7 @@ async fn run_metadata_auto_populates_code_identity_when_git_is_available() {
     let run = Run::builder()
         .dataset(vec![sample])
         .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("four")) })
-        .scorer(evalkit::exact_match())
+        .scorer(ExactMatchScorer)
         .build()
         .unwrap();
 
@@ -329,7 +344,7 @@ async fn run_metadata_captures_explicit_reproducibility_fields() {
     let run = Run::builder()
         .dataset(vec![sample])
         .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("four")) })
-        .scorer(evalkit::exact_match())
+        .scorer(ExactMatchScorer)
         .code_commit("abc123")
         .code_fingerprint("tree:deadbeef")
         .judge_model_pin("gpt-4o@2026-04-01")
@@ -401,7 +416,7 @@ async fn build_validates_duplicates_and_execute_validates_scores_and_timeouts() 
     let duplicate_sample_error = match Run::builder()
         .dataset(vec![duplicate_a, duplicate_b])
         .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("output")) })
-        .scorer(evalkit::exact_match())
+        .scorer(ExactMatchScorer)
         .build()
     {
         Err(err) => err,
@@ -419,8 +434,8 @@ async fn build_validates_duplicates_and_execute_validates_scores_and_timeouts() 
             String::from("ref"),
         )])
         .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("output")) })
-        .scorer(evalkit::exact_match())
-        .scorer(evalkit::exact_match())
+        .scorer(ExactMatchScorer)
+        .scorer(ExactMatchScorer)
         .build()
     {
         Err(err) => err,
@@ -463,7 +478,7 @@ async fn build_validates_duplicates_and_execute_validates_scores_and_timeouts() 
             tokio::time::sleep(Duration::from_millis(20)).await;
             Ok::<_, AcquisitionError>(String::from("late"))
         })
-        .scorer(evalkit::exact_match())
+        .scorer(ExactMatchScorer)
         .sample_timeout(Duration::from_millis(1))
         .build()
         .unwrap();
