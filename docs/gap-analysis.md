@@ -4,14 +4,12 @@ This document compares the current codebase to `docs/ROADMAP.md` and identifies 
 
 ## Recommendation
 
-The next work should stay inside Phase 0 and focus on the kernel API before any crate split.
+Phase 0 is complete. The next work should move into Phase 1.
 
 Recommended build order:
-1. Land the Phase 0 decision and stability docs.
-2. Freeze the kernel surface by adding `Score::Structured`, expanding `ScorerContext`, and replacing the `ScorerError` newtype with structured variants.
-3. Add the remaining scorer composition operators: `.or()`, `.not()`, `.map_score()`, and `.timeout()`.
-4. Expand `RunMetadata` and per-sample results with reproducibility and usage tracking.
-5. Split the monolith into focused crates only after the shared types stop moving.
+1. Freeze and publish the run-log schema as a documented Phase 1 artifact.
+2. Formalize the subprocess plugin protocol and ship reference shims.
+3. Replace the old in-kernel LLM judge approach with the `evalkit-scorers-llm` implementation planned for Phase 1.
 
 ## Current State Summary
 
@@ -28,31 +26,26 @@ The workspace is now split for Phase 0:
 
 Status: complete
 
-Already present:
+Completed:
 - Core kernel types are exported from `src/lib.rs`
-- `AcquisitionError` is already an enum with specific variants
-- `Sample` and `Dataset` already carry metadata maps
-
-Gaps:
-- `ScorerError` is still a boxed newtype
-- `ScorerContext` only carries input, output, and reference
-- `Score` has no structured variant
-- There is no tracked decision log until this change
+- `AcquisitionError` is an enum with specific variants
+- `ScorerError` is structured
+- `ScorerContext` carries run and sample metadata
+- `Score::Structured` is in the kernel
+- `docs/decisions.md` records the Phase 0 decisions
 
 ### 0(b) Decisions, semver policy, multi-crate layout
 
-Status: newly started with this change
+Status: complete
 
-Already present:
-- `docs/ROADMAP.md` defines the intended workspace layout
-
-Gaps:
-- `docs/decisions.md` and `docs/stability.md` were missing
-- The current workspace was still monolithic, with only the root crate and `evalkit-cli`
+Completed:
+- `docs/ROADMAP.md` defines the workspace layout
+- `docs/decisions.md` and `docs/stability.md` are in-repo
+- The workspace layout is split across the Phase 0 crates
 
 ### 0(c) Workspace split
 
-Status: partial
+Status: complete
 
 Current state:
 - Deterministic scorers now also exist in the standalone `evalkit-scorers-text` crate
@@ -61,7 +54,7 @@ Current state:
 - `evalkit-otel` now owns Jaeger, OTLP, and `Observe`
 
 Gap to roadmap:
-- The `evalkit-scorers-llm` crate is still a Phase 1 skeleton rather than the final anyllm-backed implementation
+- The `evalkit-scorers-llm` crate is intentionally still a Phase 1 skeleton rather than the final anyllm-backed implementation
 
 ### 0(d) Kernel features
 
@@ -78,7 +71,7 @@ Already present:
 
 Remaining work:
 - No major kernel feature gaps remain in the current Phase 0(d) checklist.
-- Phase 0 exit now depends on releasing the frozen kernel API as `evalkit` 0.2.0.
+- `evalkit` is now at the Phase 0 release boundary (`0.2.0`).
 
 ## Phase 1 - Polyglot Protocol And Run-Log Schema
 
@@ -87,11 +80,11 @@ Status: early partials only
 Already present:
 - JSONL read/write helpers exist
 - `evalkit-cli` already contains subprocess acquisition support
-- The kernel already has an OTLP receiver behind the `otel` feature
+- `evalkit-otel` already contains the OTLP receiver and the `Observe` acquisition path
 
 Gaps:
 - No reference Python or TypeScript plugin shims yet
-- Current `llm_judge` uses ad hoc HTTP instead of `anyllm`
+- `evalkit-scorers-llm` is still a skeleton and does not yet ship the anyllm-backed judge primitive
 
 ## Phase 2 - Streaming / Online Scoring
 
@@ -138,10 +131,8 @@ Gaps:
 
 ## Highest-Leverage Next Slice
 
-The best next implementation slice is still a kernel-only one:
-- add structured scores
-- add richer scorer context
-- add structured scorer errors
-- add the missing composition operators
+The best next implementation slice is Phase 1(a) plus 1(b):
+- publish the run-log schema as a frozen, documented artifact
+- formalize the subprocess plugin protocol from the existing CLI/provider behavior
 
-That sequence gives the future split and the future plugin protocol a stable surface to build on, while keeping the current monolithic crate usable.
+That sequence turns the completed Phase 0 kernel into a portable contract other crates and languages can target.
