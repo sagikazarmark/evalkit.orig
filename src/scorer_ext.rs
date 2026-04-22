@@ -1,9 +1,11 @@
 use futures::join;
+use tokio::time::timeout;
 
 use crate::{Score, ScoreDefinition, Scorer, ScorerContext, ScorerError};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::marker::PhantomData;
+use std::time::Duration;
 
 /// Extension methods for composing scorers into new scorers.
 ///
@@ -24,6 +26,32 @@ pub trait ScorerExt<I, O, R = ()>: Scorer<I, O, R> + Sized {
             left: self,
             right: other,
             definition: ScoreDefinition::maximize(format!("{left_name} AND {right_name}")),
+        }
+    }
+
+    /// Combines two scorers with boolean OR: either may return `Binary(true)`.
+    fn or<S>(self, other: S) -> OrScorer<Self, S>
+    where
+        S: Scorer<I, O, R>,
+    {
+        let left_name = self.definition().name;
+        let right_name = other.definition().name;
+        OrScorer {
+            left: self,
+            right: other,
+            definition: ScoreDefinition::maximize(format!("{left_name} OR {right_name}")),
+        }
+    }
+
+    /// Inverts a binary scorer.
+    fn not(self) -> NotScorer<Self> {
+        let definition = self.definition();
+        NotScorer {
+            inner: self,
+            definition: ScoreDefinition {
+                name: format!("NOT {}", definition.name),
+                direction: definition.direction,
+            },
         }
     }
 
@@ -74,6 +102,29 @@ pub trait ScorerExt<I, O, R = ()>: Scorer<I, O, R> + Sized {
             },
         }
     }
+
+    /// Applies a post-processing transform to the produced score.
+    fn map_score<F>(self, map: F) -> MapScoreScorer<Self, F>
+    where
+        F: Fn(Score) -> Result<Score, ScorerError> + Send + Sync,
+    {
+        let definition = self.definition();
+        MapScoreScorer {
+            inner: self,
+            map,
+            definition,
+        }
+    }
+
+    /// Fails the scorer when it exceeds the provided duration.
+    fn timeout(self, duration: Duration) -> TimeoutScorer<Self> {
+        let definition = self.definition();
+        TimeoutScorer {
+            inner: self,
+            duration,
+            definition,
+        }
+    }
 }
 
 impl<T, I, O, R> ScorerExt<I, O, R> for T where T: Scorer<I, O, R> {}
@@ -81,6 +132,12 @@ impl<T, I, O, R> ScorerExt<I, O, R> for T where T: Scorer<I, O, R> {}
 // --- AndScorer -----------------------------------------------------------
 
 pub struct AndScorer<A, B> {
+    left: A,
+    right: B,
+    definition: ScoreDefinition,
+}
+
+pub struct OrScorer<A, B> {
     left: A,
     right: B,
     definition: ScoreDefinition,
@@ -100,6 +157,28 @@ where
         match (left_score, right_score) {
             (Score::Binary(a), Score::Binary(b)) => Ok(Score::Binary(a && b)),
             _ => Err(ScorerError::invalid_input(AndTypeMismatchError)),
+        }
+    }
+
+    fn definition(&self) -> ScoreDefinition {
+        self.definition.clone()
+    }
+}
+
+impl<I, O, R, A, B> Scorer<I, O, R> for OrScorer<A, B>
+where
+    A: Scorer<I, O, R>,
+    B: Scorer<I, O, R>,
+{
+    async fn score(&self, ctx: &ScorerContext<'_, I, O, R>) -> Result<Score, ScorerError> {
+        let (left_result, right_result) = join!(self.left.score(ctx), self.right.score(ctx));
+        let left_score = left_result
+            .map_err(|err| sub_scorer_error("left", &self.left.definition().name, err))?;
+        let right_score = right_result
+            .map_err(|err| sub_scorer_error("right", &self.right.definition().name, err))?;
+        match (left_score, right_score) {
+            (Score::Binary(a), Score::Binary(b)) => Ok(Score::Binary(a || b)),
+            _ => Err(ScorerError::invalid_input(OrTypeMismatchError)),
         }
     }
 
@@ -176,6 +255,71 @@ where
             _ => Err(ScorerError::invalid_input(ThenGateNotBinaryError {
                 scorer_name: self.gate.definition().name,
             })),
+        }
+    }
+
+    fn definition(&self) -> ScoreDefinition {
+        self.definition.clone()
+    }
+}
+
+pub struct NotScorer<S> {
+    inner: S,
+    definition: ScoreDefinition,
+}
+
+impl<I, O, R, S> Scorer<I, O, R> for NotScorer<S>
+where
+    S: Scorer<I, O, R>,
+{
+    async fn score(&self, ctx: &ScorerContext<'_, I, O, R>) -> Result<Score, ScorerError> {
+        match self.inner.score(ctx).await? {
+            Score::Binary(value) => Ok(Score::Binary(!value)),
+            _ => Err(ScorerError::invalid_input(NotTypeMismatchError)),
+        }
+    }
+
+    fn definition(&self) -> ScoreDefinition {
+        self.definition.clone()
+    }
+}
+
+pub struct MapScoreScorer<S, F> {
+    inner: S,
+    map: F,
+    definition: ScoreDefinition,
+}
+
+impl<I, O, R, S, F> Scorer<I, O, R> for MapScoreScorer<S, F>
+where
+    S: Scorer<I, O, R>,
+    F: Fn(Score) -> Result<Score, ScorerError> + Send + Sync,
+{
+    async fn score(&self, ctx: &ScorerContext<'_, I, O, R>) -> Result<Score, ScorerError> {
+        let score = self.inner.score(ctx).await?;
+
+        (self.map)(score)
+    }
+
+    fn definition(&self) -> ScoreDefinition {
+        self.definition.clone()
+    }
+}
+
+pub struct TimeoutScorer<S> {
+    inner: S,
+    duration: Duration,
+    definition: ScoreDefinition,
+}
+
+impl<I, O, R, S> Scorer<I, O, R> for TimeoutScorer<S>
+where
+    S: Scorer<I, O, R>,
+{
+    async fn score(&self, ctx: &ScorerContext<'_, I, O, R>) -> Result<Score, ScorerError> {
+        match timeout(self.duration, self.inner.score(ctx)).await {
+            Ok(result) => result,
+            Err(_) => Err(ScorerError::Timeout(self.duration)),
         }
     }
 
@@ -286,6 +430,17 @@ impl Display for AndTypeMismatchError {
 impl Error for AndTypeMismatchError {}
 
 #[derive(Debug)]
+struct OrTypeMismatchError;
+
+impl Display for OrTypeMismatchError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("or() requires both scorers to return Binary scores")
+    }
+}
+
+impl Error for OrTypeMismatchError {}
+
+#[derive(Debug)]
 struct WeightedTypeMismatchError;
 
 impl Display for WeightedTypeMismatchError {
@@ -295,6 +450,17 @@ impl Display for WeightedTypeMismatchError {
 }
 
 impl Error for WeightedTypeMismatchError {}
+
+#[derive(Debug)]
+struct NotTypeMismatchError;
+
+impl Display for NotTypeMismatchError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("not() requires the scorer to return a Binary score")
+    }
+}
+
+impl Error for NotTypeMismatchError {}
 
 #[derive(Debug)]
 struct ThenGateNotBinaryError {
@@ -317,6 +483,8 @@ impl Error for ThenGateNotBinaryError {}
 mod tests {
     use super::ScorerExt;
     use crate::{Direction, Score, ScoreDefinition, Scorer, ScorerContext, ScorerError};
+    use std::time::Duration;
+    use tokio::time::sleep;
 
     struct ConstScorer {
         score: Score,
@@ -393,6 +561,25 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn or_returns_true_when_either_passes() {
+        let scorer = ConstScorer { score: Score::Binary(false), name: "a" }
+            .or(ConstScorer { score: Score::Binary(true), name: "b" });
+        let (i, o, ctx) = ctx();
+        let _ = (&i, &o);
+        let score = scorer.score(&ctx).await.unwrap();
+        assert_eq!(score, Score::Binary(true));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn or_errors_on_non_binary_scores() {
+        let scorer = ConstScorer { score: Score::Numeric(1.0), name: "a" }
+            .or(ConstScorer { score: Score::Binary(true), name: "b" });
+        let (i, o, ctx) = ctx();
+        let _ = (&i, &o);
+        assert!(scorer.score(&ctx).await.is_err());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn weighted_returns_weighted_average() {
         let scorer = ConstScorer { score: Score::Numeric(0.8), name: "a" }
             .weighted(ConstScorer { score: Score::Numeric(0.4), name: "b" }, 0.7, 0.3);
@@ -461,6 +648,51 @@ mod tests {
         let err = scorer.score(&ctx).await.unwrap_err();
         assert!(err.to_string().contains("gate scorer"));
         assert!(err.to_string().contains("Binary"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn not_inverts_binary_scores() {
+        let scorer = ConstScorer { score: Score::Binary(true), name: "gate" }.not();
+        let (i, o, ctx) = ctx();
+        let _ = (&i, &o);
+        let score = scorer.score(&ctx).await.unwrap();
+        assert_eq!(score, Score::Binary(false));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn map_score_transforms_the_inner_score() {
+        let scorer = ConstScorer { score: Score::Numeric(0.8), name: "quality" }.map_score(
+            |score| match score {
+                Score::Numeric(value) => Ok(Score::Numeric(value * 100.0)),
+                _ => Err(ScorerError::invalid_input(std::io::Error::other("expected numeric"))),
+            },
+        );
+        let (i, o, ctx) = ctx();
+        let _ = (&i, &o);
+        let score = scorer.score(&ctx).await.unwrap();
+        assert_eq!(score, Score::Numeric(80.0));
+    }
+
+    struct SlowScorer;
+
+    impl Scorer<(), ()> for SlowScorer {
+        async fn score(&self, _ctx: &ScorerContext<'_, (), ()>) -> Result<Score, ScorerError> {
+            sleep(Duration::from_millis(25)).await;
+            Ok(Score::Binary(true))
+        }
+
+        fn definition(&self) -> ScoreDefinition {
+            ScoreDefinition::maximize("slow")
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn timeout_returns_timeout_error_when_inner_scorer_is_too_slow() {
+        let scorer = SlowScorer.timeout(Duration::from_millis(5));
+        let (i, o, ctx) = ctx();
+        let _ = (&i, &o);
+        let err = scorer.score(&ctx).await.unwrap_err();
+        assert_eq!(err.to_string(), "scorer timed out after 5ms");
     }
 
     #[tokio::test(flavor = "current_thread")]

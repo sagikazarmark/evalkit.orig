@@ -16,8 +16,12 @@ Only the scorers needed by the kernel's examples + tests. Everything else moves 
 - [x] `regex`
 - [x] `json_schema`
 
-Composition operators (in `scorer_ext`) — shipped. New composition operators (`.or()`, `.not()`, `.map_score()`, `.timeout()`) are kernel API additions tracked in **ROADMAP Phase 0(d)**, not here.
+Composition operators (in `scorer_ext`) — shipped.
 - [x] `.and()` — `AndScorer`
+- [x] `.or()` — `OrScorer`
+- [x] `.not()` — `NotScorer`
+- [x] `.map_score()` — `MapScoreScorer`
+- [x] `.timeout()` — `TimeoutScorer`
 - [x] `.weighted()` — `WeightedScorer`
 - [x] `.then()` — `ThenScorer`
 - [x] `ignore_reference`
