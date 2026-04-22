@@ -2,9 +2,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 
 use serde::{Deserialize, Serialize};
 
+use crate::schema::RUN_RESULT_SCHEMA_VERSION;
 use crate::{RunMetadata, RunResult, SampleResult};
-
-pub const RUN_RESULT_SCHEMA_VERSION: &str = "1";
 
 #[derive(Serialize)]
 #[serde(tag = "record_type", rename_all = "snake_case")]

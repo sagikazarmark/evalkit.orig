@@ -13,6 +13,7 @@ mod otel;
 mod run;
 mod run_result;
 mod sample;
+pub mod schema;
 mod score;
 mod score_definition;
 mod scorer;
@@ -28,7 +29,7 @@ pub use comparison::{
     Change, CompareConfig, Comparison, SampleComparison, ScorerComparison, compare,
 };
 pub use dataset::Dataset;
-pub use jsonl::{RUN_RESULT_SCHEMA_VERSION, read_jsonl, write_jsonl};
+pub use jsonl::{read_jsonl, write_jsonl};
 pub use mapper::{MapError, Mapper};
 #[cfg(feature = "langfuse")]
 pub use langfuse::{LangfuseConfig, LangfuseExportError, export_run};
@@ -47,6 +48,7 @@ pub use scorer_ext::{
 };
 pub use scorer_error::ScorerError;
 pub use scorer_set::ScorerSet;
+pub use schema::RUN_RESULT_SCHEMA_VERSION;
 #[cfg(feature = "llm-judge")]
 pub use scorers::{LlmJudgeConfig, LlmJudgeScoreExtractor, llm_judge};
 pub use scorers::{contains, exact_match, json_schema, regex};
