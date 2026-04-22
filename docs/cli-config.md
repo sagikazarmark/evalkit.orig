@@ -99,6 +99,24 @@ schema = { type = "object", required = ["answer"] }
 Required fields:
 - `schema: JSON value`
 
+### `plugin`
+
+```toml
+[[scorer]]
+type = "plugin"
+name = "external_score"
+command = ["python3", "score.py"]
+timeout_secs = 30
+```
+
+Required fields:
+- `command: string | string[]`
+
+Optional fields:
+- `timeout_secs: integer` - plugin timeout in seconds, default `30`
+
+The scorer subprocess uses the canonical scorer-plugin protocol documented in `docs/plugin-protocol.md`.
+
 Unknown scorer types are rejected.
 
 ## `[threshold]`

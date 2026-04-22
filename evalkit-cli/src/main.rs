@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use evalkit_providers::{HttpAcquisition, SubprocessAcquisition};
+use evalkit_providers::{HttpAcquisition, SubprocessAcquisition, SubprocessScorer};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
@@ -83,7 +83,7 @@ struct AcquisitionConfig {
 /// `command` can be a plain string (`"python3 model.py"`) or an array
 /// (`["python3", "model.py", "--flag"]`). Use the array form when arguments
 /// contain spaces.
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(untagged)]
 enum CommandSpec {
     Str(String),
@@ -130,8 +130,10 @@ struct ScorerConfigEntry {
     #[serde(rename = "type")]
     scorer_type: String,
     name: Option<String>,
+    command: Option<CommandSpec>,
     pattern: Option<String>,
     schema: Option<Value>,
+    timeout_secs: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +199,7 @@ enum CliScorerKind {
     Contains,
     Regex(Regex),
     JsonSchema(Value),
+    Plugin(SubprocessScorer),
 }
 
 impl Scorer<String, String, String> for CliScorer {
@@ -212,6 +215,7 @@ impl Scorer<String, String, String> for CliScorer {
                 let inner_ctx = ScorerContext::<String, String>::new(ctx.input, ctx.output, None);
                 json_schema(schema.clone()).score(&inner_ctx).await
             }
+            CliScorerKind::Plugin(scorer) => scorer.score(ctx).await,
         }
     }
 
@@ -454,8 +458,31 @@ fn build_cli_scorer(entry: &ScorerConfigEntry) -> Result<CliScorer, CliError> {
                 kind: CliScorerKind::JsonSchema(schema),
             })
         }
+        "plugin" => {
+            let command = entry.command.clone().ok_or_else(|| {
+                CliError::Config("plugin scorer requires a `command` field".into())
+            })?;
+            let parts = command.into_parts();
+            if parts.is_empty() {
+                return Err(CliError::Config(
+                    "plugin scorer `command` must not be empty".into(),
+                ));
+            }
+
+            let name = entry.name.clone().unwrap_or_else(|| "plugin".to_owned());
+            let scorer = SubprocessScorer::new(
+                parts[0].clone(),
+                parts[1..].to_vec(),
+                Duration::from_secs(entry.timeout_secs.unwrap_or(default_timeout_secs())),
+            );
+
+            Ok(CliScorer {
+                definition: ScoreDefinition::new(name),
+                kind: CliScorerKind::Plugin(scorer),
+            })
+        }
         other => Err(CliError::Config(format!(
-            "unknown scorer type `{other}`; supported: exact_match, contains, regex, json_schema"
+            "unknown scorer type `{other}`; supported: exact_match, contains, regex, json_schema, plugin"
         ))),
     }
 }
@@ -466,5 +493,52 @@ fn primary_value(stats: &RunStats, scorer_name: &str) -> Option<f64> {
         ScorerStats::Binary { pass_rate, .. } => Some(*pass_rate),
         ScorerStats::Numeric { mean, .. } | ScorerStats::Metric { mean, .. } => Some(*mean),
         ScorerStats::Label { .. } => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_scorer_requires_a_command() {
+        let entry = ScorerConfigEntry {
+            scorer_type: String::from("plugin"),
+            name: None,
+            command: None,
+            pattern: None,
+            schema: None,
+            timeout_secs: None,
+        };
+
+        let err = match build_cli_scorer(&entry) {
+            Ok(_) => panic!("expected plugin scorer config to fail without a command"),
+            Err(err) => err,
+        };
+
+        assert_eq!(
+            err.to_string(),
+            "config error: plugin scorer requires a `command` field"
+        );
+    }
+
+    #[test]
+    fn plugin_scorer_builds_from_command_parts() {
+        let entry = ScorerConfigEntry {
+            scorer_type: String::from("plugin"),
+            name: Some(String::from("external_score")),
+            command: Some(CommandSpec::Vec(vec![
+                String::from("python3"),
+                String::from("score.py"),
+            ])),
+            pattern: None,
+            schema: None,
+            timeout_secs: Some(5),
+        };
+
+        let scorer = build_cli_scorer(&entry).unwrap();
+
+        assert_eq!(scorer.definition.name, "external_score");
+        assert!(matches!(scorer.kind, CliScorerKind::Plugin(_)));
     }
 }

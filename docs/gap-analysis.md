@@ -89,7 +89,7 @@ Already present:
 - The kernel already has an OTLP receiver behind the `otel` feature
 
 Gaps:
-- No scorer-plugin runtime integration yet; the acquisition handshake and conformance harness exist
+- No reference Python or TypeScript plugin shims yet
 - Current `llm_judge` uses ad hoc HTTP instead of `anyllm`
 
 ## Phase 2 - Streaming / Online Scoring

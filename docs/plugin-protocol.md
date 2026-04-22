@@ -1,16 +1,17 @@
 # Subprocess Plugin Protocol
 
-This document describes the versioned subprocess plugin protocol implemented by the acquisition path today.
+This document describes the versioned subprocess plugin protocol implemented by the acquisition and scorer runtimes today.
 
 Current status:
 - Acquisition plugins support a versioned handshake.
-- Structured plugin error payloads are preserved.
-- Legacy no-handshake subprocess plugins remain accepted for compatibility.
-- Scorer plugins are specified here as a protocol shape, but the runtime integration is not wired yet.
+- Scorer plugins support a versioned handshake.
+- Structured plugin error payloads are preserved for both kinds.
+- Legacy no-handshake subprocess acquisition plugins remain accepted for compatibility.
+- Scorer plugins use the canonical v1 request/response envelope only.
 
 ## Scope
 
-The CLI can execute an external command as the acquisition step for a run, and `evalkit-providers` exposes typed protocol structs plus an acquisition-plugin conformance check.
+The CLI can execute an external command as the acquisition step for a run and as a scorer step for a run. `evalkit-providers` exposes typed protocol structs plus acquisition/scorer conformance checks.
 
 Configured in TOML as:
 
@@ -117,7 +118,7 @@ Example with default field names:
 
 The protocol reserves `kind: "scorer"` for scorer plugins.
 
-Planned canonical request shape:
+Canonical v1 request shape:
 
 ```json
 {
@@ -131,7 +132,7 @@ Planned canonical request shape:
 }
 ```
 
-Planned canonical response shape:
+Canonical v1 response shape:
 
 ```json
 {"score": {"type":"binary","value":true}}
@@ -149,18 +150,33 @@ or:
 }
 ```
 
+Semantics:
+- Scorer plugins must emit a handshake before the score response line.
+- Handshake `kind` must be `"scorer"`.
+- Handshake `schema_version` must be `"1"`.
+- Successful scorer responses must include `score` and must not include `error`.
+- Failed scorer responses must include `error` and must not include `score`.
+- Empty stdout is treated as a scorer failure.
+- Invalid JSON is treated as a scorer failure.
+
 ## Exit Status
 
 The CLI waits for the child process to exit, but a non-zero exit status does not invalidate an otherwise well-formed response. If the child emitted valid JSON on the first stdout line, that response is accepted.
 
 ## Error Mapping
 
-The CLI maps subprocess failures into `AcquisitionError`:
+The CLI maps subprocess failures into `AcquisitionError` for acquisition plugins:
 
 - spawn / IO / JSON parse / missing field -> `AcquisitionError::ExecutionFailed`
 - plugin handshake / protocol violations -> `AcquisitionError::ExecutionFailed`
 - structured plugin error payloads -> `AcquisitionError::ExecutionFailed` with the plugin payload preserved in the boxed source error
 - timeout -> `AcquisitionError::Timeout`
+
+For scorer plugins:
+- spawn / IO / JSON parse / missing field -> `ScorerError::ProviderError`
+- plugin handshake / protocol violations -> `ScorerError::ProviderError`
+- structured plugin error payloads -> `ScorerError::ProviderError` with the plugin payload preserved in the boxed source error
+- timeout -> `ScorerError::Timeout`
 
 ## Command Encoding
 
@@ -180,7 +196,7 @@ The array form is preferred when arguments contain spaces.
 
 ## Conformance
 
-`evalkit-providers` exposes an acquisition-plugin conformance check that validates:
+`evalkit-providers` exposes acquisition/scorer conformance checks that validate:
 - the handshake line
 - plugin kind
 - protocol schema version

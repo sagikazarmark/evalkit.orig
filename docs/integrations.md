@@ -148,11 +148,11 @@ Add lazily as demand appears — most users bring their own data.
 
 Once the plugin spec lands:
 
-- [ ] `PluginAcquisition`       — invoke a subprocess plugin as `Acquisition`
-- [ ] `PluginScorer`             — invoke a subprocess plugin as `Scorer`
+- [x] `PluginAcquisition`       — invoke a subprocess plugin as `Acquisition` via `SubprocessAcquisition`
+- [x] `PluginScorer`             — invoke a subprocess plugin as `Scorer` via `SubprocessScorer`
 - [ ] Reference Python shim (`evalkit-plugin` on pypi)
 - [ ] Reference TypeScript shim (`@evalkit/plugin` on npm)
-- [ ] Conformance test harness  — run a plugin against a golden set of requests
+- [ ] Conformance test harness  — fixture-driven golden harness beyond the current acquisition/scorer checks
 
 ---
 
