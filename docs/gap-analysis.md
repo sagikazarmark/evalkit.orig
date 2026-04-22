@@ -83,12 +83,15 @@ Already present:
 - `evalkit-otel` already contains the OTLP receiver and the `Observe` acquisition path
 - `evalkit-scorers-llm` now ships a provider-neutral `LlmJudge` built on `anyllm::ChatProvider` plus structured extraction via `ExtractExt`
 - The new judge implementation includes stable prompt hashing, retries, timeout support, judge model pins, and reasoning capture for numeric/binary outputs
+- First-pass `llm_classifier` and `g_eval` wrappers now build on top of the shared judge primitive
+- Prompt templates now live under `evalkit-scorers-llm/prompts/` and can be overridden with `LlmJudge::with_prompt`
 
 Gaps:
 - No reference TypeScript plugin shim yet
-- `g_eval` and `llm_classifier` are not built on top of the new `LlmJudge` yet
 - Judge token usage and cost are only attached inside structured-score metadata today; they are not yet threaded into `SampleResult`
 - Reasoning capture is currently limited to numeric and binary judges because `Score::Structured` requires a numeric primary score
+- `llm_classifier` is still a thin closed-set label wrapper; richer classification metadata and calibration are still missing
+- `g_eval` is still a first-pass rubric prompt, not yet a fuller multi-step / auto-generated evaluation flow
 
 ## Phase 2 - Streaming / Online Scoring
 
@@ -135,9 +138,9 @@ Gaps:
 
 ## Highest-Leverage Next Slice
 
-The best next implementation slice is the rest of Phase 1(c):
-- add `llm_classifier` as a label-oriented wrapper on the new `LlmJudge`
-- add a first `g_eval` scorer that builds a judge prompt from rubric criteria
-- decide whether scorer-side token usage and cost need a kernel hook or should remain structured-score metadata until a later kernel revision
+The best next implementation slice is finishing the remaining Phase 1(c) depth:
+- thread judge token usage and cost into kernel run results instead of only structured-score metadata
+- enrich `llm_classifier` with stronger output metadata or calibration helpers
+- deepen `g_eval` beyond a single rubric prompt into a more explicit step-driven evaluation flow
 
-That sequence finishes the first real scorer layer on top of the new anyllm primitive instead of leaving Phase 1(c) half-landed.
+That sequence turns the newly landed wrappers into a more complete LLM scorer foundation instead of stopping at the first public API shape.

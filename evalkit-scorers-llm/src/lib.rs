@@ -11,6 +11,9 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::time::Duration;
 
+const LLM_CLASSIFIER_PROMPT_TEMPLATE: &str = include_str!("../prompts/llm_classifier.txt");
+const G_EVAL_PROMPT_TEMPLATE: &str = include_str!("../prompts/g_eval.txt");
+
 /// Creates a generic LLM-as-a-Judge scorer backed by `anyllm`.
 pub fn llm_judge<P>(
     provider: P,
@@ -23,6 +26,47 @@ where
     P::Stream: 'static,
 {
     LlmJudge::new(provider, model, prompt, output)
+}
+
+/// Creates a closed-set label classifier backed by `LlmJudge`.
+pub fn llm_classifier<P, I, S>(
+    provider: P,
+    model: impl Into<String>,
+    labels: I,
+    instructions: impl Into<String>,
+) -> Result<LlmJudge, LlmJudgeBuildError>
+where
+    P: ChatProvider + 'static,
+    P::Stream: 'static,
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let labels = normalize_entries("labels", labels)?;
+    let prompt = build_llm_classifier_prompt(&labels, instructions.into());
+
+    Ok(LlmJudge::new(provider, model, prompt, LlmJudgeOutput::Label).named("llm_classifier"))
+}
+
+/// Creates a first-pass G-Eval scorer backed by `LlmJudge`.
+pub fn g_eval<P, I, S>(
+    provider: P,
+    model: impl Into<String>,
+    criteria: I,
+) -> Result<LlmJudge, LlmJudgeBuildError>
+where
+    P: ChatProvider + 'static,
+    P::Stream: 'static,
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let criteria = normalize_entries("criteria", criteria)?;
+    let prompt = build_g_eval_prompt(&criteria);
+
+    Ok(
+        LlmJudge::new(provider, model, prompt, LlmJudgeOutput::Numeric)
+            .named("g_eval")
+            .capture_reasoning(true),
+    )
 }
 
 /// Stable prompt template with a canonical form for hashing.
@@ -129,6 +173,7 @@ impl LlmJudgeOutput {
 }
 
 /// Provider-neutral LLM-as-a-Judge primitive using `anyllm` structured extraction.
+#[derive(Debug)]
 pub struct LlmJudge {
     provider: DynChatProvider,
     definition: ScoreDefinition,
@@ -185,6 +230,12 @@ impl LlmJudge {
     /// Overrides the exported scorer name.
     pub fn named(mut self, name: impl Into<String>) -> Self {
         self.definition = self.output.definition(&name.into());
+        self
+    }
+
+    /// Overrides the scorer prompt template.
+    pub fn with_prompt(mut self, prompt: impl Into<PromptTemplate>) -> Self {
+        self.prompt = prompt.into();
         self
     }
 
@@ -536,9 +587,103 @@ impl Display for LlmJudgeConfigurationError {
 
 impl Error for LlmJudgeConfigurationError {}
 
+/// Construction errors for higher-level LLM judge wrappers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LlmJudgeBuildError {
+    EmptyEntries { field: &'static str },
+    BlankEntry { field: &'static str, index: usize },
+}
+
+impl Display for LlmJudgeBuildError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyEntries { field } => write!(f, "{field} must contain at least one entry"),
+            Self::BlankEntry { field, index } => {
+                write!(f, "{field}[{index}] must not be blank")
+            }
+        }
+    }
+}
+
+impl Error for LlmJudgeBuildError {}
+
+fn build_llm_classifier_prompt(labels: &[String], instructions: String) -> PromptTemplate {
+    let labels_json = serde_json::to_string(labels).expect("labels serialize into JSON array");
+    let prompt = LLM_CLASSIFIER_PROMPT_TEMPLATE
+        .replace("{{labels_bullets}}", &render_bullet_list(labels))
+        .replace("{{labels_json}}", &labels_json)
+        .replace("{{instructions}}", instructions.trim());
+
+    PromptTemplate::new(prompt)
+}
+
+fn build_g_eval_prompt(criteria: &[String]) -> PromptTemplate {
+    let criteria_json =
+        serde_json::to_string(criteria).expect("criteria serialize into JSON array");
+    let prompt = G_EVAL_PROMPT_TEMPLATE
+        .replace("{{criteria_numbered}}", &render_numbered_list(criteria))
+        .replace("{{criteria_json}}", &criteria_json);
+
+    PromptTemplate::new(prompt)
+}
+
+fn normalize_entries<I, S>(
+    field: &'static str,
+    entries: I,
+) -> Result<Vec<String>, LlmJudgeBuildError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let mut normalized = Vec::new();
+
+    for (index, entry) in entries.into_iter().enumerate() {
+        let entry = entry.into();
+        let trimmed = entry.trim();
+
+        if trimmed.is_empty() {
+            return Err(LlmJudgeBuildError::BlankEntry { field, index });
+        }
+
+        normalized.push(trimmed.to_owned());
+    }
+
+    if normalized.is_empty() {
+        return Err(LlmJudgeBuildError::EmptyEntries { field });
+    }
+
+    Ok(normalized)
+}
+
+fn render_bullet_list(entries: &[String]) -> String {
+    let mut rendered = String::new();
+
+    for entry in entries {
+        rendered.push_str("- ");
+        rendered.push_str(entry);
+        rendered.push('\n');
+    }
+
+    rendered.trim_end().to_owned()
+}
+
+fn render_numbered_list(entries: &[String]) -> String {
+    let mut rendered = String::new();
+
+    for (index, entry) in entries.iter().enumerate() {
+        use std::fmt::Write as _;
+
+        let _ = writeln!(rendered, "{}. {}", index + 1, entry);
+    }
+
+    rendered.trim_end().to_owned()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{LlmJudgeOutput, PromptTemplate, llm_judge};
+    use super::{
+        LlmJudgeBuildError, LlmJudgeOutput, PromptTemplate, g_eval, llm_classifier, llm_judge,
+    };
     use anyllm::{
         ChatCapability, ChatResponseBuilder, Error as AnyLlmError, MockProvider, ResponseFormat,
         Usage, UserContent,
@@ -706,6 +851,115 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("label judges cannot capture reasoning")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn llm_classifier_renders_labels_and_returns_label_score() {
+        let provider = MockProvider::with_response(
+            ChatResponseBuilder::new()
+                .text(r#"{"label":"approve"}"#)
+                .build(),
+        )
+        .with_supported_chat_capabilities([ChatCapability::StructuredOutput]);
+
+        let scorer = llm_classifier(
+            provider.clone(),
+            "judge-model",
+            ["approve", "reject"],
+            "Classify whether the answer should be accepted.",
+        )
+        .unwrap();
+
+        let input = "question".to_string();
+        let output = "answer".to_string();
+        let reference = "gold".to_string();
+        let ctx = ScorerContext::new(&input, &output, Some(&reference));
+
+        let score = scorer.score(&ctx).await.unwrap();
+
+        assert_eq!(score, Score::Label("approve".to_string()));
+
+        let request = provider.last_request().unwrap();
+        let user = request.messages[0].as_user().unwrap();
+        let UserContent::Text(rendered) = user.content else {
+            panic!("expected text user content")
+        };
+        assert!(rendered.contains("- approve"));
+        assert!(rendered.contains("- reject"));
+        assert!(rendered.contains("[\"approve\",\"reject\"]"));
+        assert!(rendered.contains("Classify whether the answer should be accepted."));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn g_eval_renders_criteria_and_returns_structured_score() {
+        let provider = MockProvider::with_response(
+            ChatResponseBuilder::new()
+                .text(r#"{"score":0.9,"reasoning":"The answer is correct and grounded.","metadata":{"criteria":["correctness","groundedness"],"method":"g_eval"}}"#)
+                .build(),
+        )
+        .with_supported_chat_capabilities([ChatCapability::StructuredOutput]);
+
+        let scorer = g_eval(
+            provider.clone(),
+            "judge-model",
+            ["correctness", "groundedness"],
+        )
+        .unwrap();
+
+        let input = "question".to_string();
+        let output = "answer".to_string();
+        let reference = "gold".to_string();
+        let ctx = ScorerContext::new(&input, &output, Some(&reference));
+
+        let score = scorer.score(&ctx).await.unwrap();
+
+        match score {
+            Score::Structured {
+                score,
+                reasoning,
+                metadata,
+            } => {
+                assert_eq!(score, 0.9);
+                assert_eq!(reasoning, "The answer is correct and grounded.");
+                assert_eq!(metadata["judge"]["result_metadata"]["method"], "g_eval");
+                assert_eq!(
+                    metadata["judge"]["result_metadata"]["criteria"],
+                    serde_json::json!(["correctness", "groundedness"])
+                );
+            }
+            other => panic!("expected structured score, got {other:?}"),
+        }
+
+        let request = provider.last_request().unwrap();
+        let user = request.messages[0].as_user().unwrap();
+        let UserContent::Text(rendered) = user.content else {
+            panic!("expected text user content")
+        };
+        assert!(rendered.contains("1. correctness"));
+        assert!(rendered.contains("2. groundedness"));
+        assert!(rendered.contains("[\"correctness\",\"groundedness\"]"));
+    }
+
+    #[test]
+    fn wrapper_builders_reject_empty_or_blank_entries() {
+        assert_eq!(
+            llm_classifier(
+                MockProvider::empty(),
+                "judge-model",
+                Vec::<String>::new(),
+                "Classify the answer.",
+            )
+            .unwrap_err(),
+            LlmJudgeBuildError::EmptyEntries { field: "labels" }
+        );
+
+        assert_eq!(
+            g_eval(MockProvider::empty(), "judge-model", ["correctness", "   "]).unwrap_err(),
+            LlmJudgeBuildError::BlankEntry {
+                field: "criteria",
+                index: 1,
+            }
         );
     }
 }

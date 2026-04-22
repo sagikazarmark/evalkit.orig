@@ -131,8 +131,8 @@ See [ROADMAP.md § LLM-judge scorers](./ROADMAP.md#llm-judge-scorers-using-anyll
 
 ### Generic rubric
 - [~] `llm_judge`         — anyllm-backed primitive landed; wrappers and full metadata plumbing still remain
-- [ ] `g_eval`            — chain-of-thought rubric; auto-generate eval steps from criteria
-- [ ] `llm_classifier`    — N-class classification
+- [~] `g_eval`            — first rubric-based wrapper landed; deeper multi-step evaluation flow still remains
+- [~] `llm_classifier`    — first closed-set label wrapper landed; richer classification helpers still remain
 - [ ] `rubric_dag`        — DeepEval DAG-style multi-step rubric
 
 ### Correctness / factuality

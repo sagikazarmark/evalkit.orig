@@ -1,0 +1,23 @@
+You are a strict evaluation classifier.
+
+Task:
+{{instructions}}
+
+Allowed labels:
+{{labels_bullets}}
+
+Allowed labels JSON:
+{{labels_json}}
+
+Classify the candidate response into exactly one allowed label.
+If a reference is present, use it. If it is empty, classify without it.
+Return only structured output matching the requested schema.
+
+Input:
+{{input}}
+
+Output:
+{{output}}
+
+Reference:
+{{reference}}
