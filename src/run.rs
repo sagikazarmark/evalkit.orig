@@ -805,7 +805,7 @@ fn scorer_panic_scores(
         .map(|definition| {
             (
                 definition.name.clone(),
-                Err(ScorerError(Box::new(ScorerPanicError))),
+                Err(ScorerError::internal(ScorerPanicError)),
             )
         })
         .collect()
@@ -822,9 +822,9 @@ fn acquisition_failure_scores(
         .map(|definition| {
             (
                 definition.name.clone(),
-                Err(ScorerError(Box::new(SharedAcquisitionError(Arc::clone(
+                Err(ScorerError::provider(SharedAcquisitionError(Arc::clone(
                     &shared_err,
-                ))))),
+                )))),
             )
         })
         .collect()
@@ -841,9 +841,9 @@ fn map_failure_results<I, O, R>(targets: &[ScoringTarget<I, O, R>], err: MapErro
                 move |definition| {
                     (
                         definition,
-                        Err(ScorerError(Box::new(SharedMapError(Arc::clone(
+                        Err(ScorerError::invalid_input(SharedMapError(Arc::clone(
                             &shared_err,
-                        ))))),
+                        )))),
                     )
                 }
             })
@@ -873,7 +873,7 @@ fn validate_score(score: Score) -> Result<Score, ScorerError> {
 }
 
 fn invalid_score_error(message: &'static str) -> ScorerError {
-    ScorerError(Box::new(InvalidScoreError(message)))
+    ScorerError::invalid_input(InvalidScoreError(message))
 }
 
 #[derive(Debug)]

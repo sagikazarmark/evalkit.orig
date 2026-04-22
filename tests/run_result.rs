@@ -30,7 +30,7 @@ fn trial_result_serializes_scores_and_errors_distinctly() {
             ("zeta".to_owned(), Ok(Score::Binary(false))),
             (
                 "alpha".to_owned(),
-                Err(ScorerError(Box::new(std::io::Error::other("boom")))),
+                Err(ScorerError::internal(std::io::Error::other("boom"))),
             ),
         ]),
         duration: Duration::from_millis(25),
@@ -95,7 +95,7 @@ fn sample_result_can_distinguish_low_scores_from_failed_scores() {
             TrialResult {
                 scores: HashMap::from([(
                     "accuracy".to_owned(),
-                    Err(ScorerError(Box::new(std::io::Error::other("timeout")))),
+                    Err(ScorerError::internal(std::io::Error::other("timeout"))),
                 )]),
                 duration: Duration::from_millis(11),
                 trial_index: 1,
@@ -139,7 +139,7 @@ fn run_result_round_trips_metadata_and_sample_order() {
                 trials: vec![TrialResult {
                     scores: HashMap::from([(
                         "accuracy".to_owned(),
-                        Err(ScorerError(Box::new(std::io::Error::other("bad output")))),
+                        Err(ScorerError::internal(std::io::Error::other("bad output"))),
                     )]),
                     duration: Duration::from_millis(7),
                     trial_index: 0,

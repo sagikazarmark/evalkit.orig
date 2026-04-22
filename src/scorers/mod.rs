@@ -62,9 +62,9 @@ impl Scorer<String, String, String> for ExactMatchScorer {
         ctx: &ScorerContext<'_, String, String, String>,
     ) -> Result<Score, ScorerError> {
         let reference = ctx.reference.ok_or_else(|| {
-            ScorerError(Box::new(BuiltinScorerError::MissingReference {
+            ScorerError::invalid_input(BuiltinScorerError::MissingReference {
                 scorer_name: "exact_match",
-            }))
+            })
         })?;
 
         Ok(Score::Binary(ctx.output == reference))
@@ -83,9 +83,9 @@ impl Scorer<String, String, String> for ContainsScorer {
         ctx: &ScorerContext<'_, String, String, String>,
     ) -> Result<Score, ScorerError> {
         let reference = ctx.reference.ok_or_else(|| {
-            ScorerError(Box::new(BuiltinScorerError::MissingReference {
+            ScorerError::invalid_input(BuiltinScorerError::MissingReference {
                 scorer_name: "contains",
-            }))
+            })
         })?;
 
         Ok(Score::Binary(ctx.output.contains(reference)))
@@ -123,17 +123,17 @@ struct LlmJudgeScorer {
 impl Scorer<String, String> for JsonSchemaScorer {
     async fn score(&self, ctx: &ScorerContext<'_, String, String>) -> Result<Score, ScorerError> {
         let output = serde_json::from_str::<Value>(ctx.output).map_err(|source| {
-            ScorerError(Box::new(BuiltinScorerError::InvalidJson {
+            ScorerError::invalid_input(BuiltinScorerError::InvalidJson {
                 scorer_name: "json_schema",
                 source,
-            }))
+            })
         })?;
 
         let is_valid = validate_json_schema(&self.schema, &output).map_err(|message| {
-            ScorerError(Box::new(BuiltinScorerError::InvalidSchema {
+            ScorerError::invalid_input(BuiltinScorerError::InvalidSchema {
                 scorer_name: "json_schema",
                 message,
-            }))
+            })
         })?;
 
         Ok(Score::Binary(is_valid))
@@ -167,44 +167,44 @@ impl Scorer<String, String, String> for LlmJudgeScorer {
             .send()
             .await
             .map_err(|source| {
-                ScorerError(Box::new(LlmJudgeError::Network {
+                ScorerError::provider(LlmJudgeError::Network {
                     source,
                     model: self.config.model.clone(),
-                }))
+                })
             })?
             .error_for_status()
             .map_err(|source| {
-                ScorerError(Box::new(LlmJudgeError::Network {
+                ScorerError::provider(LlmJudgeError::Network {
                     source,
                     model: self.config.model.clone(),
-                }))
+                })
             })?;
 
         let payload = response
             .json::<LlmJudgeResponse>()
             .await
             .map_err(|source| {
-                ScorerError(Box::new(LlmJudgeError::Network {
+                ScorerError::provider(LlmJudgeError::Network {
                     source,
                     model: self.config.model.clone(),
-                }))
+                })
             })?;
 
         let content = payload.first_message_content().map_err(|message| {
-            ScorerError(Box::new(LlmJudgeError::InvalidResponse {
+            ScorerError::provider(LlmJudgeError::InvalidResponse {
                 model: self.config.model.clone(),
                 message,
-            }))
+            })
         })?;
 
         self.config
             .score_extractor
             .extract(content)
             .map_err(|message| {
-                ScorerError(Box::new(LlmJudgeError::Parse {
+                ScorerError::provider(LlmJudgeError::Parse {
                     model: self.config.model.clone(),
                     message,
-                }))
+                })
             })
     }
 

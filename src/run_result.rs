@@ -101,7 +101,7 @@ mod score_results_serde {
                 let value = match result {
                     ScoreResultOwned::Ok(score) => Ok(score),
                     ScoreResultOwned::Err(message) => {
-                        Err(ScorerError(Box::new(SerializedScorerError(message))))
+                        Err(ScorerError::internal(SerializedScorerError(message)))
                     }
                 };
 

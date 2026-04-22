@@ -62,9 +62,9 @@ mod tests {
             &self,
             _ctx: &ScorerContext<'_, String, String, String>,
         ) -> Result<Score, ScorerError> {
-            Err(ScorerError(Box::new(TestError(
+            Err(ScorerError::internal(TestError(
                 "invalid scorer configuration",
-            ))))
+            )))
         }
 
         fn definition(&self) -> ScoreDefinition {

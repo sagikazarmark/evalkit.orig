@@ -271,7 +271,7 @@ fn run_result_stats_exclude_errors_from_denominator_and_report_total_errors() {
                     trial("exact_match", Ok(Score::Binary(true)), 0),
                     trial(
                         "exact_match",
-                        Err(ScorerError(Box::new(std::io::Error::other("timeout")))),
+                        Err(ScorerError::internal(std::io::Error::other("timeout"))),
                         1,
                     ),
                 ],
@@ -282,7 +282,7 @@ fn run_result_stats_exclude_errors_from_denominator_and_report_total_errors() {
                     trial("exact_match", Ok(Score::Binary(false)), 0),
                     trial(
                         "exact_match",
-                        Err(ScorerError(Box::new(std::io::Error::other("backend")))),
+                        Err(ScorerError::internal(std::io::Error::other("backend"))),
                         1,
                     ),
                 ],

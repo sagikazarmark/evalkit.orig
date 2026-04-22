@@ -342,13 +342,13 @@ fn mapper_failure_results<I, O, R>(
 
     scorers
         .iter()
-        .map(|scorer| {
-            (
-                scorer.definition.clone(),
-                Err(ScorerError(Box::new(SharedMapError(shared_err.clone())))),
-            )
-        })
-        .collect()
+            .map(|scorer| {
+                (
+                    scorer.definition.clone(),
+                    Err(ScorerError::invalid_input(SharedMapError(shared_err.clone()))),
+                )
+            })
+            .collect()
 }
 
 struct ScorerEntry<I, O, R> {

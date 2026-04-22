@@ -99,7 +99,7 @@ where
             .map_err(|err| sub_scorer_error("right", &self.right.definition().name, err))?;
         match (left_score, right_score) {
             (Score::Binary(a), Score::Binary(b)) => Ok(Score::Binary(a && b)),
-            _ => Err(ScorerError(Box::new(AndTypeMismatchError))),
+            _ => Err(ScorerError::invalid_input(AndTypeMismatchError)),
         }
     }
 
@@ -131,9 +131,9 @@ where
             .map_err(|err| sub_scorer_error("right", &self.right.definition().name, err))?;
 
         let left_value = numeric_value(left_score)
-            .ok_or_else(|| ScorerError(Box::new(WeightedTypeMismatchError)))?;
+            .ok_or_else(|| ScorerError::invalid_input(WeightedTypeMismatchError))?;
         let right_value = numeric_value(right_score)
-            .ok_or_else(|| ScorerError(Box::new(WeightedTypeMismatchError)))?;
+            .ok_or_else(|| ScorerError::invalid_input(WeightedTypeMismatchError))?;
 
         let total_weight = self.left_weight + self.right_weight;
         Ok(Score::Numeric(
@@ -173,9 +173,9 @@ where
                 .await
                 .map_err(|err| sub_scorer_error("secondary", &self.secondary.definition().name, err)),
             Score::Binary(false) => Ok(Score::Binary(false)),
-            _ => Err(ScorerError(Box::new(ThenGateNotBinaryError {
+            _ => Err(ScorerError::invalid_input(ThenGateNotBinaryError {
                 scorer_name: self.gate.definition().name,
-            }))),
+            })),
         }
     }
 
@@ -244,11 +244,11 @@ fn numeric_value(score: Score) -> Option<f64> {
 }
 
 fn sub_scorer_error(role: &'static str, scorer_name: &str, source: ScorerError) -> ScorerError {
-    ScorerError(Box::new(SubScorerError {
+    ScorerError::internal(SubScorerError {
         role,
         scorer_name: scorer_name.to_owned(),
         source,
-    }))
+    })
 }
 
 #[derive(Debug)]
@@ -337,7 +337,7 @@ mod tests {
 
     impl Scorer<(), ()> for FailingScorer {
         async fn score(&self, _ctx: &ScorerContext<'_, (), ()>) -> Result<Score, ScorerError> {
-            Err(ScorerError(Box::new(std::io::Error::other(self.0))))
+            Err(ScorerError::internal(std::io::Error::other(self.0)))
         }
 
         fn definition(&self) -> ScoreDefinition {

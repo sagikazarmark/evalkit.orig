@@ -37,7 +37,7 @@ fn run_result() -> RunResult {
                         ),
                         (
                             "parser".to_owned(),
-                            Err(ScorerError(Box::new(std::io::Error::other("bad trace")))),
+                            Err(ScorerError::internal(std::io::Error::other("bad trace"))),
                         ),
                     ]),
                     duration: Duration::from_millis(10),
