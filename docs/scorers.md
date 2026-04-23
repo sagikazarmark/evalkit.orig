@@ -163,6 +163,7 @@ RAG judge scorers live in `evalkit-scorers-rag`. `evalkit-scorers-llm` does **no
 - [ ] `code_semantic_equivalence`
 
 ### Safety / governance
+LLM-judge versions of these safety scorers remain todo. The first heuristic baseline pack now lives in `evalkit-scorers-redteam`.
 - [ ] `toxicity`
 - [ ] `bias`
 - [ ] `pii_leakage`
@@ -175,6 +176,20 @@ RAG judge scorers live in `evalkit-scorers-rag`. `evalkit-scorers-llm` does **no
 - [ ] `LlmJudgeEnsemble` — N judges, aggregate
 - [ ] `LlmJudgeCalibrator` — helper to measure agreement with gold labels
 - [ ] `LlmJudgeCache` — content-addressed cache for judge calls
+
+---
+
+## `evalkit-scorers-redteam` (heuristic governance / adversarial)
+
+Fast heuristic safety scorers intended as a baseline red-team pack. These are regex- and keyword-driven, so they are cheap to run but intentionally less nuanced than future judge-backed variants.
+
+- [x] `toxicity`
+- [x] `bias`
+- [x] `pii_leakage`
+- [x] `misuse`
+- [x] `jailbreak_detected`
+- [x] `policy_adherence`
+- [ ] `refusal_appropriateness`
 
 ---
 

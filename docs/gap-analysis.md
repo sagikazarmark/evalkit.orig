@@ -4,17 +4,17 @@ This document compares the current codebase to `docs/ROADMAP.md` and identifies 
 
 ## Recommendation
 
-Phases 0 and 1 are functionally complete in-repo. Phase 2 has now started with a first executor/sampler/sink surface, and the next work should deepen that online path while finishing the remaining runner ergonomics from Phase 3.
+Phases 0 through 5 now have concrete in-repo implementations. The remaining high-value work is mostly deferred or hardening-oriented rather than missing roadmap surface.
 
 Recommended build order:
-1. Add a real streaming `ExecutionSink` adapter around `evalkit-otel::OtelResultEmitter` and land the first source adapter.
-2. Add dataset splits / tags / filters to the CLI runner.
-3. Add judge-model tiering on top of the new executor path.
+1. Exercise the GitHub Action against a live pull request environment.
+2. Add deferred networked Phase 2 sources such as Kafka or NATS.
+3. Deepen the server review UX beyond the current minimal annotation and dashboard surface.
 
 ## Current State Summary
 
 The workspace is now split for Phase 0:
-- Workspace members include `evalkit`, `evalkit-cli`, `evalkit-providers`, `evalkit-exporters-langfuse`, `evalkit-scorers-text`, `evalkit-otel`, `evalkit-scorers-llm`, `evalkit-scorers-rag`, and `evalkit-scorers-embed`
+- Workspace members include `evalkit`, `evalkit-cli`, `evalkit-providers`, `evalkit-exporters-langfuse`, `evalkit-scorers-text`, `evalkit-otel`, `evalkit-scorers-llm`, `evalkit-scorers-rag`, `evalkit-scorers-embed`, `evalkit-scorers-redteam`, and `evalkit-server`
 - OTel support now lives in `evalkit-otel`, including the `Observe` acquisition path
 - Langfuse export now lives in `evalkit-exporters-langfuse`
 - Deterministic text scorers now live in `evalkit-scorers-text`
@@ -100,7 +100,7 @@ Gaps:
 
 ## Phase 2 - Streaming / Online Scoring
 
-Status: initial foundation landed
+Status: roadmap-complete for the non-networked slice
 
 Already present:
 - `src/executor.rs` now introduces a first `Executor` trait plus a pull-based `PullExecutor`
@@ -120,8 +120,8 @@ Already present:
 
 Gaps:
 - Streaming partial scoring now supports acquisition-provided intermediate snapshots, but there is still no token-by-token or chunk-stream protocol shared across providers
-- No additional online source adapters such as Kafka or NATS yet
-- The executor now has a bounded worker pool, but there is still no multi-process or distributed backpressure protocol across components
+- Deferred networked source adapters such as Kafka or NATS are still absent by user request
+- The executor now has a bounded worker pool plus deterministic sharding, but there is still no remote coordinator or cross-process backpressure protocol
 
 ## Phase 3 - CI / Developer Workflow
 
@@ -157,22 +157,22 @@ Gaps:
 
 ## Phase 5 - Scale And Governance
 
-Status: not started
+Status: initial exit criteria met
+
+Completed:
+- `ShardSpec` plus `ShardedSource<Src>` now provide deterministic source sharding for distributed-style fanout
+- `PullExecutor::scrubber(...)` plus `Scrubber`, `NoopScrubber`, and `RegexPiiScrubber` now add PII scrubbing hooks at the eval pipeline boundary
+- `evalkit-server::RunStore::detect_drift(...)` now compares recent stored runs and surfaces drift through both the dashboard and `/api/runs/:run_id/drift`
+- `evalkit-scorers-redteam` now provides a first adversarial scorer pack with heuristic `toxicity`, `bias`, `pii_leakage`, `misuse`, `jailbreak_detected`, and aggregate `policy_adherence`
 
 Gaps:
-- No distributed execution
-- No PII scrubbing hooks
-- No drift detection
-- No red-team scorer pack
+- Sharding is deterministic and library-level; there is still no remote scheduler or worker coordination service
+- Drift detection currently uses trailing-window heuristics over stored run stats rather than a general event-stream drift engine
+- The red-team pack is intentionally heuristic; richer judge-backed safety scorers remain future work
 
 ## Highest-Leverage Next Slice
 
-With non-networked Phase 2 and the first Phase 4 surface now in place, the remaining roadmap work shifts to Phase 5:
-- distributed run sharding
-- PII scrubbing hooks in the eval pipeline
-- drift detection on streaming eval results
-- red-team / adversarial scorer packs
-
-In parallel, the intentionally deferred gaps remain live GitHub Action validation and optional networked Phase 2 sources.
-
-In parallel, the next runner-facing Phase 3 gap is live GitHub Action validation in a pull-request environment so the already-landed workflow can be exercised end to end.
+With the current roadmap phases implemented in-repo, the next high-leverage slices are mostly the explicitly deferred and hardening-oriented items:
+- live GitHub Action validation in a real PR environment
+- deferred networked Phase 2 sources such as Kafka or NATS
+- richer review / triage workflow on top of the existing server dashboard and annotation flow

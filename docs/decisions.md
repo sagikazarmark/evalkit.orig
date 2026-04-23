@@ -223,3 +223,16 @@ Why:
 
 Rejected alternative:
 Require all acquisitions and scorers to produce `Send` futures so the executor can spawn every sample onto Tokio tasks. That would ripple a stricter async contract through the whole kernel before there is evidence that cross-thread task spawning is required.
+
+## 2026-04-23 - Put first drift detection in `evalkit-server` over stored run history
+
+Decision:
+Implement the first drift detection pass in `evalkit-server::RunStore` by comparing a run's aggregated scorer stats against a trailing window of prior stored runs, then surface the result through the existing dashboard and a per-run JSON API.
+
+Why:
+- This reuses the Phase 4 storage and dashboard surface that already owns recent-run visibility.
+- `RunResult::stats()` already gives the server comparable numeric, binary, metric, and label aggregates without changing kernel execution APIs.
+- A trailing-window heuristic is enough to make prod-eval regressions visible now while keeping the design small.
+
+Rejected alternative:
+Introduce a new kernel-level streaming drift protocol immediately. That may still be useful later, but it would force new event and sink abstractions through the executor path before the stored-run dashboard workflow had been exercised.
