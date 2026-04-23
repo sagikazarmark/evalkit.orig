@@ -110,13 +110,13 @@ Gaps:
 
 ## Phase 3 - CI / Developer Workflow
 
-Status: partial CLI foundation only
+Status: partial CLI workflow foundation
 
 Already present:
 - `evalkit-cli` exists as a binary crate
+- `evalkit diff <baseline> <candidate>` now exists and can emit markdown plus optional JSON output from kernel comparisons
 
 Gaps:
-- No `evalkit diff`
 - No `evalkit watch`
 - No GitHub Action
 - No formal CLI config spec
