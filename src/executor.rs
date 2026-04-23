@@ -69,6 +69,23 @@ pub struct JsonlFileTailSource<I, R = ()> {
     pending: VecDeque<Sample<I, R>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShardSpec {
+    index: usize,
+    total: usize,
+}
+
+pub struct ShardedSource<Src> {
+    inner: Src,
+    shard: ShardSpec,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShardBuildError {
+    ZeroTotal,
+    IndexOutOfRange { index: usize, total: usize },
+}
+
 impl<I, R> JsonlFileTailSource<I, R> {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
@@ -91,6 +108,53 @@ impl<I, R> JsonlFileTailSource<I, R> {
         self
     }
 }
+
+impl ShardSpec {
+    pub fn new(index: usize, total: usize) -> Result<Self, ShardBuildError> {
+        if total == 0 {
+            return Err(ShardBuildError::ZeroTotal);
+        }
+
+        if index >= total {
+            return Err(ShardBuildError::IndexOutOfRange { index, total });
+        }
+
+        Ok(Self { index, total })
+    }
+
+    pub fn matches(&self, sample_id: &str) -> bool {
+        stable_bucket(sample_id.as_bytes(), self.total) == self.index
+    }
+
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    pub fn total(&self) -> usize {
+        self.total
+    }
+}
+
+impl<Src> ShardedSource<Src> {
+    pub fn new(inner: Src, shard: ShardSpec) -> Self {
+        Self { inner, shard }
+    }
+}
+
+impl Display for ShardBuildError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ZeroTotal => f.write_str("shard total must be greater than zero"),
+            Self::IndexOutOfRange { index, total } => write!(
+                f,
+                "shard index {} must be less than shard total {}",
+                index, total
+            ),
+        }
+    }
+}
+
+impl Error for ShardBuildError {}
 
 impl<I, R> JsonlFileTailSource<I, R>
 where
@@ -185,6 +249,35 @@ where
                 Value::String(self.path.display().to_string()),
             ),
         ])
+    }
+}
+
+#[allow(async_fn_in_trait)]
+impl<I, R, Src> SampleSource<I, R> for ShardedSource<Src>
+where
+    Src: SampleSource<I, R>,
+{
+    async fn next_sample(&mut self) -> Result<Option<Sample<I, R>>, ExecutorBoxError> {
+        loop {
+            match self.inner.next_sample().await? {
+                Some(sample) if self.shard.matches(&sample.id) => return Ok(Some(sample)),
+                Some(_) => continue,
+                None => return Ok(None),
+            }
+        }
+    }
+
+    fn metadata(&self) -> HashMap<String, Value> {
+        let mut metadata = self.inner.metadata();
+        metadata.insert(
+            String::from("source.shard_index"),
+            Value::Number((self.shard.index() as u64).into()),
+        );
+        metadata.insert(
+            String::from("source.shard_total"),
+            Value::Number((self.shard.total() as u64).into()),
+        );
+        metadata
     }
 }
 
@@ -1383,6 +1476,12 @@ fn stable_fraction(bytes: &[u8]) -> f64 {
     fingerprint.state as f64 / u64::MAX as f64
 }
 
+fn stable_bucket(bytes: &[u8], total: usize) -> usize {
+    let mut fingerprint = StableFingerprint::default();
+    fingerprint.write_bytes(bytes);
+    (fingerprint.state % total as u64) as usize
+}
+
 fn fingerprint_samples<I, R>(
     metadata: &HashMap<String, Value>,
     samples: &[Sample<I, R>],
@@ -1651,8 +1750,8 @@ fn git_stdout_bytes(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
 mod tests {
     use super::{
         AlwaysSampler, DatasetSource, ExecutionSink, Executor, JsonlFileTailSource, PercentSampler,
-        PullExecutor, Sampler, SamplerBuildError, ShutdownMode, StringPrefixCheckpoint,
-        StringStreamStage, TargetedSampler,
+        PullExecutor, Sampler, SamplerBuildError, ShardBuildError, ShardSpec, ShardedSource,
+        ShutdownMode, StringPrefixCheckpoint, StringStreamStage, TargetedSampler,
     };
     use crate::{
         AcquiredOutput, Acquisition, AcquisitionError, AcquisitionSnapshot, Dataset, RunResult,
@@ -1840,6 +1939,15 @@ mod tests {
         assert_eq!(
             PercentSampler::new(101.0).unwrap_err(),
             SamplerBuildError::InvalidPercent(101.0)
+        );
+    }
+
+    #[test]
+    fn shard_spec_rejects_invalid_ranges() {
+        assert_eq!(ShardSpec::new(0, 0).unwrap_err(), ShardBuildError::ZeroTotal);
+        assert_eq!(
+            ShardSpec::new(2, 2).unwrap_err(),
+            ShardBuildError::IndexOutOfRange { index: 2, total: 2 }
         );
     }
 
@@ -2073,6 +2181,51 @@ mod tests {
             source.metadata().get("source.kind"),
             Some(&Value::String(String::from("jsonl_file_tail")))
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sharded_source_partitions_samples_deterministically() {
+        let dataset = Dataset::new(vec![
+            Sample::<String>::builder("one".to_string())
+                .id("one")
+                .build()
+                .unwrap(),
+            Sample::<String>::builder("two".to_string())
+                .id("two")
+                .build()
+                .unwrap(),
+            Sample::<String>::builder("three".to_string())
+                .id("three")
+                .build()
+                .unwrap(),
+            Sample::<String>::builder("four".to_string())
+                .id("four")
+                .build()
+                .unwrap(),
+        ]);
+        let mut shard_a = ShardedSource::new(
+            DatasetSource::new(dataset.clone()),
+            ShardSpec::new(0, 2).unwrap(),
+        );
+        let mut shard_b = ShardedSource::new(DatasetSource::new(dataset), ShardSpec::new(1, 2).unwrap());
+        let mut a_ids = Vec::new();
+        let mut b_ids = Vec::new();
+
+        while let Some(sample) = shard_a.next_sample().await.unwrap() {
+            a_ids.push(sample.id);
+        }
+        while let Some(sample) = shard_b.next_sample().await.unwrap() {
+            b_ids.push(sample.id);
+        }
+
+        a_ids.sort();
+        b_ids.sort();
+        let mut combined = a_ids.clone();
+        combined.extend(b_ids.clone());
+        combined.sort();
+
+        assert!(a_ids.iter().all(|id| !b_ids.contains(id)));
+        assert_eq!(combined, vec!["four", "one", "three", "two"]);
     }
 
     #[tokio::test(flavor = "current_thread")]
