@@ -1,9 +1,14 @@
 //! Eval kernel crate bootstrap.
+//!
+//! This crate is the semver anchor for the workspace and hosts the batch eval
+//! kernel: dataset, sample, scorer, run, result, comparison, and stats.
+//! Runtime orchestration (executors, sources, sinks, samplers, sharding,
+//! scrubbers, stream helpers) lives in the sibling `evalkit-runtime` crate
+//! per `docs/root-crate-boundary-audit.md`.
 
-mod acquisition;
+pub mod acquisition;
 mod comparison;
 mod dataset;
-mod executor;
 mod jsonl;
 mod mapper;
 mod math;
@@ -23,19 +28,11 @@ mod stats;
 
 pub use acquisition::{
     AcquiredOutput, Acquisition, AcquisitionError, AcquisitionMetadata, AcquisitionSnapshot,
-    current_sample_id,
 };
 pub use comparison::{
     Change, CompareConfig, Comparison, SampleComparison, ScorerComparison, compare,
 };
 pub use dataset::Dataset;
-pub use executor::{
-    AlwaysSampler, DatasetSource, ExecutionSink, Executor, ExecutorBoxError, ExecutorError,
-    JsonlFileTailSource, NoopScrubber, NoopSink, PercentSampler, PullExecutor,
-    RegexPiiScrubber, SampleSource, Sampler, SamplerBuildError, Scrubber, ShardBuildError,
-    ShardSpec, ShardedSource, ShutdownMode, StringPrefixCheckpoint, StringStreamStage,
-    TargetedSampler,
-};
 pub use jsonl::{read_jsonl, write_jsonl};
 pub use mapper::{MapError, Mapper};
 pub use run::{Run, RunBuildError, RunError};
@@ -59,19 +56,16 @@ pub use stats::{RunStats, ScorerStats};
 
 pub mod prelude {
     pub use crate::{
-        Acquisition, AcquisitionError, AcquisitionMetadata, AndScorer, Change, CompareConfig,
-        AcquisitionSnapshot, AcquiredOutput, Comparison, Dataset, DatasetSource, Direction,
-        ExecutionSink, Executor, ExecutorBoxError, ExecutorError, IgnoreReferenceScorer,
-        JsonlFileTailSource, MapError, MapScoreScorer, Mapper, NoopScrubber, NoopSink,
-        NotScorer, OrScorer, PercentSampler, PullExecutor, RegexPiiScrubber,
+        Acquisition, AcquisitionError, AcquisitionMetadata, AcquisitionSnapshot, AcquiredOutput,
+        AndScorer, Change, CompareConfig, Comparison, Dataset, Direction, IgnoreReferenceScorer,
+        MapError, MapScoreScorer, Mapper, NotScorer, OrScorer,
         RUN_RESULT_SCHEMA_VERSION, Run, RunBuildError, RunError, RunMetadata, RunResult, RunStats,
-        Sample, SampleBuildError, SampleBuilder, SampleComparison, SampleSource, Sampler,
-        SamplerBuildError, Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerComparison,
+        Sample, SampleBuildError, SampleBuilder, SampleComparison,
+        Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerComparison,
         ScorerContext, ScorerError, ScorerExt, ScorerMetadata, ScorerResources, ScorerSet,
-        ScorerStats, Scrubber, ShardBuildError, ShardSpec, ShardedSource, ShutdownMode,
-        StringPrefixCheckpoint, StringStreamStage, ThenScorer, TimeoutScorer, TokenUsage,
+        ScorerStats, ThenScorer, TimeoutScorer, TokenUsage,
         ToolCall, ToolResult, TrajectorySample, TrajectoryStep, WeightedScorer, compare,
-        current_sample_id, ignore_reference, read_jsonl, write_jsonl,
+        ignore_reference, read_jsonl, write_jsonl,
     };
-    pub use crate::{AlwaysSampler, ConversationSample, ConversationTurn, TargetedSampler};
+    pub use crate::{ConversationSample, ConversationTurn};
 }

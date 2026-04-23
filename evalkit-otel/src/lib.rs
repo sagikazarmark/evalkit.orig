@@ -1,9 +1,9 @@
 use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use evalkit::{
-    Acquisition, AcquisitionError, AcquisitionMetadata, ExecutionSink, ExecutorBoxError, RunResult,
-    Sample, SampleSource, Score, current_sample_id,
+    Acquisition, AcquisitionError, AcquisitionMetadata, RunResult, Sample, Score,
 };
+use evalkit_runtime::{ExecutionSink, ExecutorBoxError, SampleSource, current_sample_id};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -1162,9 +1162,8 @@ enum OtlpAnyValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evalkit::{
-        Direction, RunMetadata, SampleResult, SampleSource, ScoreDefinition, TrialResult,
-    };
+    use evalkit::{Direction, RunMetadata, SampleResult, ScoreDefinition, TrialResult};
+    use evalkit_runtime::SampleSource;
     use serde_json::json;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};

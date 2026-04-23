@@ -140,7 +140,7 @@ pub fn current_sample_id() -> Option<String> {
     CURRENT_SAMPLE_ID.try_with(Clone::clone).ok()
 }
 
-pub(crate) async fn with_current_sample_id<Fut>(sample_id: &str, future: Fut) -> Fut::Output
+pub async fn with_current_sample_id<Fut>(sample_id: &str, future: Fut) -> Fut::Output
 where
     Fut: Future,
 {

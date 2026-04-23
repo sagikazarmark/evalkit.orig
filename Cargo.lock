@@ -369,12 +369,12 @@ dependencies = [
 
 [[package]]
 name = "evalkit"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "evalkit-otel",
+ "evalkit-runtime",
  "futures",
- "regex",
  "serde",
  "serde_json",
  "tempfile",
@@ -419,6 +419,7 @@ dependencies = [
  "bytes",
  "chrono",
  "evalkit",
+ "evalkit-runtime",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -437,6 +438,21 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "evalkit-runtime"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "evalkit",
+ "futures",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

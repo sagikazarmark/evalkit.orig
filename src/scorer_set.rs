@@ -29,15 +29,15 @@ impl<I, O, R> ScorerSet<I, O, R> {
         }
     }
 
-    pub(crate) fn definitions(&self) -> &[ScoreDefinition] {
+    pub fn definitions(&self) -> &[ScoreDefinition] {
         &self.definitions
     }
 
-    pub(crate) fn judge_model_pins(&self) -> &[String] {
+    pub fn judge_model_pins(&self) -> &[String] {
         &self.judge_model_pins
     }
 
-    pub(crate) async fn score(
+    pub async fn score(
         &self,
         ctx: &ScorerContext<'_, I, O, R>,
     ) -> Vec<(ScoreDefinition, Result<ScoreOutcome, ScorerError>)> {

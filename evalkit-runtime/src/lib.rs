@@ -1,8 +1,18 @@
-use crate::{
+//! Runtime-oriented APIs for `evalkit`.
+//!
+//! This crate contains the online execution surface that used to live in the
+//! `evalkit` root crate: executors, sources, sinks, samplers, sharding, PII
+//! scrubbers, and partial-stream helpers. The root crate keeps the batch
+//! kernel; this crate hosts the runtime orchestration that sits on top of it.
+//!
+//! See `docs/root-crate-boundary-audit.md` for the boundary decision.
+
+use evalkit::{
     AcquiredOutput, Acquisition, AcquisitionError, AcquisitionSnapshot, Dataset, RunMetadata,
     RunResult, Sample, SampleResult, Score, ScoreDefinition, ScoreOutcome, ScorerContext,
     ScorerError, ScorerResources, ScorerSet, TrialResult,
 };
+pub use evalkit::acquisition::current_sample_id;
 use chrono::Utc;
 use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
 use serde::de::DeserializeOwned;
@@ -619,15 +629,15 @@ impl<I, R> PartialScoringPlan<I, String, R> for StringPrefixPartialScoring<I, R>
                     continue;
                 };
 
-                let partial_ctx = ScorerContext {
-                    run_id: ctx.run_id,
-                    sample_id: ctx.sample_id,
-                    trial_index: ctx.trial_index,
-                    metadata: ctx.metadata,
-                    input: ctx.input,
-                    output: &output,
-                    reference: ctx.reference,
-                };
+                let partial_ctx = ScorerContext::with_scope(
+                    ctx.run_id,
+                    ctx.sample_id,
+                    ctx.trial_index,
+                    ctx.metadata,
+                    ctx.input,
+                    &output,
+                    ctx.reference,
+                );
 
                 results.extend(self.scorer_set.score(&partial_ctx).await.into_iter().map(
                     |(definition, result)| {
@@ -676,15 +686,15 @@ impl<I, R> PartialScoringPlan<I, String, R> for StringStreamingPartialScoring<I,
                     continue;
                 };
 
-                let snapshot_ctx = ScorerContext {
-                    run_id: ctx.run_id,
-                    sample_id: ctx.sample_id,
-                    trial_index: ctx.trial_index,
-                    metadata: ctx.metadata,
-                    input: ctx.input,
-                    output: &snapshot.output,
-                    reference: ctx.reference,
-                };
+                let snapshot_ctx = ScorerContext::with_scope(
+                    ctx.run_id,
+                    ctx.sample_id,
+                    ctx.trial_index,
+                    ctx.metadata,
+                    ctx.input,
+                    &snapshot.output,
+                    ctx.reference,
+                );
 
                 results.extend(self.scorer_set.score(&snapshot_ctx).await.into_iter().map(
                     |(definition, result)| {
@@ -1242,15 +1252,15 @@ where
     {
         Ok(Ok(mut acquired)) => {
             scrub_acquired_output(state, &mut acquired);
-            let ctx = ScorerContext {
+            let ctx = ScorerContext::with_scope(
                 run_id,
-                sample_id: &sample.id,
+                &sample.id,
                 trial_index,
-                metadata: &sample.metadata,
-                input: &sample.input,
-                output: &acquired.output,
-                reference: sample.reference.as_ref(),
-            };
+                &sample.metadata,
+                &sample.input,
+                &acquired.output,
+                sample.reference.as_ref(),
+            );
 
             match AssertUnwindSafe(state.scorer_set.score(&ctx))
                 .catch_unwind()
@@ -1307,7 +1317,7 @@ where
     O: Send + Sync + 'static,
     R: Clone + Send + Sync + 'static,
 {
-    crate::acquisition::with_current_sample_id(&sample.id, async {
+    evalkit::acquisition::with_current_sample_id(&sample.id, async {
         match state.sample_timeout {
             Some(duration) => match timeout(duration, state.acquisition.acquire_boxed(&sample.input)).await {
                 Ok(result) => result,
@@ -1632,8 +1642,8 @@ fn fingerprint_definitions(definitions: &[ScoreDefinition]) -> String {
                 "{}:{}",
                 definition.name,
                 match definition.direction {
-                    Some(crate::Direction::Maximize) => "maximize",
-                    Some(crate::Direction::Minimize) => "minimize",
+                    Some(evalkit::Direction::Maximize) => "maximize",
+                    Some(evalkit::Direction::Minimize) => "minimize",
                     None => "none",
                 }
             )
@@ -1880,11 +1890,12 @@ mod tests {
         PullExecutor, RegexPiiScrubber, Sampler, SamplerBuildError, ShardBuildError, ShardSpec,
         ShardedSource, ShutdownMode, StringPrefixCheckpoint, StringStreamStage, TargetedSampler,
     };
-    use crate::{
+    use evalkit::{
         AcquiredOutput, Acquisition, AcquisitionError, AcquisitionSnapshot, Dataset, RunResult,
-        Sample, SampleResult, SampleSource, Score, ScoreDefinition, Scorer, ScorerContext,
+        Sample, SampleResult, Score, ScoreDefinition, Scorer, ScorerContext,
         ScorerError, ScorerMetadata, ScorerSet,
     };
+    use super::SampleSource;
     use serde_json::Value;
     use std::fs::OpenOptions;
     use std::io::Write;
