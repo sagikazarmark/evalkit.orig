@@ -117,9 +117,10 @@ Already present:
 - `evalkit diff <baseline> <candidate>` now exists and can emit markdown plus optional JSON output from kernel comparisons
 - `evalkit watch` now reruns evals on file changes and supports a bounded `--max-runs` mode for automation
 - `docs/cli-config.md` now formalizes the TOML config shape used by `evalkit run` and `evalkit watch`
+- GitHub Action source now exists under `.github/actions/evalkit-pr-comment/` and wraps `evalkit run` plus `evalkit diff`
 
 Gaps:
-- No GitHub Action
+- The GitHub Action is source-only right now; it was not exercised against a live pull request from this environment
 
 ## Phase 4 - App Surface
 

@@ -168,7 +168,7 @@ Once the plugin spec lands:
 
 ## CI / workflow integrations
 
-- [ ] GitHub Action              — wraps `evalkit run` + PR comment exporter
+- [x] GitHub Action              — source lives under `.github/actions/evalkit-pr-comment/`; local live-PR verification still pending here
 - [ ] GitLab CI template
 - [ ] Pre-commit hook integration
 - [ ] VS Code extension          — invoke runs from editor (later)
