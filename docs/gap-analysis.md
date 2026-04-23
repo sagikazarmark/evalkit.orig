@@ -114,14 +114,14 @@ Already present:
 - `evalkit-otel` now provides `OtelResultSink`, so executor-based runs can emit OTel spans through the sink interface without an extra post-processing step
 - `evalkit-otel` now provides `OtlpReceiverSource`, which adapts the in-repo OTLP receiver into a pull-based executor source over grouped sample spans
 - `AlwaysSampler`, `PercentSampler`, and `TargetedSampler` now exist in the kernel
-- `PullExecutor` now has explicit queueing and stop controls via `queue_capacity`, `max_samples`, `shutdown_when`, and `ShutdownMode`
+- `PullExecutor` now has explicit queueing and stop controls via `queue_capacity`, `max_samples`, `shutdown_when`, `ShutdownMode`, and configurable `worker_count`
 - The executor path reuses existing acquisition timeout handling, scorer execution, score validation, judge model pin collection, and run metadata fingerprinting from the batch runner
 - `examples/prod_eval_daemon.rs` now shows a small daemon-style binary composed from library primitives and emits OTel spans through `OtelResultSink`
 
 Gaps:
 - Streaming partial scoring now supports acquisition-provided intermediate snapshots, but there is still no token-by-token or chunk-stream protocol shared across providers
 - No additional online source adapters such as Kafka or NATS yet
-- Queueing and shutdown are currently single-process pull controls; there is still no concurrent worker pool or backpressure protocol across components
+- The executor now has a bounded worker pool, but there is still no multi-process or distributed backpressure protocol across components
 
 ## Phase 3 - CI / Developer Workflow
 
@@ -162,6 +162,8 @@ Gaps:
 
 The best next implementation slice is the next Phase 2 increment:
 - add a third source adapter, likely one of Kafka or NATS, so the source abstraction is proven against a networked stream
-- add a concurrent worker-pool executor so the runtime has a first-class bounded in-flight model instead of only local prefetch controls
+- if provider-stream support becomes important, lift acquisition snapshots into a more explicit chunk/token stream contract
+
+With networked sources intentionally deferred, the remaining roadmap work now shifts to Phase 4.
 
 In parallel, the next runner-facing Phase 3 gap is live GitHub Action validation in a pull-request environment so the already-landed workflow can be exercised end to end.

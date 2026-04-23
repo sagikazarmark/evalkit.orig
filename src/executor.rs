@@ -4,7 +4,7 @@ use crate::{
     ScorerError, ScorerResources, ScorerSet, TrialResult,
 };
 use chrono::Utc;
-use futures::FutureExt;
+use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -334,13 +334,14 @@ impl Error for SamplerBuildError {}
 
 pub struct PullExecutor<I, O, R, Src, Samp, Sink> {
     source: Src,
-    acquisition: Box<dyn ErasedAcquisition<I, O>>,
-    scorer_set: ScorerSet<I, O, R>,
-    judge_model_tier: Option<JudgeModelTier<I, O, R>>,
-    partial_scoring: Option<Box<dyn PartialScoringPlan<I, O, R>>>,
+    acquisition: Arc<dyn ErasedAcquisition<I, O>>,
+    scorer_set: Arc<ScorerSet<I, O, R>>,
+    judge_model_tier: Option<Arc<JudgeModelTier<I, O, R>>>,
+    partial_scoring: Option<Arc<dyn PartialScoringPlan<I, O, R>>>,
     sampler: Samp,
     sink: Sink,
     trial_count: usize,
+    worker_count: usize,
     queue_capacity: usize,
     max_samples: Option<usize>,
     shutdown: Option<ShutdownControl>,
@@ -544,6 +545,33 @@ struct ShutdownControl {
     predicate: Box<ShutdownPredicate>,
 }
 
+struct SharedExecutionState<I, O, R> {
+    acquisition: Arc<dyn ErasedAcquisition<I, O>>,
+    scorer_set: Arc<ScorerSet<I, O, R>>,
+    judge_model_tier: Option<Arc<JudgeModelTier<I, O, R>>>,
+    partial_scoring: Option<Arc<dyn PartialScoringPlan<I, O, R>>>,
+    trial_count: usize,
+    sample_timeout: Option<Duration>,
+}
+
+impl<I, O, R> Clone for SharedExecutionState<I, O, R> {
+    fn clone(&self) -> Self {
+        Self {
+            acquisition: Arc::clone(&self.acquisition),
+            scorer_set: Arc::clone(&self.scorer_set),
+            judge_model_tier: self.judge_model_tier.clone(),
+            partial_scoring: self.partial_scoring.clone(),
+            trial_count: self.trial_count,
+            sample_timeout: self.sample_timeout,
+        }
+    }
+}
+
+struct IndexedSampleResult {
+    index: usize,
+    result: SampleResult,
+}
+
 impl<I, O, R, Src, Samp, Sink> PullExecutor<I, O, R, Src, Samp, Sink>
 where
     Src: SampleSource<I, R>,
@@ -566,13 +594,14 @@ where
 
         Self {
             source,
-            acquisition: Box::new(acquisition),
-            scorer_set,
+            acquisition: Arc::new(acquisition),
+            scorer_set: Arc::new(scorer_set),
             judge_model_tier: None,
             partial_scoring: None,
             sampler,
             sink,
             trial_count: 1,
+            worker_count: 1,
             queue_capacity: 1,
             max_samples: None,
             shutdown: None,
@@ -587,6 +616,11 @@ where
 
     pub fn trials(mut self, trial_count: usize) -> Self {
         self.trial_count = trial_count.max(1);
+        self
+    }
+
+    pub fn worker_count(mut self, worker_count: usize) -> Self {
+        self.worker_count = worker_count.max(1);
         self
     }
 
@@ -632,10 +666,10 @@ where
             + Sync
             + 'static,
     {
-        self.judge_model_tier = Some(JudgeModelTier {
+        self.judge_model_tier = Some(Arc::new(JudgeModelTier {
             scorer_set,
             predicate: Box::new(predicate),
-        });
+        }));
         self
     }
 }
@@ -651,7 +685,7 @@ where
         scorer_set: ScorerSet<I, String, R>,
         checkpoints: Vec<StringPrefixCheckpoint>,
     ) -> Self {
-        self.partial_scoring = Some(Box::new(StringPrefixPartialScoring::new(
+        self.partial_scoring = Some(Arc::new(StringPrefixPartialScoring::new(
             scorer_set,
             checkpoints,
         )));
@@ -663,7 +697,7 @@ where
         scorer_set: ScorerSet<I, String, R>,
         stages: Vec<StringStreamStage>,
     ) -> Self {
-        self.partial_scoring = Some(Box::new(StringStreamingPartialScoring::new(
+        self.partial_scoring = Some(Arc::new(StringStreamingPartialScoring::new(
             scorer_set, stages,
         )));
         self
@@ -672,6 +706,9 @@ where
 
 impl<I, O, R, Src, Samp, Sink> Executor for PullExecutor<I, O, R, Src, Samp, Sink>
 where
+    I: Clone + Send + Sync + 'static,
+    O: Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
     Src: SampleSource<I, R>,
     Samp: Sampler<I, R>,
     Sink: ExecutionSink,
@@ -681,56 +718,22 @@ where
         let started = Instant::now();
         let run_id = Uuid::new_v4().to_string();
         let definitions = merged_definitions(
-            &self.scorer_set,
-            self.judge_model_tier.as_ref(),
+            self.scorer_set.as_ref(),
+            self.judge_model_tier.as_deref(),
             self.partial_scoring.as_deref(),
         )
         .map_err(ExecutorError::Configuration)?;
         let judge_model_pins = merged_judge_model_pins(
-            &self.scorer_set,
-            self.judge_model_tier.as_ref(),
+            self.scorer_set.as_ref(),
+            self.judge_model_tier.as_deref(),
             self.partial_scoring.as_deref(),
         );
         let source_metadata = self.source.metadata();
-
-        let mut sampled = Vec::new();
-        let mut sample_results = Vec::new();
-
-        let mut queue = VecDeque::with_capacity(self.queue_capacity);
-        let mut source_exhausted = false;
-        let mut shutting_down = false;
-        let mut processed_samples = 0usize;
-
-        loop {
-            if !source_exhausted && !shutting_down {
-                self.fill_queue(&mut queue, &mut source_exhausted).await?;
-            }
-
-            let Some(sample) = queue.pop_front() else {
-                break;
-            };
-
-            sampled.push(sample);
-            let sample_result = self
-                .execute_sample(
-                    &run_id,
-                    sampled.last().expect("sample exists"),
-                    &definitions,
-                )
-                .await;
-            self.sink
-                .push_sample(&sample_result)
-                .await
-                .map_err(ExecutorError::Sink)?;
-            processed_samples += 1;
-            if self.should_shutdown(processed_samples, &sample_result) {
-                shutting_down = true;
-                if self.shutdown_mode == ShutdownMode::DiscardQueue {
-                    queue.clear();
-                }
-            }
-            sample_results.push(sample_result);
-        }
+        let (sampled, sample_results) = if self.worker_count <= 1 {
+            self.execute_sequential(&run_id, &definitions).await?
+        } else {
+            self.execute_concurrent(&run_id, &definitions).await?
+        };
 
         let completed_at = Utc::now();
         let result = RunResult {
@@ -763,196 +766,168 @@ where
 
 impl<I, O, R, Src, Samp, Sink> PullExecutor<I, O, R, Src, Samp, Sink>
 where
+    I: Clone + Send + Sync + 'static,
+    O: Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
     Src: SampleSource<I, R>,
     Samp: Sampler<I, R>,
     Sink: ExecutionSink,
 {
+    async fn execute_sequential(
+        &mut self,
+        run_id: &str,
+        definitions: &[ScoreDefinition],
+    ) -> Result<(Vec<Sample<I, R>>, Vec<SampleResult>), ExecutorError> {
+        let mut sampled = Vec::new();
+        let mut sample_results = Vec::new();
+        let mut queue = VecDeque::with_capacity(self.queue_capacity);
+        let mut source_exhausted = false;
+        let mut shutting_down = false;
+        let mut processed_samples = 0usize;
+
+        loop {
+            if !source_exhausted && !shutting_down {
+                self.fill_queue(&mut queue, &mut source_exhausted).await?;
+            }
+
+            let Some(sample) = queue.pop_front() else {
+                break;
+            };
+
+            sampled.push(sample);
+            let sample_result = self
+                .execute_sample(
+                    run_id,
+                    sampled.last().expect("sample exists"),
+                    definitions,
+                )
+                .await;
+            self.sink
+                .push_sample(&sample_result)
+                .await
+                .map_err(ExecutorError::Sink)?;
+            processed_samples += 1;
+            if self.should_shutdown(processed_samples, &sample_result) {
+                shutting_down = true;
+                if self.shutdown_mode == ShutdownMode::DiscardQueue {
+                    queue.clear();
+                }
+            }
+            sample_results.push(sample_result);
+        }
+
+        Ok((sampled, sample_results))
+    }
+
+    async fn execute_concurrent(
+        &mut self,
+        run_id: &str,
+        definitions: &[ScoreDefinition],
+    ) -> Result<(Vec<Sample<I, R>>, Vec<SampleResult>), ExecutorError> {
+        let shared = self.shared_state();
+        let mut scheduled_samples = Vec::new();
+        let mut queue = VecDeque::with_capacity(self.queue_capacity);
+        let mut source_exhausted = false;
+        let mut shutting_down = false;
+        let mut next_index = 0usize;
+        let mut processed_samples = 0usize;
+        let mut in_flight = FuturesUnordered::new();
+        let mut sample_results = Vec::new();
+        let definitions = Arc::new(definitions.to_vec());
+        let run_id = Arc::new(run_id.to_string());
+
+        loop {
+            if !source_exhausted && !shutting_down {
+                self.fill_indexed_queue(
+                    &mut queue,
+                    &mut source_exhausted,
+                    &mut scheduled_samples,
+                    &mut next_index,
+                )
+                .await?;
+            }
+
+            while in_flight.len() < self.worker_count {
+                let Some((index, sample)) = queue.pop_front() else {
+                    break;
+                };
+                let shared = shared.clone();
+                let run_id = Arc::clone(&run_id);
+                let definitions = Arc::clone(&definitions);
+
+                in_flight.push(async move {
+                    IndexedSampleResult {
+                        index,
+                        result: execute_sample_with_state(
+                            &shared,
+                            run_id.as_str(),
+                            &sample,
+                            definitions.as_slice(),
+                        )
+                        .await,
+                    }
+                });
+            }
+
+            if in_flight.is_empty() {
+                if source_exhausted || shutting_down {
+                    break;
+                }
+                continue;
+            }
+
+            let Some(indexed) = in_flight.next().await else {
+                break;
+            };
+            self.sink
+                .push_sample(&indexed.result)
+                .await
+                .map_err(ExecutorError::Sink)?;
+            processed_samples += 1;
+            let should_shutdown = self.should_shutdown(processed_samples, &indexed.result);
+            sample_results.push(indexed);
+            if should_shutdown {
+                shutting_down = true;
+                if self.shutdown_mode == ShutdownMode::DiscardQueue {
+                    queue.clear();
+                    break;
+                }
+            }
+        }
+
+        sample_results.sort_by_key(|indexed| indexed.index);
+        let sampled = sample_results
+            .iter()
+            .map(|indexed| scheduled_samples[indexed.index].clone())
+            .collect();
+
+        Ok((
+            sampled,
+            sample_results
+                .into_iter()
+                .map(|indexed| indexed.result)
+                .collect(),
+        ))
+    }
+
+    fn shared_state(&self) -> SharedExecutionState<I, O, R> {
+        SharedExecutionState {
+            acquisition: Arc::clone(&self.acquisition),
+            scorer_set: Arc::clone(&self.scorer_set),
+            judge_model_tier: self.judge_model_tier.clone(),
+            partial_scoring: self.partial_scoring.clone(),
+            trial_count: self.trial_count,
+            sample_timeout: self.sample_timeout,
+        }
+    }
+
     async fn execute_sample(
         &self,
         run_id: &str,
         sample: &Sample<I, R>,
         definitions: &[ScoreDefinition],
     ) -> SampleResult {
-        let mut trials = Vec::with_capacity(self.trial_count);
-        let mut resources = ScorerResources::default();
-
-        for trial_index in 0..self.trial_count {
-            let trial = self
-                .execute_trial(run_id, sample, trial_index, definitions)
-                .await;
-            resources.merge(&trial.resources);
-            trials.push(trial.result);
-        }
-
-        let scored_count = trials
-            .iter()
-            .filter(|trial| trial.scores.values().any(Result::is_ok))
-            .count();
-
-        SampleResult {
-            sample_id: sample.id.clone(),
-            trial_count: self.trial_count,
-            scored_count,
-            error_count: self.trial_count - scored_count,
-            trials,
-            token_usage: resources.token_usage,
-            cost_usd: resources.cost_usd,
-        }
-    }
-
-    async fn execute_trial(
-        &self,
-        run_id: &str,
-        sample: &Sample<I, R>,
-        trial_index: usize,
-        definitions: &[ScoreDefinition],
-    ) -> ExecutedTrial {
-        let started = Instant::now();
-
-        let flattened = match AssertUnwindSafe(self.acquire_output(sample))
-            .catch_unwind()
-            .await
-        {
-            Ok(Ok(acquired)) => {
-                let ctx = ScorerContext {
-                    run_id,
-                    sample_id: &sample.id,
-                    trial_index,
-                    metadata: &sample.metadata,
-                    input: &sample.input,
-                    output: &acquired.output,
-                    reference: sample.reference.as_ref(),
-                };
-
-                match AssertUnwindSafe(self.scorer_set.score(&ctx))
-                    .catch_unwind()
-                    .await
-                {
-                    Ok(scores) => {
-                        let tiered = self
-                            .maybe_execute_judge_model_tier(sample, &ctx, flatten_scores(scores))
-                            .await;
-                        self.maybe_execute_partial_scoring(&ctx, &acquired.snapshots, tiered)
-                            .await
-                    }
-                    Err(_) => FlattenedTrial {
-                        scores: scorer_panic_scores(definitions),
-                        resources: ScorerResources::default(),
-                    },
-                }
-            }
-            Ok(Err(err)) => FlattenedTrial {
-                scores: acquisition_failure_scores(definitions, err),
-                resources: ScorerResources::default(),
-            },
-            Err(_) => FlattenedTrial {
-                scores: acquisition_failure_scores(definitions, AcquisitionError::Panicked),
-                resources: ScorerResources::default(),
-            },
-        };
-
-        ExecutedTrial {
-            result: TrialResult {
-                scores: flattened.scores,
-                duration: started.elapsed(),
-                trial_index,
-            },
-            resources: flattened.resources,
-        }
-    }
-
-    async fn acquire_output(
-        &self,
-        sample: &Sample<I, R>,
-    ) -> Result<AcquiredOutput<O>, AcquisitionError> {
-        crate::acquisition::with_current_sample_id(
-            &sample.id,
-            self.acquire_output_inner(&sample.input),
-        )
-        .await
-    }
-
-    async fn acquire_output_inner(&self, input: &I) -> Result<AcquiredOutput<O>, AcquisitionError> {
-        match self.sample_timeout {
-            Some(duration) => {
-                match timeout(duration, self.acquisition.acquire_boxed(input)).await {
-                    Ok(result) => result,
-                    Err(_) => Err(AcquisitionError::Timeout(duration)),
-                }
-            }
-            None => self.acquisition.acquire_boxed(input).await,
-        }
-    }
-
-    async fn maybe_execute_judge_model_tier(
-        &self,
-        sample: &Sample<I, R>,
-        ctx: &ScorerContext<'_, I, O, R>,
-        primary: FlattenedTrial,
-    ) -> FlattenedTrial {
-        let Some(tier) = self.judge_model_tier.as_ref() else {
-            return primary;
-        };
-
-        let should_run = match std::panic::catch_unwind(AssertUnwindSafe(|| {
-            (tier.predicate)(sample, &primary.scores)
-        })) {
-            Ok(should_run) => should_run,
-            Err(_) => {
-                return merge_flattened_trials(
-                    primary,
-                    FlattenedTrial {
-                        scores: tier_predicate_panic_scores(tier.scorer_set.definitions()),
-                        resources: ScorerResources::default(),
-                    },
-                );
-            }
-        };
-
-        if !should_run {
-            return primary;
-        }
-
-        match AssertUnwindSafe(tier.scorer_set.score(ctx))
-            .catch_unwind()
-            .await
-        {
-            Ok(scores) => merge_flattened_trials(primary, flatten_scores(scores)),
-            Err(_) => merge_flattened_trials(
-                primary,
-                FlattenedTrial {
-                    scores: scorer_panic_scores(tier.scorer_set.definitions()),
-                    resources: ScorerResources::default(),
-                },
-            ),
-        }
-    }
-
-    async fn maybe_execute_partial_scoring(
-        &self,
-        ctx: &ScorerContext<'_, I, O, R>,
-        snapshots: &[AcquisitionSnapshot<O>],
-        primary: FlattenedTrial,
-    ) -> FlattenedTrial {
-        let Some(plan) = self.partial_scoring.as_deref() else {
-            return primary;
-        };
-
-        let definitions = plan.definitions();
-
-        match AssertUnwindSafe(plan.score(ctx, snapshots))
-            .catch_unwind()
-            .await
-        {
-            Ok(scores) => merge_flattened_trials(primary, flatten_scores(scores)),
-            Err(_) => merge_flattened_trials(
-                primary,
-                FlattenedTrial {
-                    scores: scorer_panic_scores(&definitions),
-                    resources: ScorerResources::default(),
-                },
-            ),
-        }
+        execute_sample_with_state(&self.shared_state(), run_id, sample, definitions).await
     }
 
     async fn fill_queue(
@@ -976,6 +951,37 @@ where
         Ok(())
     }
 
+    async fn fill_indexed_queue(
+        &mut self,
+        queue: &mut VecDeque<(usize, Sample<I, R>)>,
+        source_exhausted: &mut bool,
+        scheduled_samples: &mut Vec<Sample<I, R>>,
+        next_index: &mut usize,
+    ) -> Result<(), ExecutorError>
+    where
+        I: Clone,
+        R: Clone,
+    {
+        while queue.len() < self.queue_capacity && !*source_exhausted {
+            match self
+                .source
+                .next_sample()
+                .await
+                .map_err(ExecutorError::Source)?
+            {
+                Some(sample) if self.sampler.should_sample(&sample) => {
+                    scheduled_samples.push(sample.clone());
+                    queue.push_back((*next_index, sample));
+                    *next_index += 1;
+                }
+                Some(_) => continue,
+                None => *source_exhausted = true,
+            }
+        }
+
+        Ok(())
+    }
+
     fn should_shutdown(&self, processed_samples: usize, sample_result: &SampleResult) -> bool {
         self.max_samples
             .is_some_and(|max_samples| processed_samples >= max_samples)
@@ -983,6 +989,219 @@ where
                 .shutdown
                 .as_ref()
                 .is_some_and(|shutdown| (shutdown.predicate)(sample_result))
+    }
+}
+
+async fn execute_sample_with_state<I, O, R>(
+    state: &SharedExecutionState<I, O, R>,
+    run_id: &str,
+    sample: &Sample<I, R>,
+    definitions: &[ScoreDefinition],
+) -> SampleResult
+where
+    I: Clone + Send + Sync + 'static,
+    O: Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+{
+    let mut trials = Vec::with_capacity(state.trial_count);
+    let mut resources = ScorerResources::default();
+
+    for trial_index in 0..state.trial_count {
+        let trial = execute_trial_with_state(state, run_id, sample, trial_index, definitions).await;
+        resources.merge(&trial.resources);
+        trials.push(trial.result);
+    }
+
+    let scored_count = trials
+        .iter()
+        .filter(|trial| trial.scores.values().any(Result::is_ok))
+        .count();
+
+    SampleResult {
+        sample_id: sample.id.clone(),
+        trial_count: state.trial_count,
+        scored_count,
+        error_count: state.trial_count - scored_count,
+        trials,
+        token_usage: resources.token_usage,
+        cost_usd: resources.cost_usd,
+    }
+}
+
+async fn execute_trial_with_state<I, O, R>(
+    state: &SharedExecutionState<I, O, R>,
+    run_id: &str,
+    sample: &Sample<I, R>,
+    trial_index: usize,
+    definitions: &[ScoreDefinition],
+) -> ExecutedTrial
+where
+    I: Clone + Send + Sync + 'static,
+    O: Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+{
+    let started = Instant::now();
+
+    let flattened = match AssertUnwindSafe(acquire_output_with_state(state, sample))
+        .catch_unwind()
+        .await
+    {
+        Ok(Ok(acquired)) => {
+            let ctx = ScorerContext {
+                run_id,
+                sample_id: &sample.id,
+                trial_index,
+                metadata: &sample.metadata,
+                input: &sample.input,
+                output: &acquired.output,
+                reference: sample.reference.as_ref(),
+            };
+
+            match AssertUnwindSafe(state.scorer_set.score(&ctx))
+                .catch_unwind()
+                .await
+            {
+                Ok(scores) => {
+                    let tiered = maybe_execute_judge_model_tier_with_state(
+                        state,
+                        sample,
+                        &ctx,
+                        flatten_scores(scores),
+                    )
+                    .await;
+                    maybe_execute_partial_scoring_with_state(
+                        state,
+                        &ctx,
+                        &acquired.snapshots,
+                        tiered,
+                    )
+                    .await
+                }
+                Err(_) => FlattenedTrial {
+                    scores: scorer_panic_scores(definitions),
+                    resources: ScorerResources::default(),
+                },
+            }
+        }
+        Ok(Err(err)) => FlattenedTrial {
+            scores: acquisition_failure_scores(definitions, err),
+            resources: ScorerResources::default(),
+        },
+        Err(_) => FlattenedTrial {
+            scores: acquisition_failure_scores(definitions, AcquisitionError::Panicked),
+            resources: ScorerResources::default(),
+        },
+    };
+
+    ExecutedTrial {
+        result: TrialResult {
+            scores: flattened.scores,
+            duration: started.elapsed(),
+            trial_index,
+        },
+        resources: flattened.resources,
+    }
+}
+
+async fn acquire_output_with_state<I, O, R>(
+    state: &SharedExecutionState<I, O, R>,
+    sample: &Sample<I, R>,
+) -> Result<AcquiredOutput<O>, AcquisitionError>
+where
+    I: Clone + Send + Sync + 'static,
+    O: Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+{
+    crate::acquisition::with_current_sample_id(&sample.id, async {
+        match state.sample_timeout {
+            Some(duration) => match timeout(duration, state.acquisition.acquire_boxed(&sample.input)).await {
+                Ok(result) => result,
+                Err(_) => Err(AcquisitionError::Timeout(duration)),
+            },
+            None => state.acquisition.acquire_boxed(&sample.input).await,
+        }
+    })
+    .await
+}
+
+async fn maybe_execute_judge_model_tier_with_state<I, O, R>(
+    state: &SharedExecutionState<I, O, R>,
+    sample: &Sample<I, R>,
+    ctx: &ScorerContext<'_, I, O, R>,
+    primary: FlattenedTrial,
+) -> FlattenedTrial
+where
+    I: Clone + Send + Sync + 'static,
+    O: Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+{
+    let Some(tier) = state.judge_model_tier.as_deref() else {
+        return primary;
+    };
+
+    let should_run = match std::panic::catch_unwind(AssertUnwindSafe(|| {
+        (tier.predicate)(sample, &primary.scores)
+    })) {
+        Ok(should_run) => should_run,
+        Err(_) => {
+            return merge_flattened_trials(
+                primary,
+                FlattenedTrial {
+                    scores: tier_predicate_panic_scores(tier.scorer_set.definitions()),
+                    resources: ScorerResources::default(),
+                },
+            );
+        }
+    };
+
+    if !should_run {
+        return primary;
+    }
+
+    match AssertUnwindSafe(tier.scorer_set.score(ctx))
+        .catch_unwind()
+        .await
+    {
+        Ok(scores) => merge_flattened_trials(primary, flatten_scores(scores)),
+        Err(_) => merge_flattened_trials(
+            primary,
+            FlattenedTrial {
+                scores: scorer_panic_scores(tier.scorer_set.definitions()),
+                resources: ScorerResources::default(),
+            },
+        ),
+    }
+}
+
+async fn maybe_execute_partial_scoring_with_state<I, O, R>(
+    state: &SharedExecutionState<I, O, R>,
+    ctx: &ScorerContext<'_, I, O, R>,
+    snapshots: &[AcquisitionSnapshot<O>],
+    primary: FlattenedTrial,
+) -> FlattenedTrial
+where
+    I: Clone + Send + Sync + 'static,
+    O: Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+{
+    let Some(plan) = state.partial_scoring.as_deref() else {
+        return primary;
+    };
+
+    let definitions = plan.definitions();
+
+    match AssertUnwindSafe(plan.score(ctx, snapshots))
+        .catch_unwind()
+        .await
+    {
+        Ok(scores) => merge_flattened_trials(primary, flatten_scores(scores)),
+        Err(_) => merge_flattened_trials(
+            primary,
+            FlattenedTrial {
+                scores: scorer_panic_scores(&definitions),
+                resources: ScorerResources::default(),
+            },
+        ),
     }
 }
 
@@ -1443,6 +1662,7 @@ mod tests {
     use serde_json::Value;
     use std::fs::OpenOptions;
     use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tempfile::tempdir;
@@ -1532,6 +1752,55 @@ mod tests {
                     "mid",
                     format!("echo::{input}"),
                 )))
+        }
+    }
+
+    struct DelayedTrackingAcquisition {
+        max_in_flight: Arc<AtomicUsize>,
+        in_flight: Arc<AtomicUsize>,
+    }
+
+    impl DelayedTrackingAcquisition {
+        fn new() -> Self {
+            Self {
+                max_in_flight: Arc::new(AtomicUsize::new(0)),
+                in_flight: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn max_in_flight(&self) -> usize {
+            self.max_in_flight.load(Ordering::SeqCst)
+        }
+    }
+
+    impl Acquisition<String, String> for DelayedTrackingAcquisition {
+        async fn acquire(&self, input: &String) -> Result<String, AcquisitionError> {
+            let current = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+
+            loop {
+                let observed = self.max_in_flight.load(Ordering::SeqCst);
+                if observed >= current {
+                    break;
+                }
+
+                if self
+                    .max_in_flight
+                    .compare_exchange(observed, current, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+                {
+                    break;
+                }
+            }
+
+            let delay = match input.as_str() {
+                "slow" => Duration::from_millis(25),
+                "medium" => Duration::from_millis(10),
+                _ => Duration::from_millis(1),
+            };
+            tokio::time::sleep(delay).await;
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+
+            Ok(format!("echo::{input}"))
         }
     }
 
@@ -1977,6 +2246,144 @@ mod tests {
         let result = executor.execute().await.unwrap();
 
         assert_eq!(result.samples.len(), 3);
+        assert_eq!(
+            result
+                .samples
+                .iter()
+                .map(|sample| sample.sample_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["one", "two", "three"]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pull_executor_worker_pool_preserves_result_order() {
+        let dataset = Dataset::new(vec![
+            Sample::builder("slow".to_string())
+                .id("one")
+                .reference("echo::slow".to_string())
+                .build()
+                .unwrap(),
+            Sample::builder("fast".to_string())
+                .id("two")
+                .reference("echo::fast".to_string())
+                .build()
+                .unwrap(),
+            Sample::builder("medium".to_string())
+                .id("three")
+                .reference("echo::medium".to_string())
+                .build()
+                .unwrap(),
+        ]);
+        let acquisition = DelayedTrackingAcquisition::new();
+        let scorer_set = ScorerSet::<String, String, String>::builder()
+            .scorer(ExactMatchScorer)
+            .build();
+
+        let mut executor = PullExecutor::new(
+            DatasetSource::new(dataset),
+            DelayedTrackingAcquisition {
+                max_in_flight: Arc::clone(&acquisition.max_in_flight),
+                in_flight: Arc::clone(&acquisition.in_flight),
+            },
+            scorer_set,
+            AlwaysSampler,
+            super::NoopSink,
+        )
+        .worker_count(2)
+        .queue_capacity(3);
+
+        let result = executor.execute().await.unwrap();
+
+        assert_eq!(
+            result
+                .samples
+                .iter()
+                .map(|sample| sample.sample_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["one", "two", "three"]
+        );
+        assert_eq!(acquisition.max_in_flight(), 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pull_executor_concurrent_discard_shutdown_stops_after_first_result() {
+        let dataset = Dataset::new(vec![
+            Sample::builder("fast".to_string())
+                .id("one")
+                .reference("echo::fast".to_string())
+                .build()
+                .unwrap(),
+            Sample::builder("slow".to_string())
+                .id("two")
+                .reference("echo::slow".to_string())
+                .build()
+                .unwrap(),
+            Sample::builder("medium".to_string())
+                .id("three")
+                .reference("echo::medium".to_string())
+                .build()
+                .unwrap(),
+        ]);
+        let scorer_set = ScorerSet::<String, String, String>::builder()
+            .scorer(ExactMatchScorer)
+            .build();
+
+        let mut executor = PullExecutor::new(
+            DatasetSource::new(dataset),
+            DelayedTrackingAcquisition::new(),
+            scorer_set,
+            AlwaysSampler,
+            super::NoopSink,
+        )
+        .worker_count(2)
+        .queue_capacity(3)
+        .max_samples(1)
+        .shutdown_mode(ShutdownMode::DiscardQueue);
+
+        let result = executor.execute().await.unwrap();
+
+        assert_eq!(result.samples.len(), 1);
+        assert_eq!(result.samples[0].sample_id, "one");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pull_executor_concurrent_drain_shutdown_keeps_inflight_and_prefetched_work() {
+        let dataset = Dataset::new(vec![
+            Sample::builder("fast".to_string())
+                .id("one")
+                .reference("echo::fast".to_string())
+                .build()
+                .unwrap(),
+            Sample::builder("slow".to_string())
+                .id("two")
+                .reference("echo::slow".to_string())
+                .build()
+                .unwrap(),
+            Sample::builder("medium".to_string())
+                .id("three")
+                .reference("echo::medium".to_string())
+                .build()
+                .unwrap(),
+        ]);
+        let scorer_set = ScorerSet::<String, String, String>::builder()
+            .scorer(ExactMatchScorer)
+            .build();
+
+        let mut executor = PullExecutor::new(
+            DatasetSource::new(dataset),
+            DelayedTrackingAcquisition::new(),
+            scorer_set,
+            AlwaysSampler,
+            super::NoopSink,
+        )
+        .worker_count(2)
+        .queue_capacity(3)
+        .shutdown_when(|sample_result| sample_result.sample_id == "one")
+        .shutdown_mode(ShutdownMode::DrainQueue);
+
+        let result = executor.execute().await.unwrap();
+
         assert_eq!(
             result
                 .samples

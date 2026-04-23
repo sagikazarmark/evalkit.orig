@@ -210,3 +210,16 @@ Why:
 
 Rejected alternative:
 Teach partial scoring only from the final output by slicing prefixes or chunks after acquisition completes. That was useful as a first proof of concept, but it cannot represent true provider stages or adapter-emitted intermediate results.
+
+## 2026-04-23 - Use a bounded in-runtime worker pool without requiring `Send` scorers
+
+Decision:
+Add configurable parallelism to `PullExecutor` with `worker_count`, but implement it with an in-runtime `FuturesUnordered` pool instead of spawned Tokio tasks.
+
+Why:
+- This gives the executor a real bounded in-flight model while preserving compatibility with the kernel's existing non-`Send` scorer and acquisition futures.
+- Result ordering can still be made stable by indexing scheduled samples and sorting completed results before building the final `RunResult`.
+- `ShutdownMode::DiscardQueue` can stop quickly by dropping queued and in-flight futures, while `DrainQueue` continues through already-prefetched work.
+
+Rejected alternative:
+Require all acquisitions and scorers to produce `Send` futures so the executor can spawn every sample onto Tokio tasks. That would ripple a stricter async contract through the whole kernel before there is evidence that cross-thread task spawning is required.
