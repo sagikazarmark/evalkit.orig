@@ -115,11 +115,11 @@ Status: partial CLI workflow foundation
 Already present:
 - `evalkit-cli` exists as a binary crate
 - `evalkit diff <baseline> <candidate>` now exists and can emit markdown plus optional JSON output from kernel comparisons
+- `evalkit watch` now reruns evals on file changes and supports a bounded `--max-runs` mode for automation
+- `docs/cli-config.md` now formalizes the TOML config shape used by `evalkit run` and `evalkit watch`
 
 Gaps:
-- No `evalkit watch`
 - No GitHub Action
-- No formal CLI config spec
 
 ## Phase 4 - App Surface
 

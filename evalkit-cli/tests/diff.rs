@@ -93,3 +93,45 @@ fn diff_command_writes_markdown_and_json_outputs() {
         read_jsonl(BufReader::new(File::open(&baseline_path).unwrap())).unwrap();
     assert_eq!(baseline_round_trip.metadata.run_id, "baseline");
 }
+
+#[test]
+fn watch_command_runs_initial_eval_when_max_runs_is_one() {
+    let temp = tempdir().unwrap();
+    let dataset_path = temp.path().join("dataset.jsonl");
+    let config_path = temp.path().join("eval.toml");
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let plugin_path = repo_root.join("python/evalkit_plugin/examples/echo_acquisition.py");
+
+    std::fs::write(
+        &dataset_path,
+        "{\"input\":\"hello\",\"reference\":\"echo::hello\"}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &config_path,
+        format!(
+            "[acquisition]\ncommand = [\"python3\", \"{}\"]\n\n[[scorer]]\ntype = \"exact_match\"\n",
+            plugin_path.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_evalkit"))
+        .arg("watch")
+        .arg("--dataset")
+        .arg(&dataset_path)
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--max-runs")
+        .arg("1")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Running eval..."));
+}

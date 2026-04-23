@@ -1,73 +1,123 @@
-# CLI Config
+# CLI Config Spec
 
-This document describes the TOML config format consumed by `evalkit-cli run` today.
+This document defines the TOML config consumed by `evalkit run` and reused by `evalkit watch`.
 
-## Command
+## Invocation
 
 ```bash
-evalkit run --dataset samples.jsonl --config eval.toml --output results.jsonl
+evalkit run --dataset dataset.jsonl --config eval.toml
+evalkit watch --dataset dataset.jsonl --config eval.toml
 ```
+
+The dataset file is separate from the TOML config.
 
 ## Top-Level Shape
 
 ```toml
 [acquisition]
-url = "https://example.test/infer"
-# or
-# command = ["python3", "model.py"]
+# ... required
 
 [run]
-trials = 1
-concurrency = 4
-sample_timeout_secs = 30
+# ... optional
 
 [[scorer]]
-type = "exact_match"
+# ... at least one scorer is required
 
 [threshold]
-exact_match = 0.9
+# ... optional
 ```
+
+## Dataset File
+
+The dataset is JSONL, one sample per line.
+
+Supported fields:
+
+```json
+{"id":"sample-1","input":"What is 2 + 2?","reference":"4"}
+```
+
+Fields:
+- `input`: required string
+- `reference`: optional string
+- `id`: optional string
+
+Empty lines are ignored.
 
 ## `[acquisition]`
 
-Exactly one of `url` or `command` must be set.
+Exactly one acquisition mode must be configured.
+
+### HTTP acquisition
+
+```toml
+[acquisition]
+url = "https://example.com/generate"
+input_field = "input"
+output_field = "output"
+timeout_secs = 30
+```
 
 Fields:
-- `url: string` - HTTP endpoint for acquisition
-- `command: string | string[]` - subprocess acquisition command
-- `input_field: string` - request JSON key, default `"input"`
-- `output_field: string` - response JSON key, default `"output"`
-- `timeout_secs: integer` - acquisition timeout in seconds, default `30`
+- `url`: required for HTTP mode
+- `input_field`: optional, default `"input"`
+- `output_field`: optional, default `"output"`
+- `timeout_secs`: optional, default `30`
 
-Rules:
-- Setting both `url` and `command` is an error.
-- Setting neither `url` nor `command` is an error.
-- `command = []` is an error.
+### Subprocess acquisition plugin
+
+```toml
+[acquisition]
+command = ["python3", "plugin.py"]
+timeout_secs = 30
+```
+
+Fields:
+- `command`: required for subprocess mode
+- `timeout_secs`: optional, default `30`
+
+Notes:
+- `command` may be either a string or an array of strings.
+- Array form is preferred when arguments contain spaces.
+- Subprocess plugins always use the canonical protocol fields `input` and `output`.
+- For subprocess plugins, custom `input_field` and `output_field` values are rejected.
+
+Invalid combinations:
+- setting both `url` and `command`
+- setting neither `url` nor `command`
+- empty `command`
 
 ## `[run]`
 
-Fields:
-- `trials: integer` - per-sample trial count, default `1`
-- `concurrency: integer` - max in-flight sample executions, default `4`
-- `sample_timeout_secs: integer` - optional timeout applied to the entire sample acquisition
+This table is optional.
 
-Values lower than `1` are clamped to `1` by the builder path used today.
+```toml
+[run]
+trials = 3
+concurrency = 4
+sample_timeout_secs = 10
+```
+
+Fields:
+- `trials`: optional integer, default `1`
+- `concurrency`: optional integer, default `4`
+- `sample_timeout_secs`: optional integer
 
 ## `[[scorer]]`
 
 At least one scorer entry is required.
 
 Common fields:
-- `type: string` - scorer kind
-- `name: string` - optional override for the emitted score name
-
-Supported scorer types today:
+- `type`: required string
+- `name`: optional string override
+- `timeout_secs`: optional integer, used by `plugin` scorers
 
 ### `exact_match`
 
 ```toml
 [[scorer]]
 type = "exact_match"
+name = "exact"
 ```
 
 ### `contains`
@@ -82,11 +132,11 @@ type = "contains"
 ```toml
 [[scorer]]
 type = "regex"
-pattern = "#\\d+"
+pattern = "^hello"
 ```
 
 Required fields:
-- `pattern: string`
+- `pattern`: regex string
 
 ### `json_schema`
 
@@ -97,7 +147,7 @@ schema = { type = "object", required = ["answer"] }
 ```
 
 Required fields:
-- `schema: JSON value`
+- `schema`: JSON value representing the schema
 
 ### `plugin`
 
@@ -106,48 +156,59 @@ Required fields:
 type = "plugin"
 name = "external_score"
 command = ["python3", "score.py"]
-timeout_secs = 30
+timeout_secs = 5
 ```
 
 Required fields:
-- `command: string | string[]`
+- `command`: string or array command
 
-Optional fields:
-- `timeout_secs: integer` - plugin timeout in seconds, default `30`
-
-The scorer subprocess uses the canonical scorer-plugin protocol documented in `docs/plugin-protocol.md`.
-
-Unknown scorer types are rejected.
+Notes:
+- plugin scorers use the subprocess scorer protocol described in `docs/plugin-protocol.md`
+- empty plugin commands are rejected
 
 ## `[threshold]`
 
-Maps scorer names to minimum acceptable numeric values.
+This table is optional and is evaluated after the run completes.
 
 ```toml
 [threshold]
-exact_match = 0.8
-latency = 100.0
+exact_match = 0.95
+latency = 0.10
 ```
 
-Threshold evaluation uses:
-- `pass_rate` for binary scorers
-- `mean` for numeric scorers
-- `mean` for metric scorers
-- no threshold value for label scorers
+Behavior:
+- binary scorers use pass rate
+- numeric scorers use mean
+- metric scorers use mean
+- label scorers are skipped with a warning because they do not produce a primary numeric value
 
-## Dataset Format
+If any configured threshold is not met, `evalkit run` exits with status code `1`.
 
-The dataset file is JSONL. Each non-empty line must be an object of the form:
+## Full Example
 
-```json
-{"id":"sample-1","input":"What is 2 + 2?","reference":"4"}
+```toml
+[acquisition]
+command = ["python3", "model.py"]
+timeout_secs = 30
+
+[run]
+trials = 2
+concurrency = 4
+sample_timeout_secs = 10
+
+[[scorer]]
+type = "exact_match"
+
+[[scorer]]
+type = "regex"
+name = "looks_like_number"
+pattern = "^[0-9]+$"
+
+[threshold]
+exact_match = 0.90
+looks_like_number = 1.0
 ```
 
-Fields:
-- `id: string` - optional explicit sample id
-- `input: string` - required
-- `reference: string` - optional reference output
+## Non-Config Commands
 
-If `id` is omitted, `evalkit` generates a deterministic sample id.
-
-Empty dataset files are rejected.
+`evalkit diff` does not use this TOML file. It compares two previously written JSONL run results directly.

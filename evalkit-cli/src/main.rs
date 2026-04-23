@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use evalkit_providers::{HttpAcquisition, SubprocessAcquisition, SubprocessScorer};
 use evalkit_scorers_text::{contains, exact_match, json_schema};
 use regex::Regex;
@@ -34,9 +35,10 @@ struct Cli {
 enum Commands {
     Run(RunArgs),
     Diff(DiffArgs),
+    Watch(WatchArgs),
 }
 
-#[derive(clap::Args)]
+#[derive(clap::Args, Clone)]
 struct RunArgs {
     /// Path to the JSONL dataset file
     #[arg(long, value_name = "FILE")]
@@ -72,6 +74,33 @@ struct DiffArgs {
     /// Confidence level for significance testing
     #[arg(long, default_value_t = 0.95)]
     confidence_level: f64,
+}
+
+#[derive(clap::Args, Clone)]
+struct WatchArgs {
+    /// Path to the JSONL dataset file
+    #[arg(long, value_name = "FILE")]
+    dataset: PathBuf,
+
+    /// Path to the TOML eval config file
+    #[arg(long, value_name = "FILE")]
+    config: PathBuf,
+
+    /// Optional path to write results JSONL
+    #[arg(long, value_name = "FILE")]
+    output: Option<PathBuf>,
+
+    /// Additional files or directories to watch
+    #[arg(long = "path", value_name = "PATH")]
+    paths: Vec<PathBuf>,
+
+    /// Debounce interval for file changes
+    #[arg(long, default_value_t = 250)]
+    debounce_ms: u64,
+
+    /// Stop after this many runs, including the initial run
+    #[arg(long, value_name = "N")]
+    max_runs: Option<usize>,
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +301,14 @@ async fn main() {
                 2
             }
         },
+        Commands::Watch(args) => match watch_command(args).await {
+            Ok(true) => 0,
+            Ok(false) => 1,
+            Err(e) => {
+                eprintln!("error: {e}");
+                2
+            }
+        },
     };
     std::process::exit(exit_code);
 }
@@ -396,6 +433,69 @@ fn diff_command(args: DiffArgs) -> Result<(), CliError> {
     Ok(())
 }
 
+async fn watch_command(args: WatchArgs) -> Result<bool, CliError> {
+    let run_args = RunArgs {
+        dataset: args.dataset.clone(),
+        config: args.config.clone(),
+        output: args.output.clone(),
+    };
+    let watch_paths = collect_watch_paths(&args);
+    let max_runs = args.max_runs.unwrap_or(usize::MAX);
+    let mut runs = 0usize;
+    let mut last_passed = run_command(run_args.clone()).await?;
+    runs += 1;
+
+    if runs >= max_runs {
+        return Ok(last_passed);
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut watcher = RecommendedWatcher::new(
+        move |result| {
+            let _ = tx.send(result);
+        },
+        notify::Config::default(),
+    )
+    .map_err(|e| CliError::Run(format!("cannot create watcher: {e}")))?;
+
+    for path in &watch_paths {
+        let metadata = fs::metadata(path)
+            .map_err(|e| CliError::Run(format!("cannot watch {}: {e}", path.display())))?;
+        let mode = if metadata.is_dir() {
+            RecursiveMode::Recursive
+        } else {
+            RecursiveMode::NonRecursive
+        };
+
+        watcher
+            .watch(path, mode)
+            .map_err(|e| CliError::Run(format!("cannot watch {}: {e}", path.display())))?;
+    }
+
+    eprintln!("Watching for changes...");
+
+    loop {
+        match rx.recv() {
+            Ok(Ok(_event)) => {
+                while rx
+                    .recv_timeout(Duration::from_millis(args.debounce_ms))
+                    .is_ok()
+                {}
+
+                eprintln!("Change detected. Re-running eval...");
+                last_passed = run_command(run_args.clone()).await?;
+                runs += 1;
+
+                if runs >= max_runs {
+                    return Ok(last_passed);
+                }
+            }
+            Ok(Err(err)) => return Err(CliError::Run(format!("watch error: {err}"))),
+            Err(err) => return Err(CliError::Run(format!("watch channel closed: {err}"))),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -482,6 +582,18 @@ fn load_run_result(path: &PathBuf) -> Result<RunResult, CliError> {
 
     read_jsonl(BufReader::new(file))
         .map_err(|e| CliError::Run(format!("cannot read {}: {e}", path.display())))
+}
+
+fn collect_watch_paths(args: &WatchArgs) -> Vec<PathBuf> {
+    let mut paths = vec![args.dataset.clone(), args.config.clone()];
+
+    for path in &args.paths {
+        if !paths.iter().any(|existing| existing == path) {
+            paths.push(path.clone());
+        }
+    }
+
+    paths
 }
 
 fn build_cli_scorers(entries: &[ScorerConfigEntry]) -> Result<Vec<CliScorer>, CliError> {
@@ -813,5 +925,28 @@ mod tests {
         assert!(markdown.contains("| Scorer | Aggregate Delta | Significant | Test |"));
         assert!(markdown.contains("`accuracy`"));
         assert!(markdown.contains("| `accuracy` |"));
+    }
+
+    #[test]
+    fn collect_watch_paths_includes_dataset_and_config_once() {
+        let args = WatchArgs {
+            dataset: PathBuf::from("dataset.jsonl"),
+            config: PathBuf::from("eval.toml"),
+            output: None,
+            paths: vec![PathBuf::from("eval.toml"), PathBuf::from("prompts/")],
+            debounce_ms: 250,
+            max_runs: None,
+        };
+
+        let paths = collect_watch_paths(&args);
+
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("dataset.jsonl"),
+                PathBuf::from("eval.toml"),
+                PathBuf::from("prompts/"),
+            ]
+        );
     }
 }
