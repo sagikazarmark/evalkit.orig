@@ -1,3 +1,4 @@
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::{self, Display, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -8,7 +9,7 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::{Form, Json, Router};
 use chrono::Utc;
-use evalkit::{CompareConfig, Comparison, RunResult, Sample, compare};
+use evalkit::{CompareConfig, Comparison, RunResult, Sample, ScorerStats, compare};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -102,6 +103,41 @@ pub struct AlertStatus {
     pub rule: AlertRule,
     pub run_id: String,
     pub observed_value: Option<f64>,
+    pub triggered: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DriftMeasurement {
+    Numeric {
+        observed_mean: f64,
+        baseline_mean: f64,
+        delta: f64,
+    },
+    Binary {
+        observed_pass_rate: f64,
+        baseline_pass_rate: f64,
+        delta: f64,
+    },
+    Metric {
+        observed_mean: f64,
+        baseline_mean: f64,
+        delta: f64,
+    },
+    Label {
+        observed_mode: String,
+        baseline_mode: String,
+        distance: f64,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DriftStatus {
+    pub run_id: String,
+    pub scorer_name: String,
+    pub baseline_run_ids: Vec<String>,
+    pub measurement: DriftMeasurement,
+    pub threshold: f64,
     pub triggered: bool,
 }
 
@@ -212,7 +248,9 @@ impl RunStore {
         run_json
             .map(|json| {
                 serde_json::from_str(&json).map_err(|err| {
-                    ServerError::Store(format!("failed to deserialize stored run `{run_id}`: {err}"))
+                    ServerError::Store(format!(
+                        "failed to deserialize stored run `{run_id}`: {err}"
+                    ))
                 })
             })
             .transpose()
@@ -432,6 +470,78 @@ impl RunStore {
             .collect())
     }
 
+    pub fn detect_drift(
+        &self,
+        run_id: &str,
+        baseline_window: usize,
+    ) -> Result<Vec<DriftStatus>, ServerError> {
+        let run = self
+            .get_run(run_id)?
+            .ok_or_else(|| ServerError::NotFound(format!("run `{run_id}` not found")))?;
+        let runs = self.list_runs()?;
+        let target_index = runs
+            .iter()
+            .position(|summary| summary.run_id == run_id)
+            .ok_or_else(|| ServerError::NotFound(format!("run `{run_id}` not found")))?;
+        let baseline_summaries = runs
+            .iter()
+            .skip(target_index + 1)
+            .take(baseline_window)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if baseline_summaries.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let target_stats = run.result.stats();
+        let mut baseline_runs = Vec::new();
+        for summary in baseline_summaries {
+            let Some(run) = self.get_run(&summary.run_id)? else {
+                continue;
+            };
+            baseline_runs.push((summary.run_id, run.result.stats()));
+        }
+
+        let mut scorer_names = target_stats
+            .scorer_stats
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        scorer_names.sort();
+
+        let mut drifts = Vec::new();
+        for scorer_name in scorer_names {
+            let Some(target_stat) = target_stats.scorer_stats.get(&scorer_name) else {
+                continue;
+            };
+
+            let mut baseline_run_ids = Vec::new();
+            let mut baseline_stats = Vec::new();
+            for (baseline_run_id, baseline_stats_for_run) in &baseline_runs {
+                let Some(baseline_stat) = baseline_stats_for_run.scorer_stats.get(&scorer_name)
+                else {
+                    continue;
+                };
+                baseline_run_ids.push(baseline_run_id.clone());
+                baseline_stats.push(baseline_stat);
+            }
+
+            let Some(drift) = scorer_drift_status(
+                run_id,
+                &scorer_name,
+                target_stat,
+                &baseline_run_ids,
+                &baseline_stats,
+            ) else {
+                continue;
+            };
+            drifts.push(drift);
+        }
+
+        Ok(drifts)
+    }
+
     fn init_schema(&self) -> Result<(), ServerError> {
         let connection = self.connection()?;
         connection
@@ -480,16 +590,32 @@ pub fn router(store: RunStore) -> Router {
         .route("/dashboard", get(dashboard_page))
         .route("/runs/:run_id", get(run_detail_page))
         .route("/runs/:left/diff/:right", get(diff_page))
-        .route("/runs/:run_id/annotations", axum::routing::post(create_annotation_form))
-        .route("/runs/:run_id/promote", axum::routing::post(promote_annotations_form))
+        .route(
+            "/runs/:run_id/annotations",
+            axum::routing::post(create_annotation_form),
+        )
+        .route(
+            "/runs/:run_id/promote",
+            axum::routing::post(promote_annotations_form),
+        )
         .route("/alert-rules", axum::routing::post(create_alert_rule_form))
         .route("/healthz", get(healthz))
         .route("/api/runs", get(list_runs).post(create_run))
         .route("/api/runs/:run_id", get(get_run))
-        .route("/api/runs/:run_id/annotations", get(list_annotations).post(create_annotation))
-        .route("/api/runs/:run_id/promote", axum::routing::post(promote_annotations))
+        .route(
+            "/api/runs/:run_id/annotations",
+            get(list_annotations).post(create_annotation),
+        )
+        .route(
+            "/api/runs/:run_id/promote",
+            axum::routing::post(promote_annotations),
+        )
         .route("/api/runs/:run_id/alerts", get(get_alerts))
-        .route("/api/alert-rules", get(list_alert_rules).post(create_alert_rule))
+        .route("/api/runs/:run_id/drift", get(get_drift))
+        .route(
+            "/api/alert-rules",
+            get(list_alert_rules).post(create_alert_rule),
+        )
         .route("/api/runs/:left/diff/:right", get(diff_runs))
         .with_state(state)
 }
@@ -506,11 +632,13 @@ async fn dashboard_page(State(state): State<AppState>) -> Result<Html<String>, S
     let runs = state.store.list_runs()?;
     let rules = state.store.list_alert_rules()?;
     let mut alerts = Vec::new();
+    let mut drifts = Vec::new();
     for run in runs.iter().take(5) {
         alerts.extend(state.store.evaluate_alerts(&run.run_id)?);
+        drifts.extend(state.store.detect_drift(&run.run_id, 5)?);
     }
 
-    Ok(Html(render_dashboard_page(&runs, &rules, &alerts)))
+    Ok(Html(render_dashboard_page(&runs, &rules, &alerts, &drifts)))
 }
 
 async fn list_runs(State(state): State<AppState>) -> Result<Json<Vec<RunSummary>>, ServerError> {
@@ -618,7 +746,10 @@ async fn create_alert_rule(
     State(state): State<AppState>,
     Json(rule): Json<CreateAlertRule>,
 ) -> Result<(StatusCode, Json<AlertRule>), ServerError> {
-    Ok((StatusCode::CREATED, Json(state.store.create_alert_rule(&rule)?)))
+    Ok((
+        StatusCode::CREATED,
+        Json(state.store.create_alert_rule(&rule)?),
+    ))
 }
 
 async fn list_alert_rules(
@@ -634,15 +765,18 @@ async fn get_alerts(
     Ok(Json(state.store.evaluate_alerts(&run_id)?))
 }
 
+async fn get_drift(
+    State(state): State<AppState>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Result<Json<Vec<DriftStatus>>, ServerError> {
+    Ok(Json(state.store.detect_drift(&run_id, 5)?))
+}
+
 fn parse_timestamp(value: String) -> Result<chrono::DateTime<Utc>, rusqlite::Error> {
     chrono::DateTime::parse_from_rfc3339(&value)
         .map(|timestamp| timestamp.with_timezone(&Utc))
         .map_err(|err| {
-            rusqlite::Error::FromSqlConversionFailure(
-                0,
-                rusqlite::types::Type::Text,
-                Box::new(err),
-            )
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
         })
 }
 
@@ -651,7 +785,10 @@ fn store_error(error: impl Display) -> ServerError {
 }
 
 fn render_home_page(runs: &[RunSummary]) -> String {
-    let mut html = page_shell("Runs", String::from("<h1>Runs</h1><p>Browse stored eval runs and compare recent outputs.</p>"));
+    let mut html = page_shell(
+        "Runs",
+        String::from("<h1>Runs</h1><p>Browse stored eval runs and compare recent outputs.</p>"),
+    );
     html.push_str("<div class=\"runs\">");
 
     for (index, run) in runs.iter().enumerate() {
@@ -691,7 +828,11 @@ fn render_run_detail_page(run: &StoredRun, annotations: &[AnnotationRecord]) -> 
     html.push_str("<section><h2>Samples</h2>");
 
     for sample in &run.result.samples {
-        let status = if sample_has_failure(sample) { "sample-failed" } else { "sample-ok" };
+        let status = if sample_has_failure(sample) {
+            "sample-failed"
+        } else {
+            "sample-ok"
+        };
         html.push_str(&format!(
             "<article class=\"card {status}\"><h3>{id}</h3><p><strong>Trials:</strong> {trials} · <strong>Scored:</strong> {scored} · <strong>Errors:</strong> {errors}</p>",
             id = escape_html(&sample.sample_id),
@@ -745,10 +886,17 @@ fn render_run_detail_page(run: &StoredRun, annotations: &[AnnotationRecord]) -> 
     html
 }
 
-fn render_dashboard_page(runs: &[RunSummary], rules: &[AlertRule], alerts: &[AlertStatus]) -> String {
+fn render_dashboard_page(
+    runs: &[RunSummary],
+    rules: &[AlertRule],
+    alerts: &[AlertStatus],
+    drifts: &[DriftStatus],
+) -> String {
     let mut html = page_shell(
         "Dashboard",
-        String::from("<h1>Prod-Eval Dashboard</h1><p>Recent runs, alert rules, and threshold breaches.</p>"),
+        String::from(
+            "<h1>Prod-Eval Dashboard</h1><p>Recent runs, alert rules, threshold breaches, and drift checks.</p>",
+        ),
     );
     html.push_str("<section><h2>Alert rules</h2><form method=\"post\" action=\"/alert-rules\"><label>Name <input name=\"name\" required></label><br><label>Scorer <input name=\"scorer_name\" required></label><br><label>Minimum value <input name=\"min_value\" type=\"number\" step=\"0.01\" required></label><br><button type=\"submit\">Create rule</button></form>");
     if rules.is_empty() {
@@ -768,15 +916,19 @@ fn render_dashboard_page(runs: &[RunSummary], rules: &[AlertRule], alerts: &[Ale
     html.push_str("</section><section><h2>Recent runs</h2><ul>");
     for run in runs.iter().take(5) {
         html.push_str(&format!(
-            "<li><a href=\"/runs/{}\">{}</a> · {} samples · <a href=\"/api/runs/{}/alerts\">alert json</a></li>",
+            "<li><a href=\"/runs/{}\">{}</a> · {} samples · <a href=\"/api/runs/{}/alerts\">alert json</a> · <a href=\"/api/runs/{}/drift\">drift json</a></li>",
             run.run_id,
             run.run_id,
             run.sample_count,
             run.run_id,
+            run.run_id,
         ));
     }
     html.push_str("</ul></section><section><h2>Triggered alerts</h2>");
-    let triggered = alerts.iter().filter(|alert| alert.triggered).collect::<Vec<_>>();
+    let triggered = alerts
+        .iter()
+        .filter(|alert| alert.triggered)
+        .collect::<Vec<_>>();
     if triggered.is_empty() {
         html.push_str("<p>No active alerts.</p>");
     } else {
@@ -788,6 +940,26 @@ fn render_dashboard_page(runs: &[RunSummary], rules: &[AlertRule], alerts: &[Ale
                 escape_html(&alert.run_id),
                 alert.observed_value.unwrap_or_default(),
                 alert.rule.min_value,
+            ));
+        }
+        html.push_str("</ul>");
+    }
+    html.push_str("</section><section><h2>Triggered drift</h2>");
+    let triggered_drifts = drifts
+        .iter()
+        .filter(|drift| drift.triggered)
+        .collect::<Vec<_>>();
+    if triggered_drifts.is_empty() {
+        html.push_str("<p>No drift detected across recent runs.</p>");
+    } else {
+        html.push_str("<ul>");
+        for drift in triggered_drifts {
+            html.push_str(&format!(
+                "<li><strong>{}</strong> on run {} against {}: {}</li>",
+                escape_html(&drift.scorer_name),
+                escape_html(&drift.run_id),
+                escape_html(&drift.baseline_run_ids.join(", ")),
+                escape_html(&format_drift_measurement(drift)),
             ));
         }
         html.push_str("</ul>");
@@ -861,6 +1033,43 @@ fn escape_html(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
+fn format_drift_measurement(drift: &DriftStatus) -> String {
+    match &drift.measurement {
+        DriftMeasurement::Numeric {
+            observed_mean,
+            baseline_mean,
+            delta,
+        }
+        | DriftMeasurement::Metric {
+            observed_mean,
+            baseline_mean,
+            delta,
+        } => format!(
+            "observed {:.3}, baseline {:.3}, delta {:.3}, threshold {:.3}",
+            observed_mean, baseline_mean, delta, drift.threshold,
+        ),
+        DriftMeasurement::Binary {
+            observed_pass_rate,
+            baseline_pass_rate,
+            delta,
+        } => format!(
+            "observed {:.1}%, baseline {:.1}%, delta {:.1} pts, threshold {:.1} pts",
+            observed_pass_rate * 100.0,
+            baseline_pass_rate * 100.0,
+            delta * 100.0,
+            drift.threshold * 100.0,
+        ),
+        DriftMeasurement::Label {
+            observed_mode,
+            baseline_mode,
+            distance,
+        } => format!(
+            "mode {} vs {}, distance {:.3}, threshold {:.3}",
+            observed_mode, baseline_mode, distance, drift.threshold,
+        ),
+    }
+}
+
 fn average_score(run: &RunResult, scorer_name: &str) -> Option<f64> {
     let mut values = Vec::new();
 
@@ -892,11 +1101,249 @@ fn score_value(score: &Result<evalkit::Score, evalkit::ScorerError>) -> Option<f
     }
 }
 
+fn scorer_drift_status(
+    run_id: &str,
+    scorer_name: &str,
+    target: &ScorerStats,
+    baseline_run_ids: &[String],
+    baselines: &[&ScorerStats],
+) -> Option<DriftStatus> {
+    if baseline_run_ids.is_empty() || baselines.is_empty() {
+        return None;
+    }
+
+    match target {
+        ScorerStats::Numeric { mean, .. } => {
+            let baseline_values = baselines
+                .iter()
+                .filter_map(|baseline| match baseline {
+                    ScorerStats::Numeric { mean, .. } => Some(*mean),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            numeric_drift_status(
+                run_id,
+                scorer_name,
+                baseline_run_ids,
+                *mean,
+                &baseline_values,
+                |observed_mean, baseline_mean, delta| DriftMeasurement::Numeric {
+                    observed_mean,
+                    baseline_mean,
+                    delta,
+                },
+            )
+        }
+        ScorerStats::Binary { pass_rate, .. } => {
+            let baseline_values = baselines
+                .iter()
+                .filter_map(|baseline| match baseline {
+                    ScorerStats::Binary { pass_rate, .. } => Some(*pass_rate),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            numeric_drift_status(
+                run_id,
+                scorer_name,
+                baseline_run_ids,
+                *pass_rate,
+                &baseline_values,
+                |observed_pass_rate, baseline_pass_rate, delta| DriftMeasurement::Binary {
+                    observed_pass_rate,
+                    baseline_pass_rate,
+                    delta,
+                },
+            )
+        }
+        ScorerStats::Metric { mean, .. } => {
+            let baseline_values = baselines
+                .iter()
+                .filter_map(|baseline| match baseline {
+                    ScorerStats::Metric { mean, .. } => Some(*mean),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            numeric_drift_status(
+                run_id,
+                scorer_name,
+                baseline_run_ids,
+                *mean,
+                &baseline_values,
+                |observed_mean, baseline_mean, delta| DriftMeasurement::Metric {
+                    observed_mean,
+                    baseline_mean,
+                    delta,
+                },
+            )
+        }
+        ScorerStats::Label { distribution, mode } => label_drift_status(
+            run_id,
+            scorer_name,
+            baseline_run_ids,
+            distribution,
+            mode,
+            baselines,
+        ),
+    }
+}
+
+fn numeric_drift_status(
+    run_id: &str,
+    scorer_name: &str,
+    baseline_run_ids: &[String],
+    observed_value: f64,
+    baseline_values: &[f64],
+    measurement: impl Fn(f64, f64, f64) -> DriftMeasurement,
+) -> Option<DriftStatus> {
+    if baseline_values.is_empty() {
+        return None;
+    }
+
+    let baseline_mean = mean(baseline_values);
+    let threshold =
+        (sample_stddev(baseline_values) * 2.0).max((baseline_mean.abs() * 0.2).max(0.1));
+    let delta = observed_value - baseline_mean;
+
+    Some(DriftStatus {
+        run_id: run_id.to_string(),
+        scorer_name: scorer_name.to_string(),
+        baseline_run_ids: baseline_run_ids.to_vec(),
+        measurement: measurement(observed_value, baseline_mean, delta),
+        threshold,
+        triggered: delta.abs() >= threshold,
+    })
+}
+
+fn label_drift_status(
+    run_id: &str,
+    scorer_name: &str,
+    baseline_run_ids: &[String],
+    observed_distribution: &HashMap<String, usize>,
+    observed_mode: &str,
+    baselines: &[&ScorerStats],
+) -> Option<DriftStatus> {
+    let baseline_distributions = baselines
+        .iter()
+        .filter_map(|baseline| match baseline {
+            ScorerStats::Label { distribution, .. } => {
+                Some(distribution_probability_map(distribution))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if baseline_distributions.is_empty() {
+        return None;
+    }
+
+    let observed_distribution = distribution_probability_map(observed_distribution);
+    let baseline_distribution = average_distribution(&baseline_distributions);
+    let threshold = 0.3;
+    let distance = total_variation_distance(&observed_distribution, &baseline_distribution);
+
+    Some(DriftStatus {
+        run_id: run_id.to_string(),
+        scorer_name: scorer_name.to_string(),
+        baseline_run_ids: baseline_run_ids.to_vec(),
+        measurement: DriftMeasurement::Label {
+            observed_mode: observed_mode.to_string(),
+            baseline_mode: dominant_label(&baseline_distribution).unwrap_or_default(),
+            distance,
+        },
+        threshold,
+        triggered: distance >= threshold,
+    })
+}
+
+fn distribution_probability_map(distribution: &HashMap<String, usize>) -> HashMap<String, f64> {
+    let total = distribution.values().sum::<usize>() as f64;
+    if total <= f64::EPSILON {
+        return HashMap::new();
+    }
+
+    distribution
+        .iter()
+        .map(|(label, count)| (label.clone(), *count as f64 / total))
+        .collect()
+}
+
+fn average_distribution(distributions: &[HashMap<String, f64>]) -> HashMap<String, f64> {
+    let mut averaged = HashMap::<String, f64>::new();
+    for distribution in distributions {
+        for (label, probability) in distribution {
+            *averaged.entry(label.clone()).or_insert(0.0) += *probability;
+        }
+    }
+
+    for probability in averaged.values_mut() {
+        *probability /= distributions.len() as f64;
+    }
+
+    averaged
+}
+
+fn total_variation_distance(left: &HashMap<String, f64>, right: &HashMap<String, f64>) -> f64 {
+    let mut labels = BTreeSet::new();
+    labels.extend(left.keys().cloned());
+    labels.extend(right.keys().cloned());
+
+    labels
+        .into_iter()
+        .map(|label| {
+            let left_value = left.get(&label).copied().unwrap_or_default();
+            let right_value = right.get(&label).copied().unwrap_or_default();
+            (left_value - right_value).abs()
+        })
+        .sum::<f64>()
+        / 2.0
+}
+
+fn dominant_label(distribution: &HashMap<String, f64>) -> Option<String> {
+    distribution
+        .iter()
+        .max_by(|(left_label, left_value), (right_label, right_value)| {
+            left_value
+                .total_cmp(right_value)
+                .then_with(|| right_label.cmp(left_label))
+        })
+        .map(|(label, _)| label.clone())
+}
+
+fn mean(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+
+    values.iter().sum::<f64>() / values.len() as f64
+}
+
+fn sample_stddev(values: &[f64]) -> f64 {
+    if values.len() < 2 {
+        return 0.0;
+    }
+
+    let mean = mean(values);
+    let variance = values
+        .iter()
+        .map(|value| {
+            let delta = value - mean;
+            delta * delta
+        })
+        .sum::<f64>()
+        / (values.len() as f64 - 1.0);
+    variance.sqrt()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CreateAlertRule, CreateAnnotation, PromoteAnnotationsRequest, RunStore, StoredRun};
+    use super::{
+        CreateAlertRule, CreateAnnotation, DriftMeasurement, PromoteAnnotationsRequest, RunStore,
+        StoredRun,
+    };
     use chrono::{Duration, Utc};
-    use evalkit::{Direction, RunMetadata, RunResult, Sample, SampleResult, Score, ScoreDefinition, TrialResult};
+    use evalkit::{
+        Direction, RunMetadata, RunResult, Sample, SampleResult, Score, ScoreDefinition,
+        TrialResult,
+    };
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -938,12 +1385,22 @@ mod tests {
                     cost_usd: None,
                 }],
             },
-            samples: vec![Sample::builder(json!({ "prompt": "hello" }))
-                .id(sample_id)
-                .reference(json!("echo::hello"))
-                .build()
-                .unwrap()],
+            samples: vec![
+                Sample::builder(json!({ "prompt": "hello" }))
+                    .id(sample_id)
+                    .reference(json!("echo::hello"))
+                    .build()
+                    .unwrap(),
+            ],
         }
+    }
+
+    fn stored_binary_run_fixture(run_id: &str, sample_id: &str, score: bool) -> StoredRun {
+        let mut run = stored_run_fixture(run_id, sample_id);
+        run.result.samples[0].trials[0]
+            .scores
+            .insert(String::from("exact_match"), Ok(Score::Binary(score)));
+        run
     }
 
     #[test]
@@ -961,7 +1418,16 @@ mod tests {
 
         let runs = store.list_runs().unwrap();
         assert_eq!(runs.len(), 2);
-        assert_eq!(store.get_run("run-a").unwrap().unwrap().result.metadata.run_id, "run-a");
+        assert_eq!(
+            store
+                .get_run("run-a")
+                .unwrap()
+                .unwrap()
+                .result
+                .metadata
+                .run_id,
+            "run-a"
+        );
 
         let diff = store.diff_runs("run-a", "run-b").unwrap();
         assert!(diff.shared_scorers.contains_key("exact_match"));
@@ -993,7 +1459,11 @@ mod tests {
         let promoted = std::fs::read_to_string(&output_path).unwrap();
         assert!(promoted.contains("sample-a"));
         assert!(promoted.contains("needs_review"));
-        assert!(store.list_annotations("run-a").unwrap()[0].promoted_at.is_some());
+        assert!(
+            store.list_annotations("run-a").unwrap()[0]
+                .promoted_at
+                .is_some()
+        );
 
         let rule = store
             .create_alert_rule(&CreateAlertRule {
@@ -1007,5 +1477,47 @@ mod tests {
         let alerts = store.evaluate_alerts("run-b").unwrap();
         assert_eq!(alerts.len(), 1);
         assert!(alerts[0].triggered);
+    }
+
+    #[test]
+    fn run_store_detects_binary_drift_from_recent_runs() {
+        let temp = tempdir().unwrap();
+        let store = RunStore::open(temp.path().join("runs.sqlite")).unwrap();
+        let base = Utc::now();
+
+        let mut first = stored_binary_run_fixture("run-a", "sample-a", true);
+        first.result.metadata.started_at = base;
+        first.result.metadata.completed_at = base + Duration::seconds(1);
+
+        let mut second = stored_binary_run_fixture("run-b", "sample-a", true);
+        second.result.metadata.started_at = base + Duration::minutes(1);
+        second.result.metadata.completed_at = base + Duration::minutes(1) + Duration::seconds(1);
+
+        let mut third = stored_binary_run_fixture("run-c", "sample-a", false);
+        third.result.metadata.started_at = base + Duration::minutes(2);
+        third.result.metadata.completed_at = base + Duration::minutes(2) + Duration::seconds(1);
+
+        store.store_run(&first).unwrap();
+        store.store_run(&second).unwrap();
+        store.store_run(&third).unwrap();
+
+        let drift = store.detect_drift("run-c", 2).unwrap();
+        assert_eq!(drift.len(), 1);
+        assert_eq!(drift[0].run_id, "run-c");
+        assert_eq!(drift[0].scorer_name, "exact_match");
+        assert_eq!(
+            drift[0].baseline_run_ids,
+            vec![String::from("run-b"), String::from("run-a")]
+        );
+        assert_eq!(
+            drift[0].measurement,
+            DriftMeasurement::Binary {
+                observed_pass_rate: 0.0,
+                baseline_pass_rate: 1.0,
+                delta: -1.0,
+            }
+        );
+        assert!(drift[0].threshold > 0.0);
+        assert!(drift[0].triggered);
     }
 }
