@@ -166,3 +166,34 @@ Why:
 
 Rejected alternative:
 Require every tiered scorer to emit an explicit synthetic "skipped" score or error when the expensive tier does not run. That would complicate the score model and pollute run outputs before there is evidence that consumers need a first-class skipped state.
+
+## 2026-04-23 - Keep the first partial scoring API checkpoint-based and string-specific
+
+Decision:
+Start partial scoring in `PullExecutor` with fixed checkpoints over partial string outputs:
+- a secondary scorer set can run against incomplete prefixes of the final string output
+- checkpoint results are recorded as distinct scorer names, suffixed by stage
+
+Why:
+- This is the smallest concrete API that proves incomplete-output scoring without forcing provider-stream abstractions into the kernel yet.
+- It works with existing acquisitions that only return a final string, which keeps the first implementation testable with current fixtures and examples.
+- Stage-suffixed score names keep partial and final results comparable without changing the score enum.
+
+Rejected alternative:
+Add a general token-stream protocol immediately. That would be more expressive, but it would force acquisition, source, and scorer APIs to all grow around streaming semantics before the simpler checkpoint model has been exercised.
+
+## 2026-04-23 - Keep executor queueing and shutdown as local pull controls for now
+
+Decision:
+Add bounded prefetch and stop behavior directly to `PullExecutor`:
+- `queue_capacity` bounds prefetched samples
+- `max_samples` and `shutdown_when(...)` can stop execution
+- `ShutdownMode` controls whether prefetched work is drained or discarded
+
+Why:
+- This gives production-facing control over overrun and stop conditions without committing to a concurrent worker architecture yet.
+- Drain vs discard is the main operational choice the current single-threaded pull loop actually needs.
+- The controls remain composable with both dataset-style and streaming-style sources.
+
+Rejected alternative:
+Introduce a multi-stage internal scheduler first and expose queue internals publicly. That would add substantial surface area before there is evidence that the current pull executor needs a full worker runtime.

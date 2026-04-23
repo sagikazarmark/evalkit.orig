@@ -105,18 +105,21 @@ Status: initial foundation landed
 Already present:
 - `src/executor.rs` now introduces a first `Executor` trait plus a pull-based `PullExecutor`
 - `SampleSource` and `DatasetSource` provide the first explicit source abstraction for online-style execution
+- `JsonlFileTailSource` now provides a second source adapter by tailing appended JSONL `Sample` rows from disk
 - `PullExecutor` now supports an optional judge-model tier that can re-score flagged samples with a secondary scorer set
+- `PullExecutor` now supports checkpoint-based partial scoring for string outputs via `partial_string_scoring(...)`
 - `ExecutionSink` and `NoopSink` provide the first sink abstraction, with per-sample notifications plus a final run completion hook
 - `evalkit-otel` now provides `OtelResultSink`, so executor-based runs can emit OTel spans through the sink interface without an extra post-processing step
 - `evalkit-otel` now provides `OtlpReceiverSource`, which adapts the in-repo OTLP receiver into a pull-based executor source over grouped sample spans
 - `AlwaysSampler`, `PercentSampler`, and `TargetedSampler` now exist in the kernel
+- `PullExecutor` now has explicit queueing and stop controls via `queue_capacity`, `max_samples`, `shutdown_when`, and `ShutdownMode`
 - The executor path reuses existing acquisition timeout handling, scorer execution, score validation, judge model pin collection, and run metadata fingerprinting from the batch runner
 - `examples/prod_eval_daemon.rs` now shows a small daemon-style binary composed from library primitives and emits OTel spans through `OtelResultSink`
 
 Gaps:
-- No partial-stream scoring path for incomplete outputs yet
-- No additional online source adapters such as Kafka, NATS, or file tailing yet
-- No explicit backpressure, bounded queue, or graceful shutdown controls yet
+- Partial scoring is currently limited to fixed string-prefix checkpoints rather than true token-by-token or provider-stream driven evaluation
+- No additional online source adapters such as Kafka or NATS yet
+- Queueing and shutdown are currently single-process pull controls; there is still no concurrent worker pool or backpressure protocol across components
 
 ## Phase 3 - CI / Developer Workflow
 
@@ -156,8 +159,8 @@ Gaps:
 ## Highest-Leverage Next Slice
 
 The best next implementation slice is the next Phase 2 increment:
-- add partial or incomplete-output scoring so the executor can evaluate streaming generations before completion
-- add a second source adapter, likely a simple file tailer, so the source abstraction is proven outside the OTLP path too
-- add explicit queueing and shutdown controls once the single-threaded pull path hits real operational pressure
+- extend partial scoring beyond fixed prefixes so providers or adapters can feed true streaming chunks into scoring
+- add a third source adapter, likely one of Kafka or NATS, so the source abstraction is proven against a networked stream
+- decide whether the next runtime step is a worker-pool executor or keeping concurrency in adapters/sinks
 
 In parallel, the next runner-facing Phase 3 gap is live GitHub Action validation in a pull-request environment so the already-landed workflow can be exercised end to end.

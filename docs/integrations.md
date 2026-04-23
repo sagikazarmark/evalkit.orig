@@ -45,7 +45,7 @@ Via anyllm this gives first-class OpenAI / Anthropic / Gemini / OpenAI-compatibl
 ### Streaming sources (for Phase 2 `Executor`)
 - [ ] `KafkaSource`           — consume traces/events from a Kafka topic
 - [ ] `NatsSource`            — NATS subject subscriber
-- [ ] `FileTailerSource`      — tail a JSONL file
+- [x] `FileTailerSource`      — `JsonlFileTailSource` tails appended JSONL `Sample` rows from disk
 - [x] `OtlpReceiverSource`    — adapt the existing OTLP receiver as a pull-based executor source over grouped sample spans
 
 ### Replay / fixtures

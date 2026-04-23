@@ -5,24 +5,29 @@ use crate::{
 };
 use chrono::Utc;
 use futures::FutureExt;
+use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
+use std::fs::File;
 use std::future::Future;
+use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use std::panic::AssertUnwindSafe;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
 type TrialScores = Vec<(ScoreDefinition, Result<ScoreOutcome, ScorerError>)>;
 type AcquisitionFuture<'a, O> = Pin<Box<dyn Future<Output = Result<O, AcquisitionError>> + 'a>>;
 type JudgeModelTierPredicate<I, R> =
     dyn Fn(&Sample<I, R>, &HashMap<String, Result<Score, ScorerError>>) -> bool + Send + Sync;
+type ShutdownPredicate = dyn Fn(&SampleResult) -> bool + Send + Sync;
+type PartialScoringFuture<'a> = Pin<Box<dyn Future<Output = TrialScores> + 'a>>;
 pub type ExecutorBoxError = Box<dyn Error + Send + Sync>;
 
 #[allow(async_fn_in_trait)]
@@ -51,6 +56,134 @@ impl<I, R> DatasetSource<I, R> {
 impl<I, R> From<Dataset<I, R>> for DatasetSource<I, R> {
     fn from(dataset: Dataset<I, R>) -> Self {
         Self::new(dataset)
+    }
+}
+
+pub struct JsonlFileTailSource<I, R = ()> {
+    path: PathBuf,
+    poll_interval: Duration,
+    idle_timeout: Duration,
+    offset: u64,
+    partial_line: String,
+    pending: VecDeque<Sample<I, R>>,
+}
+
+impl<I, R> JsonlFileTailSource<I, R> {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            poll_interval: Duration::from_millis(200),
+            idle_timeout: Duration::from_secs(5),
+            offset: 0,
+            partial_line: String::new(),
+            pending: VecDeque::new(),
+        }
+    }
+
+    pub fn poll_interval(mut self, poll_interval: Duration) -> Self {
+        self.poll_interval = poll_interval;
+        self
+    }
+
+    pub fn idle_timeout(mut self, idle_timeout: Duration) -> Self {
+        self.idle_timeout = idle_timeout;
+        self
+    }
+}
+
+impl<I, R> JsonlFileTailSource<I, R>
+where
+    I: DeserializeOwned,
+    R: DeserializeOwned,
+{
+    fn read_available_samples(&mut self) -> Result<(), ExecutorBoxError> {
+        let length = match std::fs::metadata(&self.path) {
+            Ok(metadata) => metadata.len(),
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(Box::new(err)),
+        };
+
+        if length < self.offset {
+            self.offset = 0;
+            self.partial_line.clear();
+        }
+
+        let mut file = File::open(&self.path).map_err(|err| Box::new(err) as ExecutorBoxError)?;
+        file.seek(SeekFrom::Start(self.offset))
+            .map_err(|err| Box::new(err) as ExecutorBoxError)?;
+
+        let mut chunk = String::new();
+        file.read_to_string(&mut chunk)
+            .map_err(|err| Box::new(err) as ExecutorBoxError)?;
+        self.offset += chunk.len() as u64;
+        self.partial_line.push_str(&chunk);
+
+        while let Some(newline_index) = self.partial_line.find('\n') {
+            let line = self
+                .partial_line
+                .drain(..=newline_index)
+                .collect::<String>();
+            let trimmed = line.trim();
+
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let sample = serde_json::from_str(trimmed).map_err(|err| {
+                Box::new(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "invalid sample JSON in tailed file {}: {err}",
+                        self.path.display()
+                    ),
+                )) as ExecutorBoxError
+            })?;
+            self.pending.push_back(sample);
+        }
+
+        Ok(())
+    }
+}
+
+#[allow(async_fn_in_trait)]
+impl<I, R> SampleSource<I, R> for JsonlFileTailSource<I, R>
+where
+    I: DeserializeOwned + Send,
+    R: DeserializeOwned + Send,
+{
+    async fn next_sample(&mut self) -> Result<Option<Sample<I, R>>, ExecutorBoxError> {
+        if let Some(sample) = self.pending.pop_front() {
+            return Ok(Some(sample));
+        }
+
+        let deadline = Instant::now() + self.idle_timeout;
+
+        loop {
+            self.read_available_samples()?;
+
+            if let Some(sample) = self.pending.pop_front() {
+                return Ok(Some(sample));
+            }
+
+            if Instant::now() >= deadline {
+                return Ok(None);
+            }
+
+            sleep(self.poll_interval).await;
+        }
+    }
+
+    fn metadata(&self) -> HashMap<String, Value> {
+        HashMap::from([
+            (
+                String::from("source.kind"),
+                Value::String(String::from("jsonl_file_tail")),
+            ),
+            (
+                String::from("source.path"),
+                Value::String(self.path.display().to_string()),
+            ),
+        ])
     }
 }
 
@@ -203,9 +336,14 @@ pub struct PullExecutor<I, O, R, Src, Samp, Sink> {
     acquisition: Box<dyn ErasedAcquisition<I, O>>,
     scorer_set: ScorerSet<I, O, R>,
     judge_model_tier: Option<JudgeModelTier<I, O, R>>,
+    partial_scoring: Option<Box<dyn PartialScoringPlan<I, O, R>>>,
     sampler: Samp,
     sink: Sink,
     trial_count: usize,
+    queue_capacity: usize,
+    max_samples: Option<usize>,
+    shutdown: Option<ShutdownControl>,
+    shutdown_mode: ShutdownMode,
     sample_timeout: Option<Duration>,
     seed: Option<u64>,
     code_commit: Option<String>,
@@ -216,6 +354,106 @@ pub struct PullExecutor<I, O, R, Src, Samp, Sink> {
 struct JudgeModelTier<I, O, R> {
     scorer_set: ScorerSet<I, O, R>,
     predicate: Box<JudgeModelTierPredicate<I, R>>,
+}
+
+trait PartialScoringPlan<I, O, R>: Send + Sync {
+    fn definitions(&self) -> Vec<ScoreDefinition>;
+    fn judge_model_pins(&self) -> Vec<String>;
+    fn score<'a>(&'a self, ctx: &'a ScorerContext<'a, I, O, R>) -> PartialScoringFuture<'a>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StringPrefixCheckpoint {
+    name: String,
+    char_count: usize,
+}
+
+impl StringPrefixCheckpoint {
+    pub fn new(name: impl Into<String>, char_count: usize) -> Self {
+        Self {
+            name: name.into(),
+            char_count,
+        }
+    }
+}
+
+struct StringPrefixPartialScoring<I, R> {
+    scorer_set: ScorerSet<I, String, R>,
+    checkpoints: Vec<StringPrefixCheckpoint>,
+}
+
+impl<I, R> StringPrefixPartialScoring<I, R> {
+    fn new(scorer_set: ScorerSet<I, String, R>, checkpoints: Vec<StringPrefixCheckpoint>) -> Self {
+        Self {
+            scorer_set,
+            checkpoints,
+        }
+    }
+}
+
+impl<I, R> PartialScoringPlan<I, String, R> for StringPrefixPartialScoring<I, R> {
+    fn definitions(&self) -> Vec<ScoreDefinition> {
+        self.checkpoints
+            .iter()
+            .flat_map(|checkpoint| {
+                self.scorer_set.definitions().iter().map(move |definition| {
+                    rename_score_definition(definition, &format!("partial:{}", checkpoint.name))
+                })
+            })
+            .collect()
+    }
+
+    fn judge_model_pins(&self) -> Vec<String> {
+        self.scorer_set.judge_model_pins().to_vec()
+    }
+
+    fn score<'a>(&'a self, ctx: &'a ScorerContext<'a, I, String, R>) -> PartialScoringFuture<'a> {
+        Box::pin(async move {
+            let mut results = Vec::new();
+
+            for checkpoint in &self.checkpoints {
+                let Some(output) = incomplete_string_prefix(ctx.output, checkpoint.char_count)
+                else {
+                    continue;
+                };
+
+                let partial_ctx = ScorerContext {
+                    run_id: ctx.run_id,
+                    sample_id: ctx.sample_id,
+                    trial_index: ctx.trial_index,
+                    metadata: ctx.metadata,
+                    input: ctx.input,
+                    output: &output,
+                    reference: ctx.reference,
+                };
+
+                results.extend(self.scorer_set.score(&partial_ctx).await.into_iter().map(
+                    |(definition, result)| {
+                        (
+                            rename_score_definition(
+                                &definition,
+                                &format!("partial:{}", checkpoint.name),
+                            ),
+                            result,
+                        )
+                    },
+                ));
+            }
+
+            results
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ShutdownMode {
+    #[default]
+    DrainQueue,
+    DiscardQueue,
+}
+
+struct ShutdownControl {
+    predicate: Box<ShutdownPredicate>,
 }
 
 impl<I, O, R, Src, Samp, Sink> PullExecutor<I, O, R, Src, Samp, Sink>
@@ -243,9 +481,14 @@ where
             acquisition: Box::new(acquisition),
             scorer_set,
             judge_model_tier: None,
+            partial_scoring: None,
             sampler,
             sink,
             trial_count: 1,
+            queue_capacity: 1,
+            max_samples: None,
+            shutdown: None,
+            shutdown_mode: ShutdownMode::DrainQueue,
             sample_timeout: None,
             seed: None,
             code_commit: detected.code_commit,
@@ -256,6 +499,31 @@ where
 
     pub fn trials(mut self, trial_count: usize) -> Self {
         self.trial_count = trial_count.max(1);
+        self
+    }
+
+    pub fn queue_capacity(mut self, queue_capacity: usize) -> Self {
+        self.queue_capacity = queue_capacity.max(1);
+        self
+    }
+
+    pub fn max_samples(mut self, max_samples: usize) -> Self {
+        self.max_samples = Some(max_samples.max(1));
+        self
+    }
+
+    pub fn shutdown_when<P>(mut self, predicate: P) -> Self
+    where
+        P: Fn(&SampleResult) -> bool + Send + Sync + 'static,
+    {
+        self.shutdown = Some(ShutdownControl {
+            predicate: Box::new(predicate),
+        });
+        self
+    }
+
+    pub fn shutdown_mode(mut self, shutdown_mode: ShutdownMode) -> Self {
+        self.shutdown_mode = shutdown_mode;
         self
     }
 
@@ -284,6 +552,25 @@ where
     }
 }
 
+impl<I: 'static, R: 'static, Src, Samp, Sink> PullExecutor<I, String, R, Src, Samp, Sink>
+where
+    Src: SampleSource<I, R>,
+    Samp: Sampler<I, R>,
+    Sink: ExecutionSink,
+{
+    pub fn partial_string_scoring(
+        mut self,
+        scorer_set: ScorerSet<I, String, R>,
+        checkpoints: Vec<StringPrefixCheckpoint>,
+    ) -> Self {
+        self.partial_scoring = Some(Box::new(StringPrefixPartialScoring::new(
+            scorer_set,
+            checkpoints,
+        )));
+        self
+    }
+}
+
 impl<I, O, R, Src, Samp, Sink> Executor for PullExecutor<I, O, R, Src, Samp, Sink>
 where
     Src: SampleSource<I, R>,
@@ -294,24 +581,35 @@ where
         let started_at = Utc::now();
         let started = Instant::now();
         let run_id = Uuid::new_v4().to_string();
-        let definitions = merged_definitions(&self.scorer_set, self.judge_model_tier.as_ref())
-            .map_err(ExecutorError::Configuration)?;
-        let judge_model_pins =
-            merged_judge_model_pins(&self.scorer_set, self.judge_model_tier.as_ref());
+        let definitions = merged_definitions(
+            &self.scorer_set,
+            self.judge_model_tier.as_ref(),
+            self.partial_scoring.as_deref(),
+        )
+        .map_err(ExecutorError::Configuration)?;
+        let judge_model_pins = merged_judge_model_pins(
+            &self.scorer_set,
+            self.judge_model_tier.as_ref(),
+            self.partial_scoring.as_deref(),
+        );
         let source_metadata = self.source.metadata();
 
         let mut sampled = Vec::new();
         let mut sample_results = Vec::new();
 
-        while let Some(sample) = self
-            .source
-            .next_sample()
-            .await
-            .map_err(ExecutorError::Source)?
-        {
-            if !self.sampler.should_sample(&sample) {
-                continue;
+        let mut queue = VecDeque::with_capacity(self.queue_capacity);
+        let mut source_exhausted = false;
+        let mut shutting_down = false;
+        let mut processed_samples = 0usize;
+
+        loop {
+            if !source_exhausted && !shutting_down {
+                self.fill_queue(&mut queue, &mut source_exhausted).await?;
             }
+
+            let Some(sample) = queue.pop_front() else {
+                break;
+            };
 
             sampled.push(sample);
             let sample_result = self
@@ -325,6 +623,13 @@ where
                 .push_sample(&sample_result)
                 .await
                 .map_err(ExecutorError::Sink)?;
+            processed_samples += 1;
+            if self.should_shutdown(processed_samples, &sample_result) {
+                shutting_down = true;
+                if self.shutdown_mode == ShutdownMode::DiscardQueue {
+                    queue.clear();
+                }
+            }
             sample_results.push(sample_result);
         }
 
@@ -425,8 +730,10 @@ where
                     .await
                 {
                     Ok(scores) => {
-                        self.maybe_execute_judge_model_tier(sample, &ctx, flatten_scores(scores))
-                            .await
+                        let tiered = self
+                            .maybe_execute_judge_model_tier(sample, &ctx, flatten_scores(scores))
+                            .await;
+                        self.maybe_execute_partial_scoring(&ctx, tiered).await
                     }
                     Err(_) => FlattenedTrial {
                         scores: scorer_panic_scores(definitions),
@@ -516,6 +823,59 @@ where
                 },
             ),
         }
+    }
+
+    async fn maybe_execute_partial_scoring(
+        &self,
+        ctx: &ScorerContext<'_, I, O, R>,
+        primary: FlattenedTrial,
+    ) -> FlattenedTrial {
+        let Some(plan) = self.partial_scoring.as_deref() else {
+            return primary;
+        };
+
+        let definitions = plan.definitions();
+
+        match AssertUnwindSafe(plan.score(ctx)).catch_unwind().await {
+            Ok(scores) => merge_flattened_trials(primary, flatten_scores(scores)),
+            Err(_) => merge_flattened_trials(
+                primary,
+                FlattenedTrial {
+                    scores: scorer_panic_scores(&definitions),
+                    resources: ScorerResources::default(),
+                },
+            ),
+        }
+    }
+
+    async fn fill_queue(
+        &mut self,
+        queue: &mut VecDeque<Sample<I, R>>,
+        source_exhausted: &mut bool,
+    ) -> Result<(), ExecutorError> {
+        while queue.len() < self.queue_capacity && !*source_exhausted {
+            match self
+                .source
+                .next_sample()
+                .await
+                .map_err(ExecutorError::Source)?
+            {
+                Some(sample) if self.sampler.should_sample(&sample) => queue.push_back(sample),
+                Some(_) => continue,
+                None => *source_exhausted = true,
+            }
+        }
+
+        Ok(())
+    }
+
+    fn should_shutdown(&self, processed_samples: usize, sample_result: &SampleResult) -> bool {
+        self.max_samples
+            .is_some_and(|max_samples| processed_samples >= max_samples)
+            || self
+                .shutdown
+                .as_ref()
+                .is_some_and(|shutdown| (shutdown.predicate)(sample_result))
     }
 }
 
@@ -737,15 +1097,33 @@ fn fingerprint_definitions(definitions: &[ScoreDefinition]) -> String {
     fingerprint.finish_hex()
 }
 
+fn rename_score_definition(definition: &ScoreDefinition, stage: &str) -> ScoreDefinition {
+    ScoreDefinition {
+        name: format!("{}@{stage}", definition.name),
+        direction: definition.direction,
+    }
+}
+
+fn incomplete_string_prefix(output: &str, char_count: usize) -> Option<String> {
+    let total_chars = output.chars().count();
+
+    if char_count >= total_chars {
+        return None;
+    }
+
+    Some(output.chars().take(char_count).collect())
+}
+
 fn merged_definitions<I, O, R>(
     primary: &ScorerSet<I, O, R>,
     tier: Option<&JudgeModelTier<I, O, R>>,
+    partial: Option<&dyn PartialScoringPlan<I, O, R>>,
 ) -> Result<Vec<ScoreDefinition>, String> {
     let mut definitions = primary.definitions().to_vec();
     let mut seen = definitions
         .iter()
         .map(|definition| definition.name.clone())
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<HashSet<_>>();
 
     if let Some(tier) = tier {
         for definition in tier.scorer_set.definitions() {
@@ -760,17 +1138,35 @@ fn merged_definitions<I, O, R>(
         }
     }
 
+    if let Some(partial) = partial {
+        for definition in partial.definitions() {
+            if !seen.insert(definition.name.clone()) {
+                return Err(format!(
+                    "duplicate score definition `{}` across executor scoring stages",
+                    definition.name
+                ));
+            }
+
+            definitions.push(definition);
+        }
+    }
+
     Ok(definitions)
 }
 
 fn merged_judge_model_pins<I, O, R>(
     primary: &ScorerSet<I, O, R>,
     tier: Option<&JudgeModelTier<I, O, R>>,
+    partial: Option<&dyn PartialScoringPlan<I, O, R>>,
 ) -> Vec<String> {
     let mut judge_model_pins = primary.judge_model_pins().to_vec();
 
     if let Some(tier) = tier {
         judge_model_pins.extend(tier.scorer_set.judge_model_pins().iter().cloned());
+    }
+
+    if let Some(partial) = partial {
+        judge_model_pins.extend(partial.judge_model_pins());
     }
 
     judge_model_pins.sort();
@@ -928,14 +1324,20 @@ fn git_stdout_bytes(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AlwaysSampler, DatasetSource, ExecutionSink, Executor, PercentSampler, PullExecutor,
-        Sampler, SamplerBuildError, TargetedSampler,
+        AlwaysSampler, DatasetSource, ExecutionSink, Executor, JsonlFileTailSource,
+        PercentSampler, PullExecutor, Sampler, SamplerBuildError, ShutdownMode,
+        StringPrefixCheckpoint, TargetedSampler,
     };
     use crate::{
-        AcquisitionError, Dataset, RunResult, Sample, SampleResult, Score, ScoreDefinition, Scorer,
-        ScorerContext, ScorerError, ScorerMetadata, ScorerSet,
+        AcquisitionError, Dataset, RunResult, Sample, SampleResult, SampleSource, Score,
+        ScoreDefinition, Scorer, ScorerContext, ScorerError, ScorerMetadata, ScorerSet,
     };
+    use serde_json::Value;
+    use std::fs::OpenOptions;
+    use std::io::Write;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    use tempfile::tempdir;
 
     struct ExactMatchScorer;
 
@@ -987,6 +1389,21 @@ mod tests {
 
         fn metadata(&self) -> ScorerMetadata {
             ScorerMetadata::default().judge_model_pin("expensive-judge@v2")
+        }
+    }
+
+    struct PrefixLengthScorer;
+
+    impl Scorer<String, String, String> for PrefixLengthScorer {
+        async fn score(
+            &self,
+            ctx: &ScorerContext<'_, String, String, String>,
+        ) -> Result<Score, ScorerError> {
+            Ok(Score::Numeric(ctx.output.chars().count() as f64))
+        }
+
+        fn definition(&self) -> ScoreDefinition {
+            ScoreDefinition::new("prefix_length")
         }
     }
 
@@ -1215,6 +1632,182 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "executor configuration failed: duplicate score definition `exact_match` across primary scorer set and judge-model tier"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn jsonl_file_tail_source_reads_existing_and_appended_samples() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("samples.jsonl");
+        let first = Sample::builder("hello".to_string())
+            .id("sample-1")
+            .reference("echo::hello".to_string())
+            .build()
+            .unwrap();
+        let second = Sample::builder("world".to_string())
+            .id("sample-2")
+            .reference("echo::world".to_string())
+            .build()
+            .unwrap();
+
+        std::fs::write(
+            &path,
+            format!("{}\n", serde_json::to_string(&first).unwrap()),
+        )
+        .unwrap();
+
+        let mut source: JsonlFileTailSource<String, String> = JsonlFileTailSource::new(&path)
+            .poll_interval(Duration::from_millis(5))
+            .idle_timeout(Duration::from_millis(20));
+
+        let first_read = source.next_sample().await.unwrap().unwrap();
+        assert_eq!(first_read.id, "sample-1");
+
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, "{}", serde_json::to_string(&second).unwrap()).unwrap();
+        file.flush().unwrap();
+
+        let second_read = source.next_sample().await.unwrap().unwrap();
+        let done = source.next_sample().await.unwrap();
+
+        assert_eq!(second_read.id, "sample-2");
+        assert!(done.is_none());
+        assert_eq!(
+            source.metadata().get("source.kind"),
+            Some(&Value::String(String::from("jsonl_file_tail")))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pull_executor_partial_string_scoring_records_checkpoint_scores() {
+        let dataset = Dataset::new(vec![Sample::new(
+            "hello".to_string(),
+            "echo::hello".to_string(),
+        )]);
+        let acquisition = |input: &String| {
+            let output = format!("echo::{input}");
+            async move { Ok::<_, AcquisitionError>(output) }
+        };
+        let primary = ScorerSet::<String, String, String>::builder()
+            .scorer(ExactMatchScorer)
+            .build();
+        let partial = ScorerSet::<String, String, String>::builder()
+            .scorer(PrefixLengthScorer)
+            .build();
+
+        let mut executor = PullExecutor::new(
+            DatasetSource::new(dataset),
+            acquisition,
+            primary,
+            AlwaysSampler,
+            super::NoopSink,
+        )
+        .partial_string_scoring(partial, vec![StringPrefixCheckpoint::new("char-2", 2)]);
+
+        let result = executor.execute().await.unwrap();
+        let partial_score = result.samples[0].trials[0]
+            .scores
+            .get("prefix_length@partial:char-2")
+            .unwrap()
+            .as_ref()
+            .unwrap();
+
+        assert_eq!(result.metadata.score_definitions.len(), 2);
+        assert_eq!(*partial_score, Score::Numeric(2.0));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pull_executor_max_samples_discards_prefetched_queue() {
+        let dataset = Dataset::new(vec![
+            Sample::builder("one".to_string())
+                .id("one")
+                .reference("echo::one".to_string())
+                .build()
+                .unwrap(),
+            Sample::builder("two".to_string())
+                .id("two")
+                .reference("echo::two".to_string())
+                .build()
+                .unwrap(),
+            Sample::builder("three".to_string())
+                .id("three")
+                .reference("echo::three".to_string())
+                .build()
+                .unwrap(),
+        ]);
+        let acquisition = |input: &String| {
+            let output = format!("echo::{input}");
+            async move { Ok::<_, AcquisitionError>(output) }
+        };
+        let scorer_set = ScorerSet::<String, String, String>::builder()
+            .scorer(ExactMatchScorer)
+            .build();
+
+        let mut executor = PullExecutor::new(
+            DatasetSource::new(dataset),
+            acquisition,
+            scorer_set,
+            AlwaysSampler,
+            super::NoopSink,
+        )
+        .queue_capacity(3)
+        .max_samples(1)
+        .shutdown_mode(ShutdownMode::DiscardQueue);
+
+        let result = executor.execute().await.unwrap();
+
+        assert_eq!(result.samples.len(), 1);
+        assert_eq!(result.samples[0].sample_id, "one");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pull_executor_shutdown_mode_drains_prefetched_queue() {
+        let dataset = Dataset::new(vec![
+            Sample::builder("one".to_string())
+                .id("one")
+                .reference("echo::one".to_string())
+                .build()
+                .unwrap(),
+            Sample::builder("two".to_string())
+                .id("two")
+                .reference("echo::two".to_string())
+                .build()
+                .unwrap(),
+            Sample::builder("three".to_string())
+                .id("three")
+                .reference("echo::three".to_string())
+                .build()
+                .unwrap(),
+        ]);
+        let acquisition = |input: &String| {
+            let output = format!("echo::{input}");
+            async move { Ok::<_, AcquisitionError>(output) }
+        };
+        let scorer_set = ScorerSet::<String, String, String>::builder()
+            .scorer(ExactMatchScorer)
+            .build();
+
+        let mut executor = PullExecutor::new(
+            DatasetSource::new(dataset),
+            acquisition,
+            scorer_set,
+            AlwaysSampler,
+            super::NoopSink,
+        )
+        .queue_capacity(3)
+        .shutdown_when(|sample_result| sample_result.sample_id == "one")
+        .shutdown_mode(ShutdownMode::DrainQueue);
+
+        let result = executor.execute().await.unwrap();
+
+        assert_eq!(result.samples.len(), 3);
+        assert_eq!(
+            result
+                .samples
+                .iter()
+                .map(|sample| sample.sample_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["one", "two", "three"]
         );
     }
 }
