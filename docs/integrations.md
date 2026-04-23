@@ -151,7 +151,7 @@ Once the plugin spec lands:
 - [x] `PluginAcquisition`       — invoke a subprocess plugin as `Acquisition` via `SubprocessAcquisition`
 - [x] `PluginScorer`             — invoke a subprocess plugin as `Scorer` via `SubprocessScorer`
 - [ ] Reference Python shim (`evalkit-plugin` on pypi)
-- [ ] Reference TypeScript shim (`@evalkit/plugin` on npm)
+- [x] Reference TypeScript shim (`@evalkit/plugin` source under `typescript/evalkit_plugin/`; local runtime verification still pending here)
 - [ ] Conformance test harness  — fixture-driven golden harness beyond the current acquisition/scorer checks
 
 ---

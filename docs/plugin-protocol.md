@@ -8,6 +8,7 @@ Current status:
 - Structured plugin error payloads are preserved for both kinds.
 - Both plugin kinds use the canonical v1 request/response envelope.
 - A reference Python shim now lives under `python/evalkit_plugin/`.
+- A reference TypeScript shim now lives under `typescript/evalkit_plugin/`.
 
 ## Scope
 
@@ -195,5 +196,6 @@ The array form is preferred when arguments contain spaces.
 
 Reference implementations:
 - Python: `python/evalkit_plugin/`
+- TypeScript: `typescript/evalkit_plugin/` (source-only in this repo; local runtime verification is still blocked here because no JS runtime is installed)
 
 This document is the source of truth for the protocol implemented by the acquisition path today.

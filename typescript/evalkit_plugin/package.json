@@ -1,0 +1,17 @@
+{
+  "name": "@evalkit/plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reference TypeScript shims for the evalkit subprocess plugin protocol",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.29",
+    "typescript": "^5.8.3"
+  }
+}
