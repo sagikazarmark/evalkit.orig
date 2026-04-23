@@ -196,6 +196,6 @@ The array form is preferred when arguments contain spaces.
 
 Reference implementations:
 - Python: `python/evalkit_plugin/`
-- TypeScript: `typescript/evalkit_plugin/` (source-only in this repo; local runtime verification is still blocked here because no JS runtime is installed)
+- TypeScript: `typescript/evalkit_plugin/` (typechecked with Bun via `devenv shell`)
 
 This document is the source of truth for the protocol implemented by the acquisition path today.

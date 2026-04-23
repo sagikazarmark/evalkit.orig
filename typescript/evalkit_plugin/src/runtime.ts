@@ -100,12 +100,12 @@ export async function runPlugin(plugin: AcquisitionPlugin | ScorerPlugin): Promi
 
   try {
     if (spec.kind === "acquisition") {
-      const output = await plugin(request.input);
+      const output = await (plugin as AcquisitionPlugin)(request.input);
       writeJson({ output });
       return;
     }
 
-    const score = await plugin(
+    const score = await (plugin as ScorerPlugin)(
       request.input,
       request.output,
       request.reference,

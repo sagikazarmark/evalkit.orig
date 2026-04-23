@@ -13,3 +13,6 @@ devenv.local.yaml
 # Added by cargo
 
 /target
+
+# JavaScript package artifacts
+**/node_modules/
