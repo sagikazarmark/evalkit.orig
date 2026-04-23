@@ -105,16 +105,17 @@ Status: initial foundation landed
 Already present:
 - `src/executor.rs` now introduces a first `Executor` trait plus a pull-based `PullExecutor`
 - `SampleSource` and `DatasetSource` provide the first explicit source abstraction for online-style execution
+- `PullExecutor` now supports an optional judge-model tier that can re-score flagged samples with a secondary scorer set
 - `ExecutionSink` and `NoopSink` provide the first sink abstraction, with per-sample notifications plus a final run completion hook
 - `evalkit-otel` now provides `OtelResultSink`, so executor-based runs can emit OTel spans through the sink interface without an extra post-processing step
+- `evalkit-otel` now provides `OtlpReceiverSource`, which adapts the in-repo OTLP receiver into a pull-based executor source over grouped sample spans
 - `AlwaysSampler`, `PercentSampler`, and `TargetedSampler` now exist in the kernel
 - The executor path reuses existing acquisition timeout handling, scorer execution, score validation, judge model pin collection, and run metadata fingerprinting from the batch runner
 - `examples/prod_eval_daemon.rs` now shows a small daemon-style binary composed from library primitives and emits OTel spans through `OtelResultSink`
 
 Gaps:
-- No online source adapters such as Kafka, NATS, file tailing, or `OtlpReceiver` bridging yet
 - No partial-stream scoring path for incomplete outputs yet
-- No judge-model tiering pipeline yet
+- No additional online source adapters such as Kafka, NATS, or file tailing yet
 - No explicit backpressure, bounded queue, or graceful shutdown controls yet
 
 ## Phase 3 - CI / Developer Workflow
@@ -155,8 +156,8 @@ Gaps:
 ## Highest-Leverage Next Slice
 
 The best next implementation slice is the next Phase 2 increment:
-- land the first real source adapter, ideally by bridging an existing in-repo primitive such as `OtlpReceiver` or a simple file tailer
-- add judge-model tiering so targeted rescore flows can be composed directly on the executor path
 - add partial or incomplete-output scoring so the executor can evaluate streaming generations before completion
+- add a second source adapter, likely a simple file tailer, so the source abstraction is proven outside the OTLP path too
+- add explicit queueing and shutdown controls once the single-threaded pull path hits real operational pressure
 
 In parallel, the next runner-facing Phase 3 gap is live GitHub Action validation in a pull-request environment so the already-landed workflow can be exercised end to end.

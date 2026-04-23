@@ -21,6 +21,8 @@ use uuid::Uuid;
 
 type TrialScores = Vec<(ScoreDefinition, Result<ScoreOutcome, ScorerError>)>;
 type AcquisitionFuture<'a, O> = Pin<Box<dyn Future<Output = Result<O, AcquisitionError>> + 'a>>;
+type JudgeModelTierPredicate<I, R> =
+    dyn Fn(&Sample<I, R>, &HashMap<String, Result<Score, ScorerError>>) -> bool + Send + Sync;
 pub type ExecutorBoxError = Box<dyn Error + Send + Sync>;
 
 #[allow(async_fn_in_trait)]
@@ -154,6 +156,7 @@ pub trait Executor {
 pub enum ExecutorError {
     Source(ExecutorBoxError),
     Sink(ExecutorBoxError),
+    Configuration(String),
 }
 
 impl Display for ExecutorError {
@@ -161,6 +164,7 @@ impl Display for ExecutorError {
         match self {
             Self::Source(err) => write!(f, "executor source failed: {err}"),
             Self::Sink(err) => write!(f, "executor sink failed: {err}"),
+            Self::Configuration(message) => write!(f, "executor configuration failed: {message}"),
         }
     }
 }
@@ -169,6 +173,7 @@ impl Error for ExecutorError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Source(err) | Self::Sink(err) => Some(err.as_ref()),
+            Self::Configuration(_) => None,
         }
     }
 }
@@ -197,6 +202,7 @@ pub struct PullExecutor<I, O, R, Src, Samp, Sink> {
     source: Src,
     acquisition: Box<dyn ErasedAcquisition<I, O>>,
     scorer_set: ScorerSet<I, O, R>,
+    judge_model_tier: Option<JudgeModelTier<I, O, R>>,
     sampler: Samp,
     sink: Sink,
     trial_count: usize,
@@ -205,6 +211,11 @@ pub struct PullExecutor<I, O, R, Src, Samp, Sink> {
     code_commit: Option<String>,
     code_fingerprint: Option<String>,
     acquisition_mode: &'static str,
+}
+
+struct JudgeModelTier<I, O, R> {
+    scorer_set: ScorerSet<I, O, R>,
+    predicate: Box<JudgeModelTierPredicate<I, R>>,
 }
 
 impl<I, O, R, Src, Samp, Sink> PullExecutor<I, O, R, Src, Samp, Sink>
@@ -231,6 +242,7 @@ where
             source,
             acquisition: Box::new(acquisition),
             scorer_set,
+            judge_model_tier: None,
             sampler,
             sink,
             trial_count: 1,
@@ -256,6 +268,20 @@ where
         self.seed = Some(seed);
         self
     }
+
+    pub fn judge_model_tier<P>(mut self, scorer_set: ScorerSet<I, O, R>, predicate: P) -> Self
+    where
+        P: Fn(&Sample<I, R>, &HashMap<String, Result<Score, ScorerError>>) -> bool
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.judge_model_tier = Some(JudgeModelTier {
+            scorer_set,
+            predicate: Box::new(predicate),
+        });
+        self
+    }
 }
 
 impl<I, O, R, Src, Samp, Sink> Executor for PullExecutor<I, O, R, Src, Samp, Sink>
@@ -268,8 +294,10 @@ where
         let started_at = Utc::now();
         let started = Instant::now();
         let run_id = Uuid::new_v4().to_string();
-        let definitions = self.scorer_set.definitions().to_vec();
-        let judge_model_pins = self.scorer_set.judge_model_pins().to_vec();
+        let definitions = merged_definitions(&self.scorer_set, self.judge_model_tier.as_ref())
+            .map_err(ExecutorError::Configuration)?;
+        let judge_model_pins =
+            merged_judge_model_pins(&self.scorer_set, self.judge_model_tier.as_ref());
         let source_metadata = self.source.metadata();
 
         let mut sampled = Vec::new();
@@ -287,7 +315,11 @@ where
 
             sampled.push(sample);
             let sample_result = self
-                .execute_sample(&run_id, sampled.last().expect("sample exists"))
+                .execute_sample(
+                    &run_id,
+                    sampled.last().expect("sample exists"),
+                    &definitions,
+                )
                 .await;
             self.sink
                 .push_sample(&sample_result)
@@ -331,12 +363,19 @@ where
     Samp: Sampler<I, R>,
     Sink: ExecutionSink,
 {
-    async fn execute_sample(&self, run_id: &str, sample: &Sample<I, R>) -> SampleResult {
+    async fn execute_sample(
+        &self,
+        run_id: &str,
+        sample: &Sample<I, R>,
+        definitions: &[ScoreDefinition],
+    ) -> SampleResult {
         let mut trials = Vec::with_capacity(self.trial_count);
         let mut resources = ScorerResources::default();
 
         for trial_index in 0..self.trial_count {
-            let trial = self.execute_trial(run_id, sample, trial_index).await;
+            let trial = self
+                .execute_trial(run_id, sample, trial_index, definitions)
+                .await;
             resources.merge(&trial.resources);
             trials.push(trial.result);
         }
@@ -362,6 +401,7 @@ where
         run_id: &str,
         sample: &Sample<I, R>,
         trial_index: usize,
+        definitions: &[ScoreDefinition],
     ) -> ExecutedTrial {
         let started = Instant::now();
 
@@ -384,22 +424,22 @@ where
                     .catch_unwind()
                     .await
                 {
-                    Ok(scores) => flatten_scores(scores),
+                    Ok(scores) => {
+                        self.maybe_execute_judge_model_tier(sample, &ctx, flatten_scores(scores))
+                            .await
+                    }
                     Err(_) => FlattenedTrial {
-                        scores: scorer_panic_scores(self.scorer_set.definitions()),
+                        scores: scorer_panic_scores(definitions),
                         resources: ScorerResources::default(),
                     },
                 }
             }
             Ok(Err(err)) => FlattenedTrial {
-                scores: acquisition_failure_scores(self.scorer_set.definitions(), err),
+                scores: acquisition_failure_scores(definitions, err),
                 resources: ScorerResources::default(),
             },
             Err(_) => FlattenedTrial {
-                scores: acquisition_failure_scores(
-                    self.scorer_set.definitions(),
-                    AcquisitionError::Panicked,
-                ),
+                scores: acquisition_failure_scores(definitions, AcquisitionError::Panicked),
                 resources: ScorerResources::default(),
             },
         };
@@ -431,6 +471,50 @@ where
                 }
             }
             None => self.acquisition.acquire_boxed(input).await,
+        }
+    }
+
+    async fn maybe_execute_judge_model_tier(
+        &self,
+        sample: &Sample<I, R>,
+        ctx: &ScorerContext<'_, I, O, R>,
+        primary: FlattenedTrial,
+    ) -> FlattenedTrial {
+        let Some(tier) = self.judge_model_tier.as_ref() else {
+            return primary;
+        };
+
+        let should_run = match std::panic::catch_unwind(AssertUnwindSafe(|| {
+            (tier.predicate)(sample, &primary.scores)
+        })) {
+            Ok(should_run) => should_run,
+            Err(_) => {
+                return merge_flattened_trials(
+                    primary,
+                    FlattenedTrial {
+                        scores: tier_predicate_panic_scores(tier.scorer_set.definitions()),
+                        resources: ScorerResources::default(),
+                    },
+                );
+            }
+        };
+
+        if !should_run {
+            return primary;
+        }
+
+        match AssertUnwindSafe(tier.scorer_set.score(ctx))
+            .catch_unwind()
+            .await
+        {
+            Ok(scores) => merge_flattened_trials(primary, flatten_scores(scores)),
+            Err(_) => merge_flattened_trials(
+                primary,
+                FlattenedTrial {
+                    scores: scorer_panic_scores(tier.scorer_set.definitions()),
+                    resources: ScorerResources::default(),
+                },
+            ),
         }
     }
 }
@@ -478,6 +562,15 @@ fn flatten_scores(results: TrialScores) -> FlattenedTrial {
     FlattenedTrial { scores, resources }
 }
 
+fn merge_flattened_trials(
+    mut primary: FlattenedTrial,
+    secondary: FlattenedTrial,
+) -> FlattenedTrial {
+    primary.resources.merge(&secondary.resources);
+    primary.scores.extend(secondary.scores);
+    primary
+}
+
 fn scorer_panic_scores(
     definitions: &[ScoreDefinition],
 ) -> HashMap<String, Result<Score, ScorerError>> {
@@ -487,6 +580,20 @@ fn scorer_panic_scores(
             (
                 definition.name.clone(),
                 Err(ScorerError::internal(ScorerPanicError)),
+            )
+        })
+        .collect()
+}
+
+fn tier_predicate_panic_scores(
+    definitions: &[ScoreDefinition],
+) -> HashMap<String, Result<Score, ScorerError>> {
+    definitions
+        .iter()
+        .map(|definition| {
+            (
+                definition.name.clone(),
+                Err(ScorerError::internal(JudgeModelTierPredicatePanicError)),
             )
         })
         .collect()
@@ -559,6 +666,17 @@ impl Display for InvalidScoreError {
 impl Error for InvalidScoreError {}
 
 #[derive(Debug)]
+struct JudgeModelTierPredicatePanicError;
+
+impl Display for JudgeModelTierPredicatePanicError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("judge-model tier predicate panicked")
+    }
+}
+
+impl Error for JudgeModelTierPredicatePanicError {}
+
+#[derive(Debug)]
 struct SharedAcquisitionError(Arc<AcquisitionError>);
 
 impl Display for SharedAcquisitionError {
@@ -617,6 +735,47 @@ fn fingerprint_definitions(definitions: &[ScoreDefinition]) -> String {
     }
 
     fingerprint.finish_hex()
+}
+
+fn merged_definitions<I, O, R>(
+    primary: &ScorerSet<I, O, R>,
+    tier: Option<&JudgeModelTier<I, O, R>>,
+) -> Result<Vec<ScoreDefinition>, String> {
+    let mut definitions = primary.definitions().to_vec();
+    let mut seen = definitions
+        .iter()
+        .map(|definition| definition.name.clone())
+        .collect::<std::collections::HashSet<_>>();
+
+    if let Some(tier) = tier {
+        for definition in tier.scorer_set.definitions() {
+            if !seen.insert(definition.name.clone()) {
+                return Err(format!(
+                    "duplicate score definition `{}` across primary scorer set and judge-model tier",
+                    definition.name
+                ));
+            }
+
+            definitions.push(definition.clone());
+        }
+    }
+
+    Ok(definitions)
+}
+
+fn merged_judge_model_pins<I, O, R>(
+    primary: &ScorerSet<I, O, R>,
+    tier: Option<&JudgeModelTier<I, O, R>>,
+) -> Vec<String> {
+    let mut judge_model_pins = primary.judge_model_pins().to_vec();
+
+    if let Some(tier) = tier {
+        judge_model_pins.extend(tier.scorer_set.judge_model_pins().iter().cloned());
+    }
+
+    judge_model_pins.sort();
+    judge_model_pins.dedup();
+    judge_model_pins
 }
 
 fn canonical_metadata_json(metadata: &HashMap<String, Value>) -> String {
@@ -774,7 +933,7 @@ mod tests {
     };
     use crate::{
         AcquisitionError, Dataset, RunResult, Sample, SampleResult, Score, ScoreDefinition, Scorer,
-        ScorerContext, ScorerError, ScorerSet,
+        ScorerContext, ScorerError, ScorerMetadata, ScorerSet,
     };
     use std::sync::{Arc, Mutex};
 
@@ -790,6 +949,44 @@ mod tests {
 
         fn definition(&self) -> ScoreDefinition {
             ScoreDefinition::maximize("exact_match")
+        }
+    }
+
+    struct ReviewGateScorer;
+
+    impl Scorer<String, String, String> for ReviewGateScorer {
+        async fn score(
+            &self,
+            ctx: &ScorerContext<'_, String, String, String>,
+        ) -> Result<Score, ScorerError> {
+            Ok(Score::Binary(ctx.reference == Some(ctx.output)))
+        }
+
+        fn definition(&self) -> ScoreDefinition {
+            ScoreDefinition::maximize("cheap_match")
+        }
+
+        fn metadata(&self) -> ScorerMetadata {
+            ScorerMetadata::default().judge_model_pin("cheap-judge@v1")
+        }
+    }
+
+    struct EscalationScorer;
+
+    impl Scorer<String, String, String> for EscalationScorer {
+        async fn score(
+            &self,
+            _ctx: &ScorerContext<'_, String, String, String>,
+        ) -> Result<Score, ScorerError> {
+            Ok(Score::Label(String::from("needs_review")))
+        }
+
+        fn definition(&self) -> ScoreDefinition {
+            ScoreDefinition::new("tier_review")
+        }
+
+        fn metadata(&self) -> ScorerMetadata {
+            ScorerMetadata::default().judge_model_pin("expensive-judge@v2")
         }
     }
 
@@ -932,5 +1129,92 @@ mod tests {
         let result = executor.execute().await.unwrap();
 
         assert_eq!(result.samples.len(), 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pull_executor_runs_judge_model_tier_for_flagged_samples_only() {
+        let dataset = Dataset::new(vec![
+            Sample::new("pass".to_string(), "echo::pass".to_string()),
+            Sample::builder("fail".to_string())
+                .id("needs-review")
+                .reference("expected::fail".to_string())
+                .build()
+                .unwrap(),
+        ]);
+        let acquisition = |input: &String| {
+            let output = format!("echo::{input}");
+            async move { Ok::<_, AcquisitionError>(output) }
+        };
+        let scorer_set = ScorerSet::<String, String, String>::builder()
+            .scorer(ReviewGateScorer)
+            .build();
+        let tier = ScorerSet::<String, String, String>::builder()
+            .scorer(EscalationScorer)
+            .build();
+
+        let mut executor = PullExecutor::new(
+            DatasetSource::new(dataset),
+            acquisition,
+            scorer_set,
+            AlwaysSampler,
+            super::NoopSink,
+        )
+        .judge_model_tier(tier, |_, scores| {
+            matches!(scores.get("cheap_match"), Some(Ok(Score::Binary(false))))
+        });
+
+        let result = executor.execute().await.unwrap();
+
+        assert_eq!(result.metadata.score_definitions.len(), 2);
+        assert_eq!(
+            result.metadata.judge_model_pins,
+            vec![
+                String::from("cheap-judge@v1"),
+                String::from("expensive-judge@v2"),
+            ]
+        );
+        assert!(
+            !result.samples[0].trials[0]
+                .scores
+                .contains_key("tier_review")
+        );
+        assert!(matches!(
+            result.samples[1].trials[0].scores.get("tier_review"),
+            Some(Ok(Score::Label(label))) if label == "needs_review"
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pull_executor_rejects_duplicate_score_names_across_tiers() {
+        let dataset = Dataset::new(vec![Sample::new(
+            "one".to_string(),
+            "echo::one".to_string(),
+        )]);
+        let acquisition = |input: &String| {
+            let output = format!("echo::{input}");
+            async move { Ok::<_, AcquisitionError>(output) }
+        };
+        let primary = ScorerSet::<String, String, String>::builder()
+            .scorer(ExactMatchScorer)
+            .build();
+        let tier = ScorerSet::<String, String, String>::builder()
+            .scorer(ExactMatchScorer)
+            .build();
+
+        let mut executor = PullExecutor::new(
+            DatasetSource::new(dataset),
+            acquisition,
+            primary,
+            AlwaysSampler,
+            super::NoopSink,
+        )
+        .judge_model_tier(tier, |_, _| true);
+
+        let err = executor.execute().await.unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "executor configuration failed: duplicate score definition `exact_match` across primary scorer set and judge-model tier"
+        );
     }
 }

@@ -150,3 +150,19 @@ Why:
 
 Rejected alternative:
 Build the first Phase 2 API around a fully concurrent queued worker system with backpressure controls from day one. That may still be the right long-term runtime, but it would force queue semantics, shutdown behavior, and threading policy into the API before the simpler source/sampler/sink boundaries have been tested.
+
+## 2026-04-23 - Add one optional secondary judge-model tier to `PullExecutor`
+
+Decision:
+Keep the first judge-model tiering design minimal inside `PullExecutor`:
+- a primary `ScorerSet` still runs for every sampled item
+- one optional secondary `ScorerSet` may run for a subset of items
+- the subset is chosen by a predicate over the primary scores for the current sample
+
+Why:
+- This lands the roadmap's cheap-then-expensive rescoring workflow without introducing a separate execution planner API yet.
+- Predicate-based gating keeps the first version flexible enough for score-threshold, failure-only, and metadata-aware escalation policies.
+- Leaving non-triggered tier scores absent from a sample's trial results matches the kernel's existing stats and comparison behavior, which already tolerate missing scorer entries.
+
+Rejected alternative:
+Require every tiered scorer to emit an explicit synthetic "skipped" score or error when the expensive tier does not run. That would complicate the score model and pollute run outputs before there is evidence that consumers need a first-class skipped state.

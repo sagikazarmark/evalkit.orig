@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use evalkit::{
-    Acquisition, AcquisitionError, AcquisitionMetadata, ExecutionSink, ExecutorBoxError,
-    RunResult, Score, current_sample_id,
+    Acquisition, AcquisitionError, AcquisitionMetadata, ExecutionSink, ExecutorBoxError, RunResult,
+    Sample, SampleSource, Score, current_sample_id,
 };
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
@@ -13,7 +13,7 @@ use hyper_util::rt::TokioIo;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::future::Future;
@@ -570,6 +570,16 @@ pub struct OtlpReceiver {
     store: SpanStore,
 }
 
+pub struct OtlpReceiverSource {
+    receiver: OtlpReceiver,
+    correlation_id: String,
+    sample_attribute: String,
+    poll_interval: Duration,
+    idle_timeout: Duration,
+    yielded_sample_ids: HashSet<String>,
+    pending: VecDeque<Sample<Vec<Span>>>,
+}
+
 pub struct OtelResultEmitter {
     namespace: String,
 }
@@ -807,6 +817,106 @@ impl OtlpReceiver {
 
     pub fn port(&self) -> u16 {
         self.addr.port()
+    }
+}
+
+impl OtlpReceiverSource {
+    pub fn new(
+        receiver: OtlpReceiver,
+        correlation_id: impl Into<String>,
+        sample_attribute: impl Into<String>,
+    ) -> Self {
+        Self {
+            receiver,
+            correlation_id: correlation_id.into(),
+            sample_attribute: sample_attribute.into(),
+            poll_interval: Duration::from_millis(200),
+            idle_timeout: Duration::from_secs(5),
+            yielded_sample_ids: HashSet::new(),
+            pending: VecDeque::new(),
+        }
+    }
+
+    pub fn poll_interval(mut self, poll_interval: Duration) -> Self {
+        self.poll_interval = poll_interval;
+        self
+    }
+
+    pub fn idle_timeout(mut self, idle_timeout: Duration) -> Self {
+        self.idle_timeout = idle_timeout;
+        self
+    }
+
+    fn enqueue_new_samples(&mut self, grouped: HashMap<String, Vec<Span>>) {
+        let mut sample_ids = grouped
+            .keys()
+            .filter(|sample_id| !self.yielded_sample_ids.contains(*sample_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        sample_ids.sort();
+
+        for sample_id in sample_ids {
+            let spans = grouped
+                .get(&sample_id)
+                .cloned()
+                .expect("grouped spans should contain discovered sample ids");
+            self.yielded_sample_ids.insert(sample_id.clone());
+            self.pending.push_back(Sample {
+                id: sample_id,
+                input: spans,
+                reference: None,
+                metadata: HashMap::new(),
+            });
+        }
+    }
+}
+
+#[allow(async_fn_in_trait)]
+impl SampleSource<Vec<Span>> for OtlpReceiverSource {
+    async fn next_sample(&mut self) -> Result<Option<Sample<Vec<Span>>>, ExecutorBoxError> {
+        if let Some(sample) = self.pending.pop_front() {
+            return Ok(Some(sample));
+        }
+
+        let deadline = Instant::now() + self.idle_timeout;
+
+        loop {
+            let grouped = self
+                .receiver
+                .fetch_spans(
+                    &self.correlation_id,
+                    &self.sample_attribute,
+                    self.poll_interval,
+                )
+                .await
+                .map_err(|err| Box::new(err) as ExecutorBoxError)?;
+            self.enqueue_new_samples(grouped);
+
+            if let Some(sample) = self.pending.pop_front() {
+                return Ok(Some(sample));
+            }
+
+            if Instant::now() >= deadline {
+                return Ok(None);
+            }
+        }
+    }
+
+    fn metadata(&self) -> HashMap<String, Value> {
+        HashMap::from([
+            (
+                String::from("source.kind"),
+                Value::String(String::from("otlp_receiver")),
+            ),
+            (
+                String::from("source.correlation_id"),
+                Value::String(self.correlation_id.clone()),
+            ),
+            (
+                String::from("source.sample_attribute"),
+                Value::String(self.sample_attribute.clone()),
+            ),
+        ])
     }
 }
 
@@ -1052,7 +1162,9 @@ enum OtlpAnyValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evalkit::{Direction, RunMetadata, SampleResult, ScoreDefinition, TrialResult};
+    use evalkit::{
+        Direction, RunMetadata, SampleResult, SampleSource, ScoreDefinition, TrialResult,
+    };
     use serde_json::json;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
@@ -1372,6 +1484,65 @@ mod tests {
         assert_eq!(spans.len(), 2);
         assert_eq!(spans["sample-a"].len(), 2);
         assert_eq!(spans["sample-b"].len(), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn otlp_receiver_source_yields_new_samples_once() {
+        let receiver = OtlpReceiver::start_on_port(0).await.unwrap();
+        let port = receiver.port();
+
+        let now_ns = Utc::now().timestamp_nanos_opt().unwrap();
+        let body = json!({
+            "resourceSpans": [{
+                "scopeSpans": [{
+                    "spans": [
+                        {
+                            "traceId": "t1",
+                            "spanId": "s1",
+                            "name": "op-a",
+                            "startTimeUnixNano": now_ns.to_string(),
+                            "endTimeUnixNano": (now_ns + 1_000).to_string(),
+                            "attributes": [
+                                {"key": "eval.run_id", "value": {"stringValue": "run-source"}},
+                                {"key": "eval.sample_id", "value": {"stringValue": "sample-b"}}
+                            ]
+                        },
+                        {
+                            "traceId": "t2",
+                            "spanId": "s2",
+                            "name": "op-b",
+                            "startTimeUnixNano": now_ns.to_string(),
+                            "endTimeUnixNano": (now_ns + 1_000).to_string(),
+                            "attributes": [
+                                {"key": "eval.run_id", "value": {"stringValue": "run-source"}},
+                                {"key": "eval.sample_id", "value": {"stringValue": "sample-a"}}
+                            ]
+                        }
+                    ]
+                }]
+            }]
+        })
+        .to_string();
+
+        post_otlp(port, &body).await;
+
+        let mut source = OtlpReceiverSource::new(receiver, "run-source", "eval.sample_id")
+            .poll_interval(Duration::from_millis(10))
+            .idle_timeout(Duration::from_millis(25));
+
+        let first = source.next_sample().await.unwrap().unwrap();
+        let second = source.next_sample().await.unwrap().unwrap();
+        let done = source.next_sample().await.unwrap();
+
+        assert_eq!(first.id, "sample-a");
+        assert_eq!(second.id, "sample-b");
+        assert_eq!(first.input.len(), 1);
+        assert_eq!(second.input.len(), 1);
+        assert!(done.is_none());
+        assert_eq!(
+            source.metadata().get("source.kind"),
+            Some(&json!("otlp_receiver"))
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

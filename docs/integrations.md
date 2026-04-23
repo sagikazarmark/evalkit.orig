@@ -46,7 +46,7 @@ Via anyllm this gives first-class OpenAI / Anthropic / Gemini / OpenAI-compatibl
 - [ ] `KafkaSource`           — consume traces/events from a Kafka topic
 - [ ] `NatsSource`            — NATS subject subscriber
 - [ ] `FileTailerSource`      — tail a JSONL file
-- [ ] `OtlpReceiverSource`    — adapt the existing OTLP receiver as a streaming source
+- [x] `OtlpReceiverSource`    — adapt the existing OTLP receiver as a pull-based executor source over grouped sample spans
 
 ### Replay / fixtures
 - [ ] `FixtureAcquisition`    — serve pre-recorded outputs from a JSONL
