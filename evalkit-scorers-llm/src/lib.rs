@@ -17,6 +17,7 @@ use std::time::Duration;
 
 const LLM_CLASSIFIER_PROMPT_TEMPLATE: &str = include_str!("../prompts/llm_classifier.txt");
 const G_EVAL_PROMPT_TEMPLATE: &str = include_str!("../prompts/g_eval.txt");
+const G_EVAL_STEP_PLAN_PROMPT_TEMPLATE: &str = include_str!("../prompts/g_eval_step_plan.txt");
 
 /// Creates a generic LLM-as-a-Judge scorer backed by `anyllm`.
 pub fn llm_judge<P>(
@@ -83,7 +84,7 @@ pub fn calibrated_llm_classifier<P, I>(
     model: impl Into<String>,
     labels: I,
     instructions: impl Into<String>,
-) -> Result<CalibratedLabelScorer<LlmJudge>, LlmJudgeBuildError>
+) -> Result<CalibratedLlmClassifier, LlmJudgeBuildError>
 where
     P: ChatProvider + 'static,
     P::Stream: 'static,
@@ -94,7 +95,7 @@ where
         llm_classifier_with_normalized_labels(provider, model, labels.clone(), instructions.into());
     let name = inner.definition.name.clone();
 
-    CalibratedLabelScorer::new(inner, name, labels)
+    CalibratedLlmClassifier::new(inner, name, labels)
 }
 
 fn llm_classifier_with_normalized_labels<P>(
@@ -155,6 +156,46 @@ where
     ))
 }
 
+/// Creates a multi-pass G-Eval scorer that asks the judge to draft a step plan before scoring.
+pub fn g_eval_multi_pass<P, I, S>(
+    provider: P,
+    model: impl Into<String>,
+    criteria: I,
+) -> Result<MultiPassGEval, LlmJudgeBuildError>
+where
+    P: ChatProvider + 'static,
+    P::Stream: 'static,
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let criteria = normalize_entries("criteria", criteria)?;
+    let provider = DynChatProvider::new(provider);
+    let model = model.into();
+    let planning_prompt = build_g_eval_step_plan_prompt(&criteria, 4);
+    let planner = LlmJudge::new(
+        provider.clone(),
+        model.clone(),
+        planning_prompt,
+        LlmJudgeOutput::Numeric,
+    )
+    .named("g_eval_step_planner");
+    let scorer = LlmJudge::new(
+        provider,
+        model,
+        build_g_eval_prompt(&criteria, &build_g_eval_steps(&criteria)),
+        LlmJudgeOutput::Numeric,
+    )
+    .named("g_eval_multi_pass")
+    .capture_reasoning(true);
+
+    Ok(MultiPassGEval {
+        planner,
+        scorer,
+        criteria,
+        max_generated_steps: 4,
+    })
+}
+
 fn g_eval_with_normalized_steps<P>(
     provider: P,
     model: impl Into<String>,
@@ -177,6 +218,60 @@ where
 pub struct PromptTemplate {
     raw: String,
     canonical: String,
+}
+
+/// Portable token pricing used to estimate scorer-side `cost_usd`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelPricing {
+    input_usd_per_million_tokens: f64,
+    output_usd_per_million_tokens: f64,
+    cache_read_usd_per_million_tokens: f64,
+    cache_write_usd_per_million_tokens: f64,
+}
+
+impl ModelPricing {
+    pub fn new(input_usd_per_million_tokens: f64, output_usd_per_million_tokens: f64) -> Self {
+        Self {
+            input_usd_per_million_tokens,
+            output_usd_per_million_tokens,
+            cache_read_usd_per_million_tokens: input_usd_per_million_tokens,
+            cache_write_usd_per_million_tokens: input_usd_per_million_tokens,
+        }
+    }
+
+    pub fn cache_read_usd_per_million_tokens(
+        mut self,
+        cache_read_usd_per_million_tokens: f64,
+    ) -> Self {
+        self.cache_read_usd_per_million_tokens = cache_read_usd_per_million_tokens;
+        self
+    }
+
+    pub fn cache_write_usd_per_million_tokens(
+        mut self,
+        cache_write_usd_per_million_tokens: f64,
+    ) -> Self {
+        self.cache_write_usd_per_million_tokens = cache_write_usd_per_million_tokens;
+        self
+    }
+
+    fn estimate_cost_usd(&self, usage: &anyllm::Usage) -> Option<f64> {
+        let input = usage.input_tokens.unwrap_or(0) as f64;
+        let output = usage.output_tokens.unwrap_or(0) as f64;
+        let cache_read = usage.cached_input_tokens.unwrap_or(0) as f64;
+        let cache_write = usage.cache_creation_input_tokens.unwrap_or(0) as f64;
+
+        let total = input * self.input_usd_per_million_tokens
+            + output * self.output_usd_per_million_tokens
+            + cache_read * self.cache_read_usd_per_million_tokens
+            + cache_write * self.cache_write_usd_per_million_tokens;
+
+        if total.is_finite() {
+            Some(total / 1_000_000.0)
+        } else {
+            None
+        }
+    }
 }
 
 impl PromptTemplate {
@@ -264,6 +359,8 @@ pub struct ClassifierLabel {
     pub label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
     #[serde(skip_serializing)]
     pub score: Option<f64>,
 }
@@ -273,6 +370,7 @@ impl ClassifierLabel {
         Self {
             label: label.into(),
             description: None,
+            metadata: None,
             score: None,
         }
     }
@@ -286,6 +384,73 @@ impl ClassifierLabel {
         self.score = Some(score);
         self
     }
+
+    pub fn metadata(mut self, metadata: Value) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+}
+
+/// Multi-pass G-Eval scorer that drafts evaluation steps before scoring.
+#[derive(Debug)]
+pub struct MultiPassGEval {
+    planner: LlmJudge,
+    scorer: LlmJudge,
+    criteria: Vec<String>,
+    max_generated_steps: usize,
+}
+
+impl MultiPassGEval {
+    pub fn retries(mut self, retries: usize) -> Self {
+        self.planner = self.planner.retries(retries);
+        self.scorer = self.scorer.retries(retries);
+        self
+    }
+
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.planner = self.planner.timeout(timeout);
+        self.scorer = self.scorer.timeout(timeout);
+        self
+    }
+
+    pub fn temperature(mut self, temperature: f32) -> Self {
+        self.planner = self.planner.temperature(temperature);
+        self.scorer = self.scorer.temperature(temperature);
+        self
+    }
+
+    pub fn max_tokens(mut self, max_tokens: u32) -> Self {
+        self.planner = self.planner.max_tokens(max_tokens);
+        self.scorer = self.scorer.max_tokens(max_tokens);
+        self
+    }
+
+    pub fn seed(mut self, seed: u64) -> Self {
+        self.planner = self.planner.seed(seed);
+        self.scorer = self.scorer.seed(seed);
+        self
+    }
+
+    pub fn pricing(mut self, pricing: ModelPricing) -> Self {
+        self.planner = self.planner.pricing(pricing.clone());
+        self.scorer = self.scorer.pricing(pricing);
+        self
+    }
+
+    pub fn reasoning(mut self, reasoning: impl Into<ReasoningConfig>) -> Self {
+        let reasoning = reasoning.into();
+        self.planner = self.planner.reasoning(reasoning.clone());
+        self.scorer = self.scorer.reasoning(reasoning);
+        self
+    }
+
+    pub fn max_generated_steps(mut self, max_generated_steps: usize) -> Self {
+        self.max_generated_steps = max_generated_steps.max(1);
+        self.planner = self
+            .planner
+            .with_prompt(build_g_eval_step_plan_prompt(&self.criteria, self.max_generated_steps));
+        self
+    }
 }
 
 /// Wraps a label-producing scorer and maps labels onto numeric structured scores.
@@ -295,6 +460,33 @@ pub struct CalibratedLabelScorer<S> {
     label_scores: BTreeMap<String, f64>,
     label_definitions: Vec<ClassifierLabel>,
     definition: ScoreDefinition,
+}
+
+/// Specialized calibrated classifier built directly on top of `LlmJudge`.
+#[derive(Debug)]
+pub struct CalibratedLlmClassifier {
+    inner: LlmJudge,
+    label_scores: BTreeMap<String, f64>,
+    label_definitions: Vec<ClassifierLabel>,
+    definition: ScoreDefinition,
+}
+
+impl CalibratedLlmClassifier {
+    fn new(
+        inner: LlmJudge,
+        name: impl Into<String>,
+        labels: Vec<ClassifierLabel>,
+    ) -> Result<Self, LlmJudgeBuildError> {
+        let label_scores = extract_label_scores(&labels)?;
+        let definition = ScoreDefinition::maximize(format!("{}_calibrated", name.into()));
+
+        Ok(Self {
+            inner,
+            label_scores,
+            label_definitions: labels,
+            definition,
+        })
+    }
 }
 
 impl<S> CalibratedLabelScorer<S> {
@@ -370,7 +562,12 @@ where
                 Ok(ScoreOutcome::new(Score::Structured {
                     score,
                     reasoning: String::new(),
-                    metadata: calibrated_label_metadata(&label, score, &self.label_definitions),
+                    metadata: calibrated_label_metadata(
+                        &label,
+                        score,
+                        &self.label_definitions,
+                        Value::Null,
+                    ),
                 })
                 .with_resources(outcome.resources))
             }
@@ -385,7 +582,118 @@ where
     }
 
     fn metadata(&self) -> ScorerMetadata {
-        self.inner.metadata()
+        <S as Scorer<I, O, R>>::metadata(&self.inner)
+    }
+}
+
+impl<I, R> Scorer<I, String, R> for CalibratedLlmClassifier
+where
+    I: Serialize,
+    R: Serialize,
+{
+    async fn score(&self, ctx: &ScorerContext<'_, I, String, R>) -> Result<Score, ScorerError> {
+        Ok(self.score_with_resources(ctx).await?.score)
+    }
+
+    async fn score_with_resources(
+        &self,
+        ctx: &ScorerContext<'_, I, String, R>,
+    ) -> Result<ScoreOutcome, ScorerError> {
+        let request = self.inner.request(ctx)?;
+        let extracted = self
+            .inner
+            .extract_with_retry::<LabelJudgeResponse>(&request)
+            .await?;
+        let label = extracted.value.label;
+        let Some(score) = self.label_scores.get(&label).copied() else {
+            return Err(ScorerError::invalid_input(MissingCalibratedLabelError {
+                label,
+            }));
+        };
+
+        Ok(ScoreOutcome::new(Score::Structured {
+            score,
+            reasoning: extracted.value.reasoning.unwrap_or_default(),
+            metadata: calibrated_label_metadata(
+                &label,
+                score,
+                &self.label_definitions,
+                judge_metadata(
+                    &self.inner.prompt,
+                    &self.inner.provider,
+                    &extracted.response,
+                    self.inner.pricing.as_ref(),
+                    "label",
+                    json!({ "label": label }),
+                    extracted.value.metadata,
+                ),
+            ),
+        })
+        .with_resources(response_resources(
+            &extracted.response,
+            self.inner.pricing.as_ref(),
+        )))
+    }
+
+    fn definition(&self) -> ScoreDefinition {
+        self.definition.clone()
+    }
+
+    fn metadata(&self) -> ScorerMetadata {
+        <LlmJudge as Scorer<I, String, R>>::metadata(&self.inner)
+    }
+}
+
+impl<I, R> Scorer<I, String, R> for MultiPassGEval
+where
+    I: Serialize,
+    R: Serialize,
+{
+    async fn score(&self, ctx: &ScorerContext<'_, I, String, R>) -> Result<Score, ScorerError> {
+        Ok(self.score_with_resources(ctx).await?.score)
+    }
+
+    async fn score_with_resources(
+        &self,
+        ctx: &ScorerContext<'_, I, String, R>,
+    ) -> Result<ScoreOutcome, ScorerError> {
+        let planner_request = self.planner.request(ctx)?;
+        let planned = self
+            .planner
+            .extract_with_retry::<GeneratedStepPlan>(&planner_request)
+            .await?;
+        let steps = normalize_generated_steps(planned.value.steps, self.max_generated_steps)?;
+        let scoring_prompt = build_g_eval_prompt(&self.criteria, &steps);
+        let score_request = request_with_prompt(&self.scorer, &scoring_prompt, ctx)?;
+        let extracted = self
+            .scorer
+            .extract_with_retry::<NumericJudgeResponse>(&score_request)
+            .await?;
+        let mut outcome = numeric_score(
+            extracted.value,
+            &extracted.response,
+            &scoring_prompt,
+            &self.scorer.provider,
+            self.scorer.pricing.as_ref(),
+            true,
+        );
+
+        if let Score::Structured { metadata, .. } = &mut outcome.score {
+            merge_g_eval_plan_metadata(metadata, &self.criteria, &steps);
+        }
+
+        let planner_resources = response_resources(&planned.response, self.planner.pricing.as_ref());
+        outcome.resources.merge(&planner_resources);
+
+        Ok(outcome)
+    }
+
+    fn definition(&self) -> ScoreDefinition {
+        self.scorer.definition.clone()
+    }
+
+    fn metadata(&self) -> ScorerMetadata {
+        self.scorer.metadata.clone()
     }
 }
 
@@ -422,6 +730,7 @@ pub struct LlmJudge {
     seed: Option<u64>,
     reasoning: Option<ReasoningConfig>,
     capture_reasoning: bool,
+    pricing: Option<ModelPricing>,
 }
 
 impl LlmJudge {
@@ -458,6 +767,7 @@ impl LlmJudge {
             seed: None,
             reasoning: None,
             capture_reasoning: false,
+            pricing: None,
         }
     }
 
@@ -506,6 +816,12 @@ impl LlmJudge {
     /// Configures provider-agnostic reasoning options for the judge request.
     pub fn reasoning(mut self, reasoning: impl Into<ReasoningConfig>) -> Self {
         self.reasoning = Some(reasoning.into());
+        self
+    }
+
+    /// Sets portable token pricing used to estimate scorer-side `cost_usd`.
+    pub fn pricing(mut self, pricing: ModelPricing) -> Self {
+        self.pricing = Some(pricing);
         self
     }
 
@@ -611,6 +927,7 @@ where
                     &extracted.response,
                     &self.prompt,
                     &self.provider,
+                    self.pricing.as_ref(),
                     self.capture_reasoning,
                 ))
             }
@@ -623,6 +940,7 @@ where
                     &extracted.response,
                     &self.prompt,
                     &self.provider,
+                    self.pricing.as_ref(),
                     self.capture_reasoning,
                 ))
             }
@@ -630,8 +948,11 @@ where
                 let extracted = self
                     .extract_with_retry::<LabelJudgeResponse>(&request)
                     .await?;
-                Ok(ScoreOutcome::new(Score::Label(extracted.value.label))
-                    .with_resources(response_resources(&extracted.response)))
+                Ok(
+                    ScoreOutcome::new(Score::Label(extracted.value.label)).with_resources(
+                        response_resources(&extracted.response, self.pricing.as_ref()),
+                    ),
+                )
             }
         }
     }
@@ -666,6 +987,15 @@ struct NumericJudgeResponse {
 #[derive(Debug, Deserialize, JsonSchema)]
 struct LabelJudgeResponse {
     label: String,
+    #[serde(default)]
+    reasoning: Option<String>,
+    #[serde(default)]
+    metadata: Option<Value>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct GeneratedStepPlan {
+    steps: Vec<String>,
 }
 
 fn binary_score(
@@ -673,9 +1003,10 @@ fn binary_score(
     response: &anyllm::ChatResponse,
     prompt: &PromptTemplate,
     provider: &DynChatProvider,
+    pricing: Option<&ModelPricing>,
     capture_reasoning: bool,
 ) -> ScoreOutcome {
-    let resources = response_resources(response);
+    let resources = response_resources(response, pricing);
 
     if capture_reasoning {
         ScoreOutcome::new(Score::Structured {
@@ -685,6 +1016,7 @@ fn binary_score(
                 prompt,
                 provider,
                 response,
+                pricing,
                 "binary",
                 json!({ "binary": result.score }),
                 result.metadata,
@@ -701,9 +1033,10 @@ fn numeric_score(
     response: &anyllm::ChatResponse,
     prompt: &PromptTemplate,
     provider: &DynChatProvider,
+    pricing: Option<&ModelPricing>,
     capture_reasoning: bool,
 ) -> ScoreOutcome {
-    let resources = response_resources(response);
+    let resources = response_resources(response, pricing);
 
     if capture_reasoning {
         ScoreOutcome::new(Score::Structured {
@@ -713,6 +1046,7 @@ fn numeric_score(
                 prompt,
                 provider,
                 response,
+                pricing,
                 "numeric",
                 json!({ "score": result.score }),
                 result.metadata,
@@ -724,23 +1058,32 @@ fn numeric_score(
     }
 }
 
-fn response_resources(response: &anyllm::ChatResponse) -> ScorerResources {
+fn response_resources(
+    response: &anyllm::ChatResponse,
+    pricing: Option<&ModelPricing>,
+) -> ScorerResources {
     let Some(usage) = response.usage.as_ref() else {
         return ScorerResources::default();
     };
 
-    ScorerResources::default().token_usage(TokenUsage {
+    let resources = ScorerResources::default().token_usage(TokenUsage {
         input: usage.input_tokens.unwrap_or(0),
         output: usage.output_tokens.unwrap_or(0),
         cache_read: usage.cached_input_tokens.unwrap_or(0),
         cache_write: usage.cache_creation_input_tokens.unwrap_or(0),
-    })
+    });
+
+    match pricing.and_then(|pricing| pricing.estimate_cost_usd(usage)) {
+        Some(cost_usd) => resources.cost_usd(cost_usd),
+        None => resources,
+    }
 }
 
 fn judge_metadata(
     prompt: &PromptTemplate,
     provider: &DynChatProvider,
     response: &anyllm::ChatResponse,
+    pricing: Option<&ModelPricing>,
     output_kind: &str,
     extracted: Value,
     result_metadata: Option<Value>,
@@ -760,10 +1103,44 @@ fn judge_metadata(
                 "cache_creation_input_tokens": usage.cache_creation_input_tokens,
                 "reasoning_tokens": usage.reasoning_tokens,
             })),
+            "estimated_cost_usd": response.usage.as_ref().and_then(|usage| {
+                pricing.and_then(|pricing| pricing.estimate_cost_usd(usage))
+            }),
             "extracted": extracted,
             "result_metadata": result_metadata,
         }
     })
+}
+
+fn request_with_prompt<I, O, R>(
+    judge: &LlmJudge,
+    prompt: &PromptTemplate,
+    ctx: &ScorerContext<'_, I, O, R>,
+) -> Result<ChatRequest, ScorerError>
+where
+    I: Serialize,
+    O: Serialize,
+    R: Serialize,
+{
+    let rendered = prompt.render(ctx).map_err(ScorerError::internal)?;
+
+    let mut request = ChatRequest::new(judge.model.clone())
+        .temperature(judge.temperature)
+        .user(rendered);
+
+    if let Some(max_tokens) = judge.max_tokens {
+        request = request.max_tokens(max_tokens);
+    }
+
+    if let Some(seed) = judge.seed {
+        request = request.seed(seed);
+    }
+
+    if let Some(reasoning) = &judge.reasoning {
+        request = request.reasoning(reasoning.clone());
+    }
+
+    Ok(request)
 }
 
 fn render_value<T>(field: &'static str, value: &T) -> Result<String, PromptRenderError>
@@ -989,6 +1366,7 @@ where
         normalized.push(ClassifierLabel {
             label: name.to_owned(),
             description,
+            metadata: label.metadata,
             score: label.score,
         });
     }
@@ -1024,13 +1402,19 @@ fn extract_label_scores(
     Ok(scores)
 }
 
-fn calibrated_label_metadata(label: &str, score: f64, labels: &[ClassifierLabel]) -> Value {
+fn calibrated_label_metadata(
+    label: &str,
+    score: f64,
+    labels: &[ClassifierLabel],
+    judge: Value,
+) -> Value {
     let labels = labels
         .iter()
         .map(|label| {
             json!({
                 "label": label.label,
                 "description": label.description,
+                "metadata": label.metadata,
                 "score": label.score,
             })
         })
@@ -1041,7 +1425,8 @@ fn calibrated_label_metadata(label: &str, score: f64, labels: &[ClassifierLabel]
             "label": label,
             "score": score,
             "labels": labels,
-        }
+        },
+        "judge": judge["judge"].clone(),
     })
 }
 
@@ -1075,11 +1460,51 @@ fn render_numbered_list(entries: &[String]) -> String {
     rendered.trim_end().to_owned()
 }
 
+fn build_g_eval_step_plan_prompt(criteria: &[String], max_generated_steps: usize) -> PromptTemplate {
+    let criteria_json =
+        serde_json::to_string(criteria).expect("criteria serialize into JSON array");
+    let prompt = G_EVAL_STEP_PLAN_PROMPT_TEMPLATE
+        .replace("{{criteria_numbered}}", &render_numbered_list(criteria))
+        .replace("{{criteria_json}}", &criteria_json)
+        .replace("{{max_generated_steps}}", &max_generated_steps.to_string());
+
+    PromptTemplate::new(prompt)
+}
+
+fn normalize_generated_steps(
+    steps: Vec<String>,
+    max_generated_steps: usize,
+) -> Result<Vec<String>, ScorerError> {
+    let normalized = normalize_entries("steps", steps).map_err(ScorerError::invalid_input)?;
+
+    Ok(normalized
+        .into_iter()
+        .take(max_generated_steps.max(1))
+        .collect())
+}
+
+fn merge_g_eval_plan_metadata(metadata: &mut Value, criteria: &[String], steps: &[String]) {
+    let Some(root) = metadata.as_object_mut() else {
+        *metadata = json!({});
+        merge_g_eval_plan_metadata(metadata, criteria, steps);
+        return;
+    };
+
+    root.insert(
+        String::from("g_eval"),
+        json!({
+            "criteria": criteria,
+            "generated_steps": steps,
+            "mode": "multi_pass",
+        }),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         ClassifierLabel, LlmJudgeBuildError, LlmJudgeOutput, PromptTemplate,
-        calibrated_llm_classifier, g_eval, g_eval_with_steps, llm_classifier,
+        calibrated_llm_classifier, g_eval, g_eval_multi_pass, g_eval_with_steps, llm_classifier,
         llm_classifier_with_labels, llm_judge,
     };
     use anyllm::{
@@ -1309,7 +1734,8 @@ mod tests {
                 ClassifierLabel::new("approve")
                     .description("Use when the answer is correct and grounded."),
                 ClassifierLabel::new("reject")
-                    .description("Use when the answer is wrong or unsupported."),
+                    .description("Use when the answer is wrong or unsupported.")
+                    .metadata(serde_json::json!({ "severity": "high" })),
             ],
             "Classify whether the answer should be accepted.",
         )
@@ -1334,6 +1760,7 @@ mod tests {
         assert!(
             rendered.contains("\"description\":\"Use when the answer is wrong or unsupported.\"")
         );
+        assert!(rendered.contains("\"severity\":\"high\""));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1354,6 +1781,7 @@ mod tests {
                     .score(1.0),
                 ClassifierLabel::new("reject")
                     .description("Use when the answer is wrong or unsupported.")
+                    .metadata(serde_json::json!({ "severity": "high" }))
                     .score(0.0),
             ],
             "Classify whether the answer should be accepted.",
@@ -1381,6 +1809,7 @@ mod tests {
                     metadata["classifier"]["labels"][1]["description"],
                     "Use when the answer is wrong or unsupported."
                 );
+                assert_eq!(metadata["classifier"]["labels"][1]["metadata"]["severity"], "high");
             }
             other => panic!("expected structured score, got {other:?}"),
         }
@@ -1483,6 +1912,61 @@ mod tests {
             !rendered.contains("Read the input, candidate output, and reference before scoring.")
         );
         assert!(rendered.contains("[\"Check factual correctness against the reference.\",\"Penalize unsupported claims.\"]"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn g_eval_multi_pass_generates_steps_before_scoring() {
+        let provider = MockProvider::from_responses([
+            ChatResponseBuilder::new()
+                .text(r#"{"steps":["Check correctness against the reference.","Penalize unsupported claims."]}"#)
+                .build(),
+            ChatResponseBuilder::new()
+                .text(r#"{"score":0.8,"reasoning":"The answer is mostly correct.","metadata":{"method":"g_eval"}}"#)
+                .build(),
+        ])
+        .with_supported_chat_capabilities([ChatCapability::StructuredOutput]);
+
+        let scorer = g_eval_multi_pass(provider.clone(), "judge-model", ["correctness"]).unwrap();
+        let input = "question".to_string();
+        let output = "answer".to_string();
+        let reference = "gold".to_string();
+        let ctx = ScorerContext::new(&input, &output, Some(&reference));
+
+        let score = scorer.score(&ctx).await.unwrap();
+
+        match score {
+            Score::Structured {
+                score,
+                reasoning,
+                metadata,
+            } => {
+                assert_eq!(score, 0.8);
+                assert_eq!(reasoning, "The answer is mostly correct.");
+                assert_eq!(metadata["g_eval"]["mode"], "multi_pass");
+                assert_eq!(
+                    metadata["g_eval"]["generated_steps"],
+                    serde_json::json!([
+                        "Check correctness against the reference.",
+                        "Penalize unsupported claims."
+                    ])
+                );
+            }
+            other => panic!("expected structured score, got {other:?}"),
+        }
+
+        assert_eq!(provider.call_count(), 2);
+        let requests = provider.requests();
+        let planning = requests[0].messages[0].as_user().unwrap();
+        let scoring = requests[1].messages[0].as_user().unwrap();
+        let UserContent::Text(planning_prompt) = planning.content else {
+            panic!("expected planning text user content")
+        };
+        let UserContent::Text(scoring_prompt) = scoring.content else {
+            panic!("expected scoring text user content")
+        };
+        assert!(planning_prompt.contains("Generate at most 4 steps."));
+        assert!(scoring_prompt.contains("Check correctness against the reference."));
+        assert!(scoring_prompt.contains("Penalize unsupported claims."));
     }
 
     #[test]

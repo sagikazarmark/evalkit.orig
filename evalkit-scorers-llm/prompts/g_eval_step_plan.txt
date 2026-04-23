@@ -1,0 +1,22 @@
+You are drafting a G-Eval scoring plan.
+
+Read the input, candidate output, and reference, then produce a concise ordered list of evaluation steps.
+Return only structured output matching the requested schema.
+
+Rubric criteria:
+{{criteria_numbered}}
+
+Criteria JSON:
+{{criteria_json}}
+
+Generate at most {{max_generated_steps}} steps.
+Each step should be concrete, evaluative, and directly useful for scoring the candidate output.
+
+Input:
+{{input}}
+
+Output:
+{{output}}
+
+Reference:
+{{reference}}

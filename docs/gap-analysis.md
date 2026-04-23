@@ -86,17 +86,17 @@ Already present:
 - First-pass `llm_classifier` and `g_eval` wrappers now build on top of the shared judge primitive
 - Prompt templates now live under `evalkit-scorers-llm/prompts/` and can be overridden with `LlmJudge::with_prompt`
 - The kernel now aggregates scorer-side token usage and cost through `score_with_resources`, and judge token usage can flow into `SampleResult`
+- `evalkit-scorers-llm::ModelPricing` now lets judge scorers estimate portable `cost_usd` from provider token usage when callers configure pricing
 - `g_eval` now auto-generates explicit evaluation steps from rubric criteria and also supports caller-provided step overrides
+- `g_eval_multi_pass` now performs a planning pass that drafts evaluation steps before the final scoring pass
 - `llm_classifier` now accepts richer typed label definitions with optional descriptions, not just bare label strings
+- classifier labels now support arbitrary per-label metadata that is preserved in prompts and calibrated structured score metadata
 - `calibrated_llm_classifier` can now turn label outputs into numeric `Score::Structured` results using per-label calibration scores
 - Reference TypeScript plugin shim source now lives under `typescript/evalkit_plugin/`
 - `devenv.nix` now enables Bun and the TypeScript plugin shim typechecks successfully through `devenv shell`
 
 Gaps:
-- anyllm-backed judges currently populate token usage in `SampleResult`, but not cost because the provider layer does not expose portable cost data yet
 - Reasoning capture is currently limited to numeric and binary judges because `Score::Structured` requires a numeric primary score
-- `llm_classifier` now supports richer label definitions and calibrated structured scores, but richer classifier-side metadata still remains
-- `g_eval` now has explicit steps, but it is still not a fuller multi-pass or self-generated evaluation flow
 
 ## Phase 2 - Streaming / Online Scoring
 
