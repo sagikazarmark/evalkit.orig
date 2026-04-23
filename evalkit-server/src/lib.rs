@@ -4,14 +4,16 @@ use std::sync::Arc;
 
 use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::get;
-use axum::{Json, Router};
+use axum::{Form, Json, Router};
 use chrono::Utc;
 use evalkit::{CompareConfig, Comparison, RunResult, Sample, compare};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fs::OpenOptions;
+use std::io::Write;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -64,6 +66,19 @@ pub struct AnnotationRecord {
     pub note: String,
     pub created_at: chrono::DateTime<Utc>,
     pub promoted_at: Option<chrono::DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PromoteAnnotationsRequest {
+    pub output_path: String,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PromotionResult {
+    pub exported_count: usize,
+    pub output_path: String,
 }
 
 #[derive(Debug)]
@@ -256,6 +271,78 @@ impl RunStore {
         Ok(annotations)
     }
 
+    pub fn promote_annotations(
+        &self,
+        run_id: &str,
+        request: &PromoteAnnotationsRequest,
+    ) -> Result<PromotionResult, ServerError> {
+        let run = self
+            .get_run(run_id)?
+            .ok_or_else(|| ServerError::NotFound(format!("run `{run_id}` not found")))?;
+        let annotations = self.list_annotations(run_id)?;
+        let selected = annotations
+            .into_iter()
+            .filter(|annotation| {
+                request
+                    .label
+                    .as_ref()
+                    .is_none_or(|label| label == &annotation.label)
+            })
+            .collect::<Vec<_>>();
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&request.output_path)
+            .map_err(store_error)?;
+        let mut exported_ids = Vec::new();
+        let sample_by_id = run
+            .samples
+            .iter()
+            .map(|sample| (sample.id.clone(), sample))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        for annotation in &selected {
+            let Some(sample) = sample_by_id.get(&annotation.sample_id) else {
+                continue;
+            };
+
+            let mut promoted = (*sample).clone();
+            promoted.metadata.insert(
+                String::from("annotation"),
+                serde_json::json!({
+                    "run_id": annotation.run_id,
+                    "label": annotation.label,
+                    "note": annotation.note,
+                    "annotation_id": annotation.id,
+                }),
+            );
+            serde_json::to_writer(&mut file, &promoted).map_err(|err| {
+                ServerError::Store(format!("failed to serialize promoted sample: {err}"))
+            })?;
+            file.write_all(b"\n").map_err(store_error)?;
+            exported_ids.push(annotation.id);
+        }
+
+        if !exported_ids.is_empty() {
+            let connection = self.connection()?;
+            let promoted_at = Utc::now().to_rfc3339();
+            for annotation_id in &exported_ids {
+                connection
+                    .execute(
+                        "UPDATE annotations SET promoted_at = ?1 WHERE id = ?2",
+                        params![promoted_at, annotation_id],
+                    )
+                    .map_err(store_error)?;
+            }
+        }
+
+        Ok(PromotionResult {
+            exported_count: exported_ids.len(),
+            output_path: request.output_path.clone(),
+        })
+    }
+
     fn init_schema(&self) -> Result<(), ServerError> {
         let connection = self.connection()?;
         connection
@@ -296,10 +383,13 @@ pub fn router(store: RunStore) -> Router {
         .route("/", get(home_page))
         .route("/runs/:run_id", get(run_detail_page))
         .route("/runs/:left/diff/:right", get(diff_page))
+        .route("/runs/:run_id/annotations", axum::routing::post(create_annotation_form))
+        .route("/runs/:run_id/promote", axum::routing::post(promote_annotations_form))
         .route("/healthz", get(healthz))
         .route("/api/runs", get(list_runs).post(create_run))
         .route("/api/runs/:run_id", get(get_run))
         .route("/api/runs/:run_id/annotations", get(list_annotations).post(create_annotation))
+        .route("/api/runs/:run_id/promote", axum::routing::post(promote_annotations))
         .route("/api/runs/:left/diff/:right", get(diff_runs))
         .with_state(state)
 }
@@ -356,6 +446,32 @@ async fn list_annotations(
     AxumPath(run_id): AxumPath<String>,
 ) -> Result<Json<Vec<AnnotationRecord>>, ServerError> {
     Ok(Json(state.store.list_annotations(&run_id)?))
+}
+
+async fn promote_annotations(
+    State(state): State<AppState>,
+    AxumPath(run_id): AxumPath<String>,
+    Json(request): Json<PromoteAnnotationsRequest>,
+) -> Result<Json<PromotionResult>, ServerError> {
+    Ok(Json(state.store.promote_annotations(&run_id, &request)?))
+}
+
+async fn create_annotation_form(
+    State(state): State<AppState>,
+    AxumPath(run_id): AxumPath<String>,
+    Form(annotation): Form<CreateAnnotation>,
+) -> Result<Redirect, ServerError> {
+    state.store.create_annotation(&run_id, &annotation)?;
+    Ok(Redirect::to(&format!("/runs/{run_id}")))
+}
+
+async fn promote_annotations_form(
+    State(state): State<AppState>,
+    AxumPath(run_id): AxumPath<String>,
+    Form(request): Form<PromoteAnnotationsRequest>,
+) -> Result<Redirect, ServerError> {
+    state.store.promote_annotations(&run_id, &request)?;
+    Ok(Redirect::to(&format!("/runs/{run_id}")))
 }
 
 async fn run_detail_page(
@@ -454,6 +570,11 @@ fn render_run_detail_page(run: &StoredRun, annotations: &[AnnotationRecord]) -> 
                 ));
             }
         }
+        html.push_str(&format!(
+            "</ul><form method=\"post\" action=\"/runs/{run_id}/annotations\"><input type=\"hidden\" name=\"sample_id\" value=\"{sample_id}\"><label>Label <input name=\"label\" required></label><br><label>Note <textarea name=\"note\"></textarea></label><br><button type=\"submit\">Save annotation</button></form>",
+            run_id = run.result.metadata.run_id,
+            sample_id = escape_html(&sample.sample_id),
+        ));
         html.push_str("</ul></article>");
     }
 
@@ -464,14 +585,23 @@ fn render_run_detail_page(run: &StoredRun, annotations: &[AnnotationRecord]) -> 
         html.push_str("<ul>");
         for annotation in annotations {
             html.push_str(&format!(
-                "<li><strong>{}</strong> on {}: {}</li>",
+                "<li><strong>{}</strong> on {}: {}{}</li>",
                 escape_html(&annotation.label),
                 escape_html(&annotation.sample_id),
                 escape_html(&annotation.note),
+                annotation
+                    .promoted_at
+                    .as_ref()
+                    .map(|timestamp| format!(" <em>(promoted {})</em>", timestamp))
+                    .unwrap_or_default(),
             ));
         }
         html.push_str("</ul>");
     }
+    html.push_str(&format!(
+        "<form method=\"post\" action=\"/runs/{}/promote\"><label>Output path <input name=\"output_path\" value=\"annotations.jsonl\" required></label><br><label>Filter label <input name=\"label\"></label><br><button type=\"submit\">Promote annotations</button></form>",
+        run.result.metadata.run_id
+    ));
     html.push_str("</section></body></html>");
     html
 }
@@ -543,7 +673,7 @@ fn escape_html(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CreateAnnotation, RunStore, StoredRun};
+    use super::{CreateAnnotation, PromoteAnnotationsRequest, RunStore, StoredRun};
     use chrono::{Duration, Utc};
     use evalkit::{Direction, RunMetadata, RunResult, Sample, SampleResult, Score, ScoreDefinition, TrialResult};
     use serde_json::json;
@@ -627,5 +757,21 @@ mod tests {
             .unwrap();
         assert_eq!(annotation.label, "needs_review");
         assert_eq!(store.list_annotations("run-a").unwrap().len(), 1);
+
+        let output_path = temp.path().join("promoted.jsonl");
+        let promotion = store
+            .promote_annotations(
+                "run-a",
+                &PromoteAnnotationsRequest {
+                    output_path: output_path.display().to_string(),
+                    label: Some(String::from("needs_review")),
+                },
+            )
+            .unwrap();
+        assert_eq!(promotion.exported_count, 1);
+        let promoted = std::fs::read_to_string(&output_path).unwrap();
+        assert!(promoted.contains("sample-a"));
+        assert!(promoted.contains("needs_review"));
+        assert!(store.list_annotations("run-a").unwrap()[0].promoted_at.is_some());
     }
 }
