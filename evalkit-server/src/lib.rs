@@ -3,7 +3,7 @@ use std::fmt::{self, Display, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::get;
@@ -139,6 +139,63 @@ pub struct DriftStatus {
     pub measurement: DriftMeasurement,
     pub threshold: f64,
     pub triggered: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewFilter {
+    #[default]
+    All,
+    Unreviewed,
+    Failing,
+    NeedsReview,
+    Approved,
+    Rejected,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ReviewPageQuery {
+    #[serde(default)]
+    filter: ReviewFilter,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReviewAnnotationForm {
+    sample_id: String,
+    label: String,
+    #[serde(default)]
+    note: String,
+    #[serde(default)]
+    filter: ReviewFilter,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReviewStatus {
+    Unreviewed,
+    Approved,
+    Rejected,
+    NeedsReview,
+    Annotated,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ReviewSummary {
+    total_samples: usize,
+    failing_samples: usize,
+    unreviewed_samples: usize,
+    approved_samples: usize,
+    rejected_samples: usize,
+    needs_review_samples: usize,
+    annotated_samples: usize,
+}
+
+struct ReviewSampleRow<'a> {
+    source_sample: Option<&'a Sample<Value, Value>>,
+    result_sample: &'a evalkit::SampleResult,
+    latest_annotation: Option<&'a AnnotationRecord>,
+    annotations: Vec<&'a AnnotationRecord>,
+    review_status: ReviewStatus,
+    has_failure: bool,
 }
 
 #[derive(Debug)]
@@ -589,10 +646,15 @@ pub fn router(store: RunStore) -> Router {
         .route("/", get(home_page))
         .route("/dashboard", get(dashboard_page))
         .route("/runs/:run_id", get(run_detail_page))
+        .route("/runs/:run_id/review", get(review_queue_page))
         .route("/runs/:left/diff/:right", get(diff_page))
         .route(
             "/runs/:run_id/annotations",
             axum::routing::post(create_annotation_form),
+        )
+        .route(
+            "/runs/:run_id/review/annotations",
+            axum::routing::post(review_annotation_form),
         )
         .route(
             "/runs/:run_id/promote",
@@ -730,8 +792,34 @@ async fn run_detail_page(
         .get_run(&run_id)?
         .ok_or_else(|| ServerError::NotFound(format!("run `{run_id}` not found")))?;
     let annotations = state.store.list_annotations(&run_id)?;
+    let (summary, rows) = build_review_rows(&run, &annotations);
 
-    Ok(Html(render_run_detail_page(&run, &annotations)))
+    Ok(Html(render_run_detail_page(
+        &run,
+        &annotations,
+        &summary,
+        &rows,
+    )))
+}
+
+async fn review_queue_page(
+    State(state): State<AppState>,
+    AxumPath(run_id): AxumPath<String>,
+    Query(query): Query<ReviewPageQuery>,
+) -> Result<Html<String>, ServerError> {
+    let run = state
+        .store
+        .get_run(&run_id)?
+        .ok_or_else(|| ServerError::NotFound(format!("run `{run_id}` not found")))?;
+    let annotations = state.store.list_annotations(&run_id)?;
+    let (summary, rows) = build_review_rows(&run, &annotations);
+
+    Ok(Html(render_review_queue_page(
+        &run,
+        query.filter,
+        &summary,
+        &rows,
+    )))
 }
 
 async fn diff_page(
@@ -740,6 +828,32 @@ async fn diff_page(
 ) -> Result<Html<String>, ServerError> {
     let comparison = state.store.diff_runs(&left, &right)?;
     Ok(Html(render_diff_page(&comparison)))
+}
+
+async fn review_annotation_form(
+    State(state): State<AppState>,
+    AxumPath(run_id): AxumPath<String>,
+    Form(form): Form<ReviewAnnotationForm>,
+) -> Result<Redirect, ServerError> {
+    let ReviewAnnotationForm {
+        sample_id,
+        label,
+        note,
+        filter,
+    } = form;
+    state.store.create_annotation(
+        &run_id,
+        &CreateAnnotation {
+            sample_id,
+            label,
+            note,
+        },
+    )?;
+
+    Ok(Redirect::to(&format!(
+        "/runs/{run_id}/review?filter={}",
+        filter.as_query_value()
+    )))
 }
 
 async fn create_alert_rule(
@@ -807,6 +921,10 @@ fn render_home_page(runs: &[RunSummary]) -> String {
                 right = next.run_id,
             ));
         }
+        html.push_str(&format!(
+            "<p><a href=\"/runs/{}/review\">Open review queue</a></p>",
+            run.run_id,
+        ));
         html.push_str("</article>");
     }
 
@@ -814,48 +932,37 @@ fn render_home_page(runs: &[RunSummary]) -> String {
     html
 }
 
-fn render_run_detail_page(run: &StoredRun, annotations: &[AnnotationRecord]) -> String {
+fn render_run_detail_page(
+    run: &StoredRun,
+    annotations: &[AnnotationRecord],
+    summary: &ReviewSummary,
+    rows: &[ReviewSampleRow<'_>],
+) -> String {
     let mut html = page_shell(
         &format!("Run {}", run.result.metadata.run_id),
         format!(
-            "<h1>Run {}</h1><p><strong>Acquisition:</strong> {}<br><strong>Samples:</strong> {}<br><strong>Started:</strong> {}</p>",
+            "<h1>Run {}</h1><p><strong>Acquisition:</strong> {}<br><strong>Samples:</strong> {}<br><strong>Started:</strong> {}<br><a href=\"/runs/{}/review\">Open review queue</a></p>",
             run.result.metadata.run_id,
             escape_html(&run.result.metadata.acquisition_mode),
             run.result.samples.len(),
             run.result.metadata.started_at,
+            run.result.metadata.run_id,
         ),
     );
+    html.push_str(&render_review_summary(
+        &run.result.metadata.run_id,
+        summary,
+        ReviewFilter::All,
+    ));
     html.push_str("<section><h2>Samples</h2>");
 
-    for sample in &run.result.samples {
-        let status = if sample_has_failure(sample) {
-            "sample-failed"
-        } else {
-            "sample-ok"
-        };
-        html.push_str(&format!(
-            "<article class=\"card {status}\"><h3>{id}</h3><p><strong>Trials:</strong> {trials} · <strong>Scored:</strong> {scored} · <strong>Errors:</strong> {errors}</p>",
-            id = escape_html(&sample.sample_id),
-            trials = sample.trial_count,
-            scored = sample.scored_count,
-            errors = sample.error_count,
+    for row in rows {
+        html.push_str(&render_review_sample_card(
+            &run.result.metadata.run_id,
+            row,
+            ReviewFilter::All,
+            false,
         ));
-        html.push_str("<ul>");
-        for trial in &sample.trials {
-            for (name, score) in &trial.scores {
-                html.push_str(&format!(
-                    "<li><strong>{}</strong>: {}</li>",
-                    escape_html(name),
-                    escape_html(&format_score(score))
-                ));
-            }
-        }
-        html.push_str(&format!(
-            "</ul><form method=\"post\" action=\"/runs/{run_id}/annotations\"><input type=\"hidden\" name=\"sample_id\" value=\"{sample_id}\"><label>Label <input name=\"label\" required></label><br><label>Note <textarea name=\"note\"></textarea></label><br><button type=\"submit\">Save annotation</button></form>",
-            run_id = run.result.metadata.run_id,
-            sample_id = escape_html(&sample.sample_id),
-        ));
-        html.push_str("</ul></article>");
     }
 
     html.push_str("</section><section><h2>Annotations</h2>");
@@ -882,6 +989,48 @@ fn render_run_detail_page(run: &StoredRun, annotations: &[AnnotationRecord]) -> 
         "<form method=\"post\" action=\"/runs/{}/promote\"><label>Output path <input name=\"output_path\" value=\"annotations.jsonl\" required></label><br><label>Filter label <input name=\"label\"></label><br><button type=\"submit\">Promote annotations</button></form>",
         run.result.metadata.run_id
     ));
+    html.push_str("</section></body></html>");
+    html
+}
+
+fn render_review_queue_page(
+    run: &StoredRun,
+    filter: ReviewFilter,
+    summary: &ReviewSummary,
+    rows: &[ReviewSampleRow<'_>],
+) -> String {
+    let filtered_rows = rows
+        .iter()
+        .filter(|row| filter.matches(row))
+        .collect::<Vec<_>>();
+    let mut html = page_shell(
+        &format!("Review {}", run.result.metadata.run_id),
+        format!(
+            "<h1>Review Queue</h1><p><strong>Run:</strong> <a href=\"/runs/{id}\">{id}</a><br><strong>Showing:</strong> {count} of {total} samples for {filter}</p>",
+            id = escape_html(&run.result.metadata.run_id),
+            count = filtered_rows.len(),
+            total = summary.total_samples,
+            filter = escape_html(filter.label()),
+        ),
+    );
+    html.push_str(&render_review_summary(
+        &run.result.metadata.run_id,
+        summary,
+        filter,
+    ));
+    html.push_str("<section><h2>Triage Queue</h2>");
+    if filtered_rows.is_empty() {
+        html.push_str("<p>No samples match this review filter.</p>");
+    } else {
+        for row in filtered_rows {
+            html.push_str(&render_review_sample_card(
+                &run.result.metadata.run_id,
+                row,
+                filter,
+                true,
+            ));
+        }
+    }
     html.push_str("</section></body></html>");
     html
 }
@@ -1000,9 +1149,348 @@ fn render_diff_page(comparison: &Comparison) -> String {
     html
 }
 
+impl ReviewFilter {
+    fn as_query_value(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Unreviewed => "unreviewed",
+            Self::Failing => "failing",
+            Self::NeedsReview => "needs_review",
+            Self::Approved => "approved",
+            Self::Rejected => "rejected",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "All samples",
+            Self::Unreviewed => "Unreviewed",
+            Self::Failing => "Failing",
+            Self::NeedsReview => "Needs review",
+            Self::Approved => "Approved",
+            Self::Rejected => "Rejected",
+        }
+    }
+
+    fn matches(self, row: &ReviewSampleRow<'_>) -> bool {
+        match self {
+            Self::All => true,
+            Self::Unreviewed => row.review_status == ReviewStatus::Unreviewed,
+            Self::Failing => row.has_failure,
+            Self::NeedsReview => row.review_status == ReviewStatus::NeedsReview,
+            Self::Approved => row.review_status == ReviewStatus::Approved,
+            Self::Rejected => row.review_status == ReviewStatus::Rejected,
+        }
+    }
+
+    fn count(self, summary: &ReviewSummary) -> usize {
+        match self {
+            Self::All => summary.total_samples,
+            Self::Unreviewed => summary.unreviewed_samples,
+            Self::Failing => summary.failing_samples,
+            Self::NeedsReview => summary.needs_review_samples,
+            Self::Approved => summary.approved_samples,
+            Self::Rejected => summary.rejected_samples,
+        }
+    }
+}
+
+impl ReviewSummary {
+    fn pending_samples(&self) -> usize {
+        self.unreviewed_samples + self.needs_review_samples
+    }
+}
+
+fn build_review_rows<'a>(
+    run: &'a StoredRun,
+    annotations: &'a [AnnotationRecord],
+) -> (ReviewSummary, Vec<ReviewSampleRow<'a>>) {
+    let source_by_id = run
+        .samples
+        .iter()
+        .map(|sample| (sample.id.as_str(), sample))
+        .collect::<HashMap<_, _>>();
+    let mut annotations_by_sample = HashMap::<&str, Vec<&AnnotationRecord>>::new();
+    for annotation in annotations {
+        annotations_by_sample
+            .entry(annotation.sample_id.as_str())
+            .or_default()
+            .push(annotation);
+    }
+    for grouped in annotations_by_sample.values_mut() {
+        grouped.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+    }
+
+    let mut summary = ReviewSummary::default();
+    let mut rows = Vec::new();
+    for sample in &run.result.samples {
+        let annotations = annotations_by_sample
+            .remove(sample.sample_id.as_str())
+            .unwrap_or_default();
+        let latest_annotation = annotations.last().copied();
+        let review_status = review_status(latest_annotation);
+        let has_failure = sample_has_failure(sample);
+
+        summary.total_samples += 1;
+        if has_failure {
+            summary.failing_samples += 1;
+        }
+        if latest_annotation.is_some() {
+            summary.annotated_samples += 1;
+        }
+        match review_status {
+            ReviewStatus::Unreviewed => summary.unreviewed_samples += 1,
+            ReviewStatus::Approved => summary.approved_samples += 1,
+            ReviewStatus::Rejected => summary.rejected_samples += 1,
+            ReviewStatus::NeedsReview => summary.needs_review_samples += 1,
+            ReviewStatus::Annotated => {}
+        }
+
+        rows.push(ReviewSampleRow {
+            source_sample: source_by_id.get(sample.sample_id.as_str()).copied(),
+            result_sample: sample,
+            latest_annotation,
+            annotations,
+            review_status,
+            has_failure,
+        });
+    }
+
+    rows.sort_by(|left, right| {
+        review_priority(left)
+            .cmp(&review_priority(right))
+            .then_with(|| {
+                left.result_sample
+                    .sample_id
+                    .cmp(&right.result_sample.sample_id)
+            })
+    });
+
+    (summary, rows)
+}
+
+fn review_status(annotation: Option<&AnnotationRecord>) -> ReviewStatus {
+    let Some(annotation) = annotation else {
+        return ReviewStatus::Unreviewed;
+    };
+    if annotation.label.eq_ignore_ascii_case("approved") {
+        ReviewStatus::Approved
+    } else if annotation.label.eq_ignore_ascii_case("rejected") {
+        ReviewStatus::Rejected
+    } else if annotation.label.eq_ignore_ascii_case("needs_review") {
+        ReviewStatus::NeedsReview
+    } else {
+        ReviewStatus::Annotated
+    }
+}
+
+fn review_priority(row: &ReviewSampleRow<'_>) -> usize {
+    match (row.review_status, row.has_failure) {
+        (ReviewStatus::NeedsReview, true) => 0,
+        (ReviewStatus::Unreviewed, true) => 1,
+        (ReviewStatus::NeedsReview, false) => 2,
+        (ReviewStatus::Unreviewed, false) => 3,
+        (_, true) => 4,
+        (ReviewStatus::Rejected, false) => 5,
+        (ReviewStatus::Annotated, false) => 6,
+        (ReviewStatus::Approved, false) => 7,
+    }
+}
+
+fn render_review_summary(
+    run_id: &str,
+    summary: &ReviewSummary,
+    active_filter: ReviewFilter,
+) -> String {
+    let mut html = String::from("<section><h2>Review Summary</h2>");
+    html.push_str(&format!(
+        "<div class=\"stats\"><article class=\"stat-card\"><strong>{}</strong><span>Total samples</span></article><article class=\"stat-card\"><strong>{}</strong><span>Pending triage</span></article><article class=\"stat-card\"><strong>{}</strong><span>Failing samples</span></article><article class=\"stat-card\"><strong>{}</strong><span>Approved</span></article><article class=\"stat-card\"><strong>{}</strong><span>Rejected</span></article><article class=\"stat-card\"><strong>{}</strong><span>Needs review</span></article></div>",
+        summary.total_samples,
+        summary.pending_samples(),
+        summary.failing_samples,
+        summary.approved_samples,
+        summary.rejected_samples,
+        summary.needs_review_samples,
+    ));
+    html.push_str("<div class=\"filters\">");
+    for filter in [
+        ReviewFilter::All,
+        ReviewFilter::Unreviewed,
+        ReviewFilter::Failing,
+        ReviewFilter::NeedsReview,
+        ReviewFilter::Approved,
+        ReviewFilter::Rejected,
+    ] {
+        let active_class = if filter == active_filter {
+            "filter-link active"
+        } else {
+            "filter-link"
+        };
+        html.push_str(&format!(
+            "<a class=\"{}\" href=\"/runs/{}/review?filter={}\">{} ({})</a>",
+            active_class,
+            run_id,
+            filter.as_query_value(),
+            escape_html(filter.label()),
+            filter.count(summary),
+        ));
+    }
+    html.push_str("</div></section>");
+    html
+}
+
+fn render_review_sample_card(
+    run_id: &str,
+    row: &ReviewSampleRow<'_>,
+    filter: ReviewFilter,
+    quick_actions: bool,
+) -> String {
+    let mut html = format!(
+        "<article id=\"sample-{}\" class=\"card {}\"><div class=\"sample-header\"><div><h3>{}</h3><p class=\"muted\"><strong>Trials:</strong> {} · <strong>Scored:</strong> {} · <strong>Errors:</strong> {}</p></div><div class=\"badges\">{}{} </div></div>",
+        escape_html(&row.result_sample.sample_id),
+        sample_card_class(row),
+        escape_html(&row.result_sample.sample_id),
+        row.result_sample.trial_count,
+        row.result_sample.scored_count,
+        row.result_sample.error_count,
+        render_badge(
+            review_status_badge_label(row.review_status),
+            review_status_badge_class(row.review_status)
+        ),
+        if row.has_failure {
+            render_badge("failing", "badge-failing")
+        } else {
+            String::new()
+        },
+    );
+    html.push_str("<div class=\"score-grid\"><section><h4>Scores</h4><ul>");
+    for trial in &row.result_sample.trials {
+        for (name, score) in &trial.scores {
+            html.push_str(&format!(
+                "<li><strong>{}</strong>: {}</li>",
+                escape_html(name),
+                escape_html(&format_score(score)),
+            ));
+        }
+    }
+    html.push_str("</ul></section><section><h4>Source Sample</h4>");
+    if let Some(source_sample) = row.source_sample {
+        html.push_str(&render_json_block("Input", &source_sample.input));
+        if let Some(reference) = &source_sample.reference {
+            html.push_str(&render_json_block("Reference", reference));
+        }
+        if !source_sample.metadata.is_empty() {
+            html.push_str(&render_json_block("Metadata", &source_sample.metadata));
+        }
+    } else {
+        html.push_str("<p class=\"muted\">No stored source sample snapshot for this result.</p>");
+    }
+    html.push_str("</section></div>");
+
+    if let Some(annotation) = row.latest_annotation {
+        html.push_str(&format!(
+            "<p><strong>Latest annotation:</strong> {}{} <span class=\"muted\">at {}</span></p>",
+            escape_html(&annotation.label),
+            if annotation.note.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", escape_html(&annotation.note))
+            },
+            annotation.created_at,
+        ));
+    } else {
+        html.push_str("<p class=\"muted\">No review decision recorded yet.</p>");
+    }
+
+    if row.annotations.len() > 1 {
+        html.push_str("<details><summary>Annotation history</summary><ul>");
+        for annotation in row.annotations.iter().rev() {
+            html.push_str(&format!(
+                "<li><strong>{}</strong>{} <span class=\"muted\">{}</span></li>",
+                escape_html(&annotation.label),
+                if annotation.note.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", escape_html(&annotation.note))
+                },
+                annotation.created_at,
+            ));
+        }
+        html.push_str("</ul></details>");
+    }
+
+    if quick_actions {
+        html.push_str(&format!(
+            "<form method=\"post\" action=\"/runs/{run_id}/review/annotations\" class=\"review-form\"><input type=\"hidden\" name=\"sample_id\" value=\"{sample_id}\"><input type=\"hidden\" name=\"filter\" value=\"{filter}\"><label>Review note <textarea name=\"note\" placeholder=\"Why does this need attention?\"></textarea></label><div class=\"action-row\"><button type=\"submit\" name=\"label\" value=\"approved\">Approve</button><button type=\"submit\" name=\"label\" value=\"needs_review\">Needs review</button><button type=\"submit\" name=\"label\" value=\"rejected\">Reject</button></div></form>",
+            run_id = run_id,
+            sample_id = escape_html(&row.result_sample.sample_id),
+            filter = filter.as_query_value(),
+        ));
+    } else {
+        html.push_str(&format!(
+            "<form method=\"post\" action=\"/runs/{run_id}/annotations\"><input type=\"hidden\" name=\"sample_id\" value=\"{sample_id}\"><label>Label <input name=\"label\" required></label><br><label>Note <textarea name=\"note\"></textarea></label><br><button type=\"submit\">Save annotation</button></form>",
+            run_id = run_id,
+            sample_id = escape_html(&row.result_sample.sample_id),
+        ));
+    }
+
+    html.push_str("</article>");
+    html
+}
+
+fn render_json_block(label: &str, value: &impl Serialize) -> String {
+    let pretty =
+        serde_json::to_string_pretty(value).unwrap_or_else(|_| String::from("\"<unrenderable>\""));
+    format!(
+        "<div class=\"json-block\"><strong>{}</strong><pre>{}</pre></div>",
+        escape_html(label),
+        escape_html(&pretty),
+    )
+}
+
+fn render_badge(label: &str, class_name: &str) -> String {
+    format!(
+        "<span class=\"badge {}\">{}</span>",
+        class_name,
+        escape_html(label),
+    )
+}
+
+fn sample_card_class(row: &ReviewSampleRow<'_>) -> &'static str {
+    if row.has_failure {
+        "sample-failed"
+    } else {
+        "sample-ok"
+    }
+}
+
+fn review_status_badge_label(status: ReviewStatus) -> &'static str {
+    match status {
+        ReviewStatus::Unreviewed => "unreviewed",
+        ReviewStatus::Approved => "approved",
+        ReviewStatus::Rejected => "rejected",
+        ReviewStatus::NeedsReview => "needs review",
+        ReviewStatus::Annotated => "annotated",
+    }
+}
+
+fn review_status_badge_class(status: ReviewStatus) -> &'static str {
+    match status {
+        ReviewStatus::Unreviewed => "badge-pending",
+        ReviewStatus::Approved => "badge-approved",
+        ReviewStatus::Rejected => "badge-rejected",
+        ReviewStatus::NeedsReview => "badge-needs-review",
+        ReviewStatus::Annotated => "badge-annotated",
+    }
+}
+
 fn page_shell(title: &str, body: String) -> String {
     format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>{}</title><style>body{{font-family:Inter,system-ui,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:24px}}a{{color:#7dd3fc}}.runs{{display:grid;gap:16px}}.card{{background:#111827;border:1px solid #334155;border-radius:16px;padding:16px;margin:12px 0}}.sample-failed{{border-color:#f97316}}.sample-ok{{border-color:#22c55e}}ul{{padding-left:20px}}</style></head><body>{}",
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>{}</title><style>body{{font-family:Inter,system-ui,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:24px;line-height:1.5}}a{{color:#7dd3fc}}h1,h2,h3,h4{{margin:0 0 12px}}section{{margin:20px 0}}pre{{white-space:pre-wrap;overflow:auto}}textarea,input{{width:100%;max-width:100%;box-sizing:border-box;margin-top:6px;background:#020617;color:#e2e8f0;border:1px solid #334155;border-radius:10px;padding:10px}}button{{background:#0ea5e9;color:#082f49;border:0;border-radius:999px;padding:10px 14px;font-weight:600;cursor:pointer}}details{{margin-top:12px}}.runs,.stats,.score-grid{{display:grid;gap:16px}}.stats{{grid-template-columns:repeat(auto-fit,minmax(120px,1fr))}}.score-grid{{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}}.filters,.badges,.action-row{{display:flex;gap:10px;flex-wrap:wrap}}.filter-link{{display:inline-flex;padding:8px 12px;border-radius:999px;background:#0b1220;border:1px solid #334155;text-decoration:none}}.filter-link.active{{background:#082f49;border-color:#38bdf8;color:#e0f2fe}}.card,.stat-card{{background:#111827;border:1px solid #334155;border-radius:16px;padding:16px;margin:12px 0}}.stat-card strong{{display:block;font-size:1.4rem}}.stat-card span{{color:#94a3b8;font-size:0.95rem}}.sample-header{{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}}.sample-failed{{border-color:#f97316}}.sample-ok{{border-color:#22c55e}}.badge{{display:inline-flex;align-items:center;border-radius:999px;padding:4px 10px;font-size:0.85rem;border:1px solid transparent}}.badge-pending{{background:#1e293b;color:#cbd5e1}}.badge-approved{{background:#052e16;color:#bbf7d0}}.badge-rejected{{background:#450a0a;color:#fecaca}}.badge-needs-review{{background:#431407;color:#fdba74}}.badge-annotated{{background:#172554;color:#bfdbfe}}.badge-failing{{background:#7c2d12;color:#fed7aa}}.json-block{{margin:12px 0}}.json-block pre{{background:#020617;border:1px solid #334155;border-radius:12px;padding:12px}}.muted{{color:#94a3b8}}.review-form{{margin-top:16px}}</style></head><body>{}",
         escape_html(title),
         body,
     )
@@ -1336,8 +1824,8 @@ fn sample_stddev(values: &[f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        CreateAlertRule, CreateAnnotation, DriftMeasurement, PromoteAnnotationsRequest, RunStore,
-        StoredRun,
+        CreateAlertRule, CreateAnnotation, DriftMeasurement, PromoteAnnotationsRequest,
+        ReviewFilter, RunStore, StoredRun, build_review_rows, render_review_queue_page,
     };
     use chrono::{Duration, Utc};
     use evalkit::{
@@ -1400,6 +1888,62 @@ mod tests {
         run.result.samples[0].trials[0]
             .scores
             .insert(String::from("exact_match"), Ok(Score::Binary(score)));
+        run
+    }
+
+    fn stored_review_run_fixture(run_id: &str) -> StoredRun {
+        let mut run = stored_run_fixture(run_id, "sample-a");
+        run.result.samples[0].trials[0]
+            .scores
+            .insert(String::from("exact_match"), Ok(Score::Binary(true)));
+        run.result.samples.push(SampleResult {
+            sample_id: String::from("sample-b"),
+            trial_count: 1,
+            scored_count: 1,
+            error_count: 0,
+            trials: vec![TrialResult {
+                trial_index: 0,
+                duration: std::time::Duration::from_millis(10),
+                scores: std::collections::HashMap::from([(
+                    String::from("exact_match"),
+                    Ok(Score::Binary(false)),
+                )]),
+            }],
+            token_usage: Default::default(),
+            cost_usd: None,
+        });
+        run.result.samples.push(SampleResult {
+            sample_id: String::from("sample-c"),
+            trial_count: 1,
+            scored_count: 1,
+            error_count: 0,
+            trials: vec![TrialResult {
+                trial_index: 0,
+                duration: std::time::Duration::from_millis(10),
+                scores: std::collections::HashMap::from([(
+                    String::from("exact_match"),
+                    Ok(Score::Binary(true)),
+                )]),
+            }],
+            token_usage: Default::default(),
+            cost_usd: None,
+        });
+        run.samples.push(
+            Sample::builder(json!({ "prompt": "draft a risky email" }))
+                .id("sample-b")
+                .reference(json!("safe"))
+                .metadata("topic", json!("security"))
+                .build()
+                .unwrap(),
+        );
+        run.samples.push(
+            Sample::builder(json!({ "prompt": "summarize this request" }))
+                .id("sample-c")
+                .reference(json!("summary"))
+                .metadata("topic", json!("support"))
+                .build()
+                .unwrap(),
+        );
         run
     }
 
@@ -1519,5 +2063,101 @@ mod tests {
         );
         assert!(drift[0].threshold > 0.0);
         assert!(drift[0].triggered);
+    }
+
+    #[test]
+    fn review_rows_track_latest_annotation_state_and_filters() {
+        let run = stored_review_run_fixture("run-review");
+        let base = Utc::now();
+        let annotations = vec![
+            super::AnnotationRecord {
+                id: 1,
+                run_id: String::from("run-review"),
+                sample_id: String::from("sample-a"),
+                label: String::from("approved"),
+                note: String::from("looked good initially"),
+                created_at: base,
+                promoted_at: None,
+            },
+            super::AnnotationRecord {
+                id: 2,
+                run_id: String::from("run-review"),
+                sample_id: String::from("sample-a"),
+                label: String::from("needs_review"),
+                note: String::from("regression after rerun"),
+                created_at: base + Duration::seconds(1),
+                promoted_at: None,
+            },
+            super::AnnotationRecord {
+                id: 3,
+                run_id: String::from("run-review"),
+                sample_id: String::from("sample-c"),
+                label: String::from("approved"),
+                note: String::from("safe to ship"),
+                created_at: base + Duration::seconds(2),
+                promoted_at: None,
+            },
+        ];
+
+        let (summary, rows) = build_review_rows(&run, &annotations);
+
+        assert_eq!(summary.total_samples, 3);
+        assert_eq!(summary.failing_samples, 1);
+        assert_eq!(summary.unreviewed_samples, 1);
+        assert_eq!(summary.needs_review_samples, 1);
+        assert_eq!(summary.approved_samples, 1);
+        assert_eq!(summary.annotated_samples, 2);
+
+        let needs_review = rows
+            .iter()
+            .find(|row| row.result_sample.sample_id == "sample-a")
+            .unwrap();
+        assert_eq!(needs_review.annotations.len(), 2);
+        assert_eq!(
+            needs_review.latest_annotation.unwrap().label,
+            "needs_review"
+        );
+
+        assert_eq!(
+            rows.iter()
+                .filter(|row| ReviewFilter::Unreviewed.matches(row))
+                .count(),
+            1
+        );
+        assert_eq!(
+            rows.iter()
+                .filter(|row| ReviewFilter::Failing.matches(row))
+                .count(),
+            1
+        );
+        assert_eq!(
+            rows.iter()
+                .filter(|row| ReviewFilter::NeedsReview.matches(row))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn review_queue_page_renders_filters_and_quick_actions() {
+        let run = stored_review_run_fixture("run-review");
+        let annotations = vec![super::AnnotationRecord {
+            id: 1,
+            run_id: String::from("run-review"),
+            sample_id: String::from("sample-c"),
+            label: String::from("approved"),
+            note: String::from("safe to ship"),
+            created_at: Utc::now(),
+            promoted_at: None,
+        }];
+
+        let (summary, rows) = build_review_rows(&run, &annotations);
+        let html = render_review_queue_page(&run, ReviewFilter::Unreviewed, &summary, &rows);
+
+        assert!(html.contains("/runs/run-review/review?filter=unreviewed"));
+        assert!(html.contains("Approve"));
+        assert!(html.contains("Needs review"));
+        assert!(html.contains("draft a risky email"));
+        assert!(html.contains("sample-b"));
     }
 }

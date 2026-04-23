@@ -149,9 +149,10 @@ Already present:
 - Minimal server-rendered web UI now covers run browsing, run drill-down, diff viewing, and dashboard pages
 - Annotation flow now writes promoted dataset JSONL entries back out from stored source samples
 - Threshold alert rules and a basic dashboard now exist on top of stored runs
+- The server UI now includes a richer filterable review queue with review summaries, quick triage actions, and source-sample context on each reviewed item
 
 Gaps:
-- The current UI is intentionally minimal and server-rendered; there is still no richer review workflow or bulk triage surface
+- The current UI is still intentionally server-rendered and centered on stored source samples; it does not yet expose richer output playback, side-by-side adjudication, or background review jobs
 - Dashboard alerts currently evaluate stored run results rather than directly owning OTLP ingestion inside the server process
 - There is still no authentication, multi-user workflow, or background job model
 
