@@ -461,6 +461,15 @@ name = "evalkit-scorers-rag"
 version = "0.1.0"
 
 [[package]]
+name = "evalkit-scorers-redteam"
+version = "0.1.0"
+dependencies = [
+ "evalkit",
+ "regex",
+ "tokio",
+]
+
+[[package]]
 name = "evalkit-scorers-text"
 version = "0.1.0"
 dependencies = [
