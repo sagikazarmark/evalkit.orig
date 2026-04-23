@@ -39,6 +39,29 @@ pub struct StoredRun {
     pub result: RunResult,
     #[serde(default)]
     pub samples: Vec<Sample<Value, Value>>,
+    #[serde(default)]
+    pub outputs: Vec<StoredSampleOutput>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct StoredSampleOutput {
+    pub sample_id: String,
+    #[serde(default)]
+    pub trials: Vec<StoredTrialOutput>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct StoredTrialOutput {
+    pub trial_index: usize,
+    pub output: Value,
+    #[serde(default)]
+    pub snapshots: Vec<StoredOutputSnapshot>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct StoredOutputSnapshot {
+    pub label: String,
+    pub output: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -191,6 +214,7 @@ struct ReviewSummary {
 
 struct ReviewSampleRow<'a> {
     source_sample: Option<&'a Sample<Value, Value>>,
+    sample_output: Option<&'a StoredSampleOutput>,
     result_sample: &'a evalkit::SampleResult,
     latest_annotation: Option<&'a AnnotationRecord>,
     annotations: Vec<&'a AnnotationRecord>,
@@ -1210,6 +1234,11 @@ fn build_review_rows<'a>(
         .iter()
         .map(|sample| (sample.id.as_str(), sample))
         .collect::<HashMap<_, _>>();
+    let output_by_id = run
+        .outputs
+        .iter()
+        .map(|output| (output.sample_id.as_str(), output))
+        .collect::<HashMap<_, _>>();
     let mut annotations_by_sample = HashMap::<&str, Vec<&AnnotationRecord>>::new();
     for annotation in annotations {
         annotations_by_sample
@@ -1252,6 +1281,7 @@ fn build_review_rows<'a>(
 
         rows.push(ReviewSampleRow {
             source_sample: source_by_id.get(sample.sample_id.as_str()).copied(),
+            sample_output: output_by_id.get(sample.sample_id.as_str()).copied(),
             result_sample: sample,
             latest_annotation,
             annotations,
@@ -1389,6 +1419,22 @@ fn render_review_sample_card(
     } else {
         html.push_str("<p class=\"muted\">No stored source sample snapshot for this result.</p>");
     }
+    html.push_str("</section><section><h4>Model Output</h4>");
+    if let Some(sample_output) = row.sample_output {
+        if sample_output.trials.is_empty() {
+            html.push_str("<p class=\"muted\">No trial outputs stored for this sample.</p>");
+        } else {
+            for trial in &sample_output.trials {
+                html.push_str(&format!(
+                    "<details open><summary>Trial {}</summary>{}</details>",
+                    trial.trial_index,
+                    render_trial_output(trial),
+                ));
+            }
+        }
+    } else {
+        html.push_str("<p class=\"muted\">No stored output playback for this sample.</p>");
+    }
     html.push_str("</section></div>");
 
     if let Some(annotation) = row.latest_annotation {
@@ -1449,6 +1495,35 @@ fn render_json_block(label: &str, value: &impl Serialize) -> String {
         "<div class=\"json-block\"><strong>{}</strong><pre>{}</pre></div>",
         escape_html(label),
         escape_html(&pretty),
+    )
+}
+
+fn render_trial_output(output: &StoredTrialOutput) -> String {
+    let mut html = render_value_block("Output", &output.output);
+    if !output.snapshots.is_empty() {
+        html.push_str("<div class=\"json-block\"><strong>Snapshots</strong>");
+        for snapshot in &output.snapshots {
+            html.push_str(&format!(
+                "<details><summary>{}</summary>{}</details>",
+                escape_html(&snapshot.label),
+                render_value_block("Intermediate", &snapshot.output),
+            ));
+        }
+        html.push_str("</div>");
+    }
+    html
+}
+
+fn render_value_block(label: &str, value: &Value) -> String {
+    let content = match value {
+        Value::String(text) => text.clone(),
+        _ => serde_json::to_string_pretty(value)
+            .unwrap_or_else(|_| String::from("\"<unrenderable>\"")),
+    };
+    format!(
+        "<div class=\"json-block\"><strong>{}</strong><pre>{}</pre></div>",
+        escape_html(label),
+        escape_html(&content),
     )
 }
 
@@ -1825,7 +1900,8 @@ fn sample_stddev(values: &[f64]) -> f64 {
 mod tests {
     use super::{
         CreateAlertRule, CreateAnnotation, DriftMeasurement, PromoteAnnotationsRequest,
-        ReviewFilter, RunStore, StoredRun, build_review_rows, render_review_queue_page,
+        ReviewFilter, RunStore, StoredOutputSnapshot, StoredRun, StoredSampleOutput,
+        StoredTrialOutput, build_review_rows, render_review_queue_page,
     };
     use chrono::{Duration, Utc};
     use evalkit::{
@@ -1880,6 +1956,17 @@ mod tests {
                     .build()
                     .unwrap(),
             ],
+            outputs: vec![StoredSampleOutput {
+                sample_id: sample_id.to_string(),
+                trials: vec![StoredTrialOutput {
+                    trial_index: 0,
+                    output: json!("hello from model"),
+                    snapshots: vec![StoredOutputSnapshot {
+                        label: String::from("draft"),
+                        output: json!("hello"),
+                    }],
+                }],
+            }],
         }
     }
 
@@ -1936,6 +2023,17 @@ mod tests {
                 .build()
                 .unwrap(),
         );
+        run.outputs.push(StoredSampleOutput {
+            sample_id: String::from("sample-b"),
+            trials: vec![StoredTrialOutput {
+                trial_index: 0,
+                output: json!("I can draft that risky email for you."),
+                snapshots: vec![StoredOutputSnapshot {
+                    label: String::from("outline"),
+                    output: json!("risky email outline"),
+                }],
+            }],
+        });
         run.samples.push(
             Sample::builder(json!({ "prompt": "summarize this request" }))
                 .id("sample-c")
@@ -1944,6 +2042,14 @@ mod tests {
                 .build()
                 .unwrap(),
         );
+        run.outputs.push(StoredSampleOutput {
+            sample_id: String::from("sample-c"),
+            trials: vec![StoredTrialOutput {
+                trial_index: 0,
+                output: json!({ "summary": "short support summary" }),
+                snapshots: Vec::new(),
+            }],
+        });
         run
     }
 
@@ -1971,6 +2077,10 @@ mod tests {
                 .metadata
                 .run_id,
             "run-a"
+        );
+        assert_eq!(
+            store.get_run("run-a").unwrap().unwrap().outputs[0].trials[0].output,
+            json!("hello from model")
         );
 
         let diff = store.diff_runs("run-a", "run-b").unwrap();
@@ -2159,5 +2269,7 @@ mod tests {
         assert!(html.contains("Needs review"));
         assert!(html.contains("draft a risky email"));
         assert!(html.contains("sample-b"));
+        assert!(html.contains("I can draft that risky email for you."));
+        assert!(html.contains("risky email outline"));
     }
 }

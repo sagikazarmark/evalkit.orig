@@ -150,9 +150,10 @@ Already present:
 - Annotation flow now writes promoted dataset JSONL entries back out from stored source samples
 - Threshold alert rules and a basic dashboard now exist on top of stored runs
 - The server UI now includes a richer filterable review queue with review summaries, quick triage actions, and source-sample context on each reviewed item
+- Stored runs can now also carry sample output playback, including per-trial outputs and intermediate snapshots for review
 
 Gaps:
-- The current UI is still intentionally server-rendered and centered on stored source samples; it does not yet expose richer output playback, side-by-side adjudication, or background review jobs
+- The current UI is still intentionally server-rendered; it does not yet expose side-by-side adjudication, threaded collaboration, or background review jobs
 - Dashboard alerts currently evaluate stored run results rather than directly owning OTLP ingestion inside the server process
 - There is still no authentication, multi-user workflow, or background job model
 
