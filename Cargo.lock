@@ -375,6 +375,7 @@ dependencies = [
  "evalkit-otel",
  "evalkit-runtime",
  "futures",
+ "getrandom 0.2.17",
  "serde",
  "serde_json",
  "tempfile",

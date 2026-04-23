@@ -15,6 +15,13 @@ serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt", "time"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 
+# wasm32 needs a JS-backed RNG for uuid::new_v4 and a JS-backed clock for
+# chrono. Keeping these on a target-specific dep keeps the native build
+# footprint unchanged.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+uuid = { version = "1", features = ["serde", "v4", "js"] }
+getrandom = { version = "0.2", features = ["js"] }
+
 [dev-dependencies]
 evalkit-otel = { path = "evalkit-otel" }
 evalkit-runtime = { path = "evalkit-runtime" }

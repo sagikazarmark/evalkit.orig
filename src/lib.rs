@@ -5,6 +5,85 @@
 //! Runtime orchestration (executors, sources, sinks, samplers, sharding,
 //! scrubbers, stream helpers) lives in the sibling `evalkit-runtime` crate
 //! per `docs/root-crate-boundary-audit.md`.
+//!
+//! # Boundary contract
+//!
+//! The following regression checks are enforced at doc-test time. If any of
+//! them flips to compiling, the root crate has grown back a runtime surface
+//! it was supposed to shed — fix the regression, don't relax the check.
+//!
+//! ```compile_fail
+//! use evalkit::Executor;
+//! ```
+//! ```compile_fail
+//! use evalkit::PullExecutor;
+//! ```
+//! ```compile_fail
+//! use evalkit::ExecutorError;
+//! ```
+//! ```compile_fail
+//! use evalkit::ExecutorBoxError;
+//! ```
+//! ```compile_fail
+//! use evalkit::SampleSource;
+//! ```
+//! ```compile_fail
+//! use evalkit::DatasetSource;
+//! ```
+//! ```compile_fail
+//! use evalkit::JsonlFileTailSource;
+//! ```
+//! ```compile_fail
+//! use evalkit::ExecutionSink;
+//! ```
+//! ```compile_fail
+//! use evalkit::NoopSink;
+//! ```
+//! ```compile_fail
+//! use evalkit::Sampler;
+//! ```
+//! ```compile_fail
+//! use evalkit::AlwaysSampler;
+//! ```
+//! ```compile_fail
+//! use evalkit::PercentSampler;
+//! ```
+//! ```compile_fail
+//! use evalkit::TargetedSampler;
+//! ```
+//! ```compile_fail
+//! use evalkit::SamplerBuildError;
+//! ```
+//! ```compile_fail
+//! use evalkit::Scrubber;
+//! ```
+//! ```compile_fail
+//! use evalkit::NoopScrubber;
+//! ```
+//! ```compile_fail
+//! use evalkit::RegexPiiScrubber;
+//! ```
+//! ```compile_fail
+//! use evalkit::ShardSpec;
+//! ```
+//! ```compile_fail
+//! use evalkit::ShardedSource;
+//! ```
+//! ```compile_fail
+//! use evalkit::ShardBuildError;
+//! ```
+//! ```compile_fail
+//! use evalkit::ShutdownMode;
+//! ```
+//! ```compile_fail
+//! use evalkit::StringPrefixCheckpoint;
+//! ```
+//! ```compile_fail
+//! use evalkit::StringStreamStage;
+//! ```
+//! ```compile_fail
+//! use evalkit::current_sample_id;
+//! ```
 
 pub mod acquisition;
 mod comparison;

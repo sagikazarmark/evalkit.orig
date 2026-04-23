@@ -1,0 +1,54 @@
+name: boundary
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  root-crate-wasm:
+    name: evalkit root crate builds for wasm32
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check --target wasm32
+        run: cargo check -p evalkit --target wasm32-unknown-unknown
+
+  kernel-tests:
+    name: kernel tests and boundary contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test -p evalkit (includes facade equivalence + compile_fail contract)
+        run: cargo test -p evalkit
+      - name: cargo test -p evalkit --doc
+        run: cargo test -p evalkit --doc
+
+  runtime-tests:
+    name: evalkit-runtime tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p evalkit-runtime
+
+  examples:
+    name: examples compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo build --example quickstart
+        run: cargo build --example quickstart
+      - name: cargo build --example basic
+        run: cargo build --example basic
+      - name: cargo build --example prod_eval_daemon
+        run: cargo build --example prod_eval_daemon
