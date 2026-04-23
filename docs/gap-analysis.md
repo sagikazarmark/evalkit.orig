@@ -151,9 +151,10 @@ Already present:
 - Threshold alert rules and a basic dashboard now exist on top of stored runs
 - The server UI now includes a richer filterable review queue with review summaries, quick triage actions, and source-sample context on each reviewed item
 - Stored runs can now also carry sample output playback, including per-trial outputs and intermediate snapshots for review
+- The diff UI now includes side-by-side sample adjudication with baseline/candidate playback and per-scorer change summaries
 
 Gaps:
-- The current UI is still intentionally server-rendered; it does not yet expose side-by-side adjudication, threaded collaboration, or background review jobs
+- The current UI is still intentionally server-rendered; it does not yet expose threaded collaboration or background review jobs
 - Dashboard alerts currently evaluate stored run results rather than directly owning OTLP ingestion inside the server process
 - There is still no authentication, multi-user workflow, or background job model
 

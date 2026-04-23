@@ -222,6 +222,23 @@ struct ReviewSampleRow<'a> {
     has_failure: bool,
 }
 
+struct AdjudicationSampleRow<'a> {
+    sample_id: String,
+    source_sample: Option<&'a Sample<Value, Value>>,
+    baseline_result: Option<&'a evalkit::SampleResult>,
+    candidate_result: Option<&'a evalkit::SampleResult>,
+    baseline_output: Option<&'a StoredSampleOutput>,
+    candidate_output: Option<&'a StoredSampleOutput>,
+    scorer_changes: Vec<AdjudicationScorerChange>,
+}
+
+#[derive(Clone)]
+struct AdjudicationScorerChange {
+    scorer_name: String,
+    delta: f64,
+    direction: evalkit::Change,
+}
+
 #[derive(Debug)]
 pub enum ServerError {
     NotFound(String),
@@ -851,7 +868,21 @@ async fn diff_page(
     AxumPath((left, right)): AxumPath<(String, String)>,
 ) -> Result<Html<String>, ServerError> {
     let comparison = state.store.diff_runs(&left, &right)?;
-    Ok(Html(render_diff_page(&comparison)))
+    let baseline = state
+        .store
+        .get_run(&left)?
+        .ok_or_else(|| ServerError::NotFound(format!("run `{left}` not found")))?;
+    let candidate = state
+        .store
+        .get_run(&right)?
+        .ok_or_else(|| ServerError::NotFound(format!("run `{right}` not found")))?;
+    let rows = build_adjudication_rows(&comparison, &baseline, &candidate);
+    Ok(Html(render_diff_page(
+        &comparison,
+        &baseline,
+        &candidate,
+        &rows,
+    )))
 }
 
 async fn review_annotation_form(
@@ -1141,13 +1172,20 @@ fn render_dashboard_page(
     html
 }
 
-fn render_diff_page(comparison: &Comparison) -> String {
+fn render_diff_page(
+    comparison: &Comparison,
+    baseline: &StoredRun,
+    candidate: &StoredRun,
+    rows: &[AdjudicationSampleRow<'_>],
+) -> String {
     let mut html = page_shell(
         "Run Diff",
         format!(
-            "<h1>Diff</h1><p><strong>Baseline:</strong> {}<br><strong>Candidate:</strong> {}</p>",
+            "<h1>Diff</h1><p><strong>Baseline:</strong> {}<br><strong>Candidate:</strong> {}<br><a href=\"/runs/{}/review\">Review baseline</a> · <a href=\"/runs/{}/review\">Review candidate</a></p>",
             escape_html(&comparison.baseline_id),
             escape_html(&comparison.candidate_id),
+            escape_html(&baseline.result.metadata.run_id),
+            escape_html(&candidate.result.metadata.run_id),
         ),
     );
     html.push_str("<section><h2>Shared scorers</h2>");
@@ -1167,6 +1205,19 @@ fn render_diff_page(comparison: &Comparison) -> String {
             ));
         }
         html.push_str("</ul></article>");
+    }
+
+    html.push_str("</section><section><h2>Sample Adjudication</h2>");
+    if rows.is_empty() {
+        html.push_str("<p>No shared samples available for side-by-side adjudication.</p>");
+    } else {
+        for row in rows {
+            html.push_str(&render_adjudication_sample_card(
+                &baseline.result.metadata.run_id,
+                &candidate.result.metadata.run_id,
+                row,
+            ));
+        }
     }
 
     html.push_str("</section></body></html>");
@@ -1301,6 +1352,120 @@ fn build_review_rows<'a>(
     });
 
     (summary, rows)
+}
+
+fn build_adjudication_rows<'a>(
+    comparison: &Comparison,
+    baseline: &'a StoredRun,
+    candidate: &'a StoredRun,
+) -> Vec<AdjudicationSampleRow<'a>> {
+    let baseline_samples = baseline
+        .samples
+        .iter()
+        .map(|sample| (sample.id.as_str(), sample))
+        .collect::<HashMap<_, _>>();
+    let candidate_samples = candidate
+        .samples
+        .iter()
+        .map(|sample| (sample.id.as_str(), sample))
+        .collect::<HashMap<_, _>>();
+    let baseline_results = baseline
+        .result
+        .samples
+        .iter()
+        .map(|sample| (sample.sample_id.as_str(), sample))
+        .collect::<HashMap<_, _>>();
+    let candidate_results = candidate
+        .result
+        .samples
+        .iter()
+        .map(|sample| (sample.sample_id.as_str(), sample))
+        .collect::<HashMap<_, _>>();
+    let baseline_outputs = baseline
+        .outputs
+        .iter()
+        .map(|output| (output.sample_id.as_str(), output))
+        .collect::<HashMap<_, _>>();
+    let candidate_outputs = candidate
+        .outputs
+        .iter()
+        .map(|output| (output.sample_id.as_str(), output))
+        .collect::<HashMap<_, _>>();
+
+    let mut sample_changes = HashMap::<String, Vec<AdjudicationScorerChange>>::new();
+    let mut sample_ids = BTreeSet::new();
+
+    for scorer_name in comparison.shared_scorers.keys() {
+        if let Some(scorer) = comparison.shared_scorers.get(scorer_name) {
+            for sample in scorer.sample_comparisons.values() {
+                sample_ids.insert(sample.sample_id.clone());
+                sample_changes
+                    .entry(sample.sample_id.clone())
+                    .or_default()
+                    .push(AdjudicationScorerChange {
+                        scorer_name: scorer_name.clone(),
+                        delta: sample.delta,
+                        direction: sample.direction.clone(),
+                    });
+            }
+        }
+    }
+    sample_ids.extend(
+        baseline_results
+            .keys()
+            .filter(|sample_id| candidate_results.contains_key(*sample_id))
+            .map(|sample_id| (*sample_id).to_string()),
+    );
+
+    let mut rows = sample_ids
+        .into_iter()
+        .map(|sample_id| {
+            let mut scorer_changes = sample_changes.remove(&sample_id).unwrap_or_default();
+            scorer_changes.sort_by(|left, right| {
+                adjudication_change_rank(&left.direction)
+                    .cmp(&adjudication_change_rank(&right.direction))
+                    .then_with(|| right.delta.abs().total_cmp(&left.delta.abs()))
+                    .then_with(|| left.scorer_name.cmp(&right.scorer_name))
+            });
+            AdjudicationSampleRow {
+                source_sample: baseline_samples
+                    .get(sample_id.as_str())
+                    .copied()
+                    .or_else(|| candidate_samples.get(sample_id.as_str()).copied()),
+                baseline_result: baseline_results.get(sample_id.as_str()).copied(),
+                candidate_result: candidate_results.get(sample_id.as_str()).copied(),
+                baseline_output: baseline_outputs.get(sample_id.as_str()).copied(),
+                candidate_output: candidate_outputs.get(sample_id.as_str()).copied(),
+                scorer_changes,
+                sample_id,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    rows.sort_by(|left, right| {
+        adjudication_row_rank(left)
+            .cmp(&adjudication_row_rank(right))
+            .then_with(|| left.sample_id.cmp(&right.sample_id))
+    });
+    rows
+}
+
+fn adjudication_change_rank(change: &evalkit::Change) -> usize {
+    match change {
+        evalkit::Change::Regressed => 0,
+        evalkit::Change::Improved => 1,
+        evalkit::Change::Insignificant => 2,
+        evalkit::Change::Unchanged => 3,
+        evalkit::Change::Incomparable => 4,
+    }
+}
+
+fn adjudication_row_rank(row: &AdjudicationSampleRow<'_>) -> usize {
+    row.scorer_changes
+        .iter()
+        .map(|change| adjudication_change_rank(&change.direction))
+        .min()
+        .unwrap_or(usize::MAX)
 }
 
 fn review_status(annotation: Option<&AnnotationRecord>) -> ReviewStatus {
@@ -1486,6 +1651,164 @@ fn render_review_sample_card(
 
     html.push_str("</article>");
     html
+}
+
+fn render_adjudication_sample_card(
+    baseline_run_id: &str,
+    candidate_run_id: &str,
+    row: &AdjudicationSampleRow<'_>,
+) -> String {
+    let mut html = format!(
+        "<article class=\"card\" id=\"adjudication-{}\"><div class=\"sample-header\"><div><h3>{}</h3><p class=\"muted\"><a href=\"/runs/{}/review#sample-{}\">Baseline review</a> · <a href=\"/runs/{}/review#sample-{}\">Candidate review</a></p></div><div class=\"badges\">{}</div></div>",
+        escape_html(&row.sample_id),
+        escape_html(&row.sample_id),
+        escape_html(baseline_run_id),
+        escape_html(&row.sample_id),
+        escape_html(candidate_run_id),
+        escape_html(&row.sample_id),
+        render_adjudication_change_badges(&row.scorer_changes),
+    );
+
+    if let Some(source_sample) = row.source_sample {
+        html.push_str("<section><h4>Shared Source Context</h4>");
+        html.push_str(&render_json_block("Input", &source_sample.input));
+        if let Some(reference) = &source_sample.reference {
+            html.push_str(&render_json_block("Reference", reference));
+        }
+        if !source_sample.metadata.is_empty() {
+            html.push_str(&render_json_block("Metadata", &source_sample.metadata));
+        }
+        html.push_str("</section>");
+    }
+
+    html.push_str("<div class=\"compare-grid\">");
+    html.push_str(&render_adjudication_side(
+        "Baseline",
+        baseline_run_id,
+        row.baseline_result,
+        row.baseline_output,
+    ));
+    html.push_str(&render_adjudication_side(
+        "Candidate",
+        candidate_run_id,
+        row.candidate_result,
+        row.candidate_output,
+    ));
+    html.push_str("</div>");
+
+    if !row.scorer_changes.is_empty() {
+        html.push_str("<section><h4>Scorer Changes</h4><ul>");
+        for change in &row.scorer_changes {
+            html.push_str(&format!(
+                "<li><strong>{}</strong>: {} ({:.4})</li>",
+                escape_html(&change.scorer_name),
+                escape_html(adjudication_change_label(&change.direction)),
+                change.delta,
+            ));
+        }
+        html.push_str("</ul></section>");
+    }
+
+    html.push_str("</article>");
+    html
+}
+
+fn render_adjudication_change_badges(changes: &[AdjudicationScorerChange]) -> String {
+    if changes.is_empty() {
+        return render_badge("no scored changes", "badge-annotated");
+    }
+
+    let mut html = String::new();
+    for change in changes.iter().take(4) {
+        html.push_str(&render_badge(
+            &format!(
+                "{}: {}",
+                change.scorer_name,
+                adjudication_change_label(&change.direction)
+            ),
+            adjudication_change_badge_class(&change.direction),
+        ));
+    }
+    if changes.len() > 4 {
+        html.push_str(&render_badge(
+            &format!("+{} more", changes.len() - 4),
+            "badge-annotated",
+        ));
+    }
+    html
+}
+
+fn render_adjudication_side(
+    title: &str,
+    run_id: &str,
+    result: Option<&evalkit::SampleResult>,
+    output: Option<&StoredSampleOutput>,
+) -> String {
+    let mut html = format!(
+        "<section class=\"compare-pane\"><h4>{}</h4><p class=\"muted\">Run {}</p>",
+        escape_html(title),
+        escape_html(run_id),
+    );
+
+    if let Some(result) = result {
+        html.push_str(&format!(
+            "<p><strong>Trials:</strong> {} · <strong>Scored:</strong> {} · <strong>Errors:</strong> {}</p><ul>",
+            result.trial_count,
+            result.scored_count,
+            result.error_count,
+        ));
+        for trial in &result.trials {
+            for (name, score) in &trial.scores {
+                html.push_str(&format!(
+                    "<li><strong>{}</strong>: {}</li>",
+                    escape_html(name),
+                    escape_html(&format_score(score)),
+                ));
+            }
+        }
+        html.push_str("</ul>");
+    } else {
+        html.push_str("<p class=\"muted\">No sample result stored for this side.</p>");
+    }
+
+    html.push_str("<div class=\"json-block\"><strong>Output Playback</strong>");
+    if let Some(output) = output {
+        if output.trials.is_empty() {
+            html.push_str("<p class=\"muted\">No trial outputs stored.</p>");
+        } else {
+            for trial in &output.trials {
+                html.push_str(&format!(
+                    "<details open><summary>Trial {}</summary>{}</details>",
+                    trial.trial_index,
+                    render_trial_output(trial),
+                ));
+            }
+        }
+    } else {
+        html.push_str("<p class=\"muted\">No stored output playback for this side.</p>");
+    }
+    html.push_str("</div></section>");
+    html
+}
+
+fn adjudication_change_label(change: &evalkit::Change) -> &'static str {
+    match change {
+        evalkit::Change::Improved => "improved",
+        evalkit::Change::Regressed => "regressed",
+        evalkit::Change::Unchanged => "unchanged",
+        evalkit::Change::Insignificant => "insignificant",
+        evalkit::Change::Incomparable => "incomparable",
+    }
+}
+
+fn adjudication_change_badge_class(change: &evalkit::Change) -> &'static str {
+    match change {
+        evalkit::Change::Improved => "badge-approved",
+        evalkit::Change::Regressed => "badge-rejected",
+        evalkit::Change::Unchanged => "badge-pending",
+        evalkit::Change::Insignificant => "badge-annotated",
+        evalkit::Change::Incomparable => "badge-needs-review",
+    }
 }
 
 fn render_json_block(label: &str, value: &impl Serialize) -> String {
@@ -1901,12 +2224,13 @@ mod tests {
     use super::{
         CreateAlertRule, CreateAnnotation, DriftMeasurement, PromoteAnnotationsRequest,
         ReviewFilter, RunStore, StoredOutputSnapshot, StoredRun, StoredSampleOutput,
-        StoredTrialOutput, build_review_rows, render_review_queue_page,
+        StoredTrialOutput, build_adjudication_rows, build_review_rows, render_diff_page,
+        render_review_queue_page,
     };
     use chrono::{Duration, Utc};
     use evalkit::{
-        Direction, RunMetadata, RunResult, Sample, SampleResult, Score, ScoreDefinition,
-        TrialResult,
+        CompareConfig, Direction, RunMetadata, RunResult, Sample, SampleResult, Score,
+        ScoreDefinition, TrialResult, compare,
     };
     use serde_json::json;
     use tempfile::tempdir;
@@ -2050,6 +2374,24 @@ mod tests {
                 snapshots: Vec::new(),
             }],
         });
+        run
+    }
+
+    fn stored_candidate_review_run_fixture(run_id: &str) -> StoredRun {
+        let mut run = stored_review_run_fixture(run_id);
+        run.result.samples[0].trials[0]
+            .scores
+            .insert(String::from("exact_match"), Ok(Score::Binary(false)));
+        run.result.samples[1].trials[0]
+            .scores
+            .insert(String::from("exact_match"), Ok(Score::Binary(true)));
+        run.outputs[0].trials[0].output = json!("baseline answer drifted");
+        run.outputs[1].trials[0].output = json!("I cannot help draft that risky email.");
+        run.outputs[1].trials[0].snapshots = vec![StoredOutputSnapshot {
+            label: String::from("draft"),
+            output: json!("refusal draft"),
+        }];
+        run.outputs[2].trials[0].output = json!({ "summary": "candidate support summary" });
         run
     }
 
@@ -2271,5 +2613,28 @@ mod tests {
         assert!(html.contains("sample-b"));
         assert!(html.contains("I can draft that risky email for you."));
         assert!(html.contains("risky email outline"));
+    }
+
+    #[test]
+    fn diff_page_renders_side_by_side_adjudication_outputs() {
+        let baseline = stored_review_run_fixture("run-a");
+        let candidate = stored_candidate_review_run_fixture("run-b");
+        let comparison = compare(
+            &baseline.result,
+            &candidate.result,
+            CompareConfig::default(),
+        );
+        let rows = build_adjudication_rows(&comparison, &baseline, &candidate);
+
+        let html = render_diff_page(&comparison, &baseline, &candidate, &rows);
+
+        assert!(html.contains("Sample Adjudication"));
+        assert!(html.contains("Review baseline"));
+        assert!(html.contains("Review candidate"));
+        assert!(html.contains("I can draft that risky email for you."));
+        assert!(html.contains("I cannot help draft that risky email."));
+        assert!(html.contains("refusal draft"));
+        assert!(html.contains("Scorer Changes"));
+        assert!(html.contains("exact_match"));
     }
 }
