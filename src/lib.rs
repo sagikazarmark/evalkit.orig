@@ -9,6 +9,7 @@
 pub mod acquisition;
 mod comparison;
 mod dataset;
+mod eval;
 mod jsonl;
 mod mapper;
 mod math;
@@ -33,6 +34,7 @@ pub use comparison::{
     Change, CompareConfig, Comparison, SampleComparison, ScorerComparison, compare,
 };
 pub use dataset::Dataset;
+pub use eval::{Eval, EvalRun, EvalTask};
 pub use jsonl::{read_jsonl, write_jsonl};
 pub use mapper::{MapError, Mapper};
 pub use run::{Run, RunBuildError, RunError};
@@ -57,8 +59,8 @@ pub use stats::{RunStats, ScorerStats};
 pub mod prelude {
     pub use crate::{
         Acquisition, AcquisitionError, AcquisitionMetadata, AcquisitionSnapshot, AcquiredOutput,
-        AndScorer, Change, CompareConfig, Comparison, Dataset, Direction, IgnoreReferenceScorer,
-        MapError, MapScoreScorer, Mapper, NotScorer, OrScorer,
+        AndScorer, Change, CompareConfig, Comparison, Dataset, Direction, Eval, EvalRun, EvalTask,
+        IgnoreReferenceScorer, MapError, MapScoreScorer, Mapper, NotScorer, OrScorer,
         RUN_RESULT_SCHEMA_VERSION, Run, RunBuildError, RunError, RunMetadata, RunResult, RunStats,
         Sample, SampleBuildError, SampleBuilder, SampleComparison,
         Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerComparison,
