@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use chrono::Utc;
@@ -293,6 +293,9 @@ pub fn router(store: RunStore) -> Router {
     let state = AppState::new(store);
 
     Router::new()
+        .route("/", get(home_page))
+        .route("/runs/:run_id", get(run_detail_page))
+        .route("/runs/:left/diff/:right", get(diff_page))
         .route("/healthz", get(healthz))
         .route("/api/runs", get(list_runs).post(create_run))
         .route("/api/runs/:run_id", get(get_run))
@@ -303,6 +306,10 @@ pub fn router(store: RunStore) -> Router {
 
 async fn healthz() -> &'static str {
     "ok"
+}
+
+async fn home_page(State(state): State<AppState>) -> Result<Html<String>, ServerError> {
+    Ok(Html(render_home_page(&state.store.list_runs()?)))
 }
 
 async fn list_runs(State(state): State<AppState>) -> Result<Json<Vec<RunSummary>>, ServerError> {
@@ -351,6 +358,27 @@ async fn list_annotations(
     Ok(Json(state.store.list_annotations(&run_id)?))
 }
 
+async fn run_detail_page(
+    State(state): State<AppState>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Result<Html<String>, ServerError> {
+    let run = state
+        .store
+        .get_run(&run_id)?
+        .ok_or_else(|| ServerError::NotFound(format!("run `{run_id}` not found")))?;
+    let annotations = state.store.list_annotations(&run_id)?;
+
+    Ok(Html(render_run_detail_page(&run, &annotations)))
+}
+
+async fn diff_page(
+    State(state): State<AppState>,
+    AxumPath((left, right)): AxumPath<(String, String)>,
+) -> Result<Html<String>, ServerError> {
+    let comparison = state.store.diff_runs(&left, &right)?;
+    Ok(Html(render_diff_page(&comparison)))
+}
+
 fn parse_timestamp(value: String) -> Result<chrono::DateTime<Utc>, rusqlite::Error> {
     chrono::DateTime::parse_from_rfc3339(&value)
         .map(|timestamp| timestamp.with_timezone(&Utc))
@@ -365,6 +393,152 @@ fn parse_timestamp(value: String) -> Result<chrono::DateTime<Utc>, rusqlite::Err
 
 fn store_error(error: impl Display) -> ServerError {
     ServerError::Store(error.to_string())
+}
+
+fn render_home_page(runs: &[RunSummary]) -> String {
+    let mut html = page_shell("Runs", String::from("<h1>Runs</h1><p>Browse stored eval runs and compare recent outputs.</p>"));
+    html.push_str("<div class=\"runs\">");
+
+    for (index, run) in runs.iter().enumerate() {
+        html.push_str("<article class=\"card\">");
+        html.push_str(&format!(
+            "<h2><a href=\"/runs/{id}\">{id}</a></h2><p><strong>Samples:</strong> {samples}<br><strong>Mode:</strong> {mode}<br><strong>Started:</strong> {started}</p>",
+            id = run.run_id,
+            samples = run.sample_count,
+            mode = escape_html(&run.acquisition_mode),
+            started = run.started_at,
+        ));
+        if let Some(next) = runs.get(index + 1) {
+            html.push_str(&format!(
+                "<p><a href=\"/runs/{left}/diff/{right}\">Compare against {right}</a></p>",
+                left = run.run_id,
+                right = next.run_id,
+            ));
+        }
+        html.push_str("</article>");
+    }
+
+    html.push_str("</div></body></html>");
+    html
+}
+
+fn render_run_detail_page(run: &StoredRun, annotations: &[AnnotationRecord]) -> String {
+    let mut html = page_shell(
+        &format!("Run {}", run.result.metadata.run_id),
+        format!(
+            "<h1>Run {}</h1><p><strong>Acquisition:</strong> {}<br><strong>Samples:</strong> {}<br><strong>Started:</strong> {}</p>",
+            run.result.metadata.run_id,
+            escape_html(&run.result.metadata.acquisition_mode),
+            run.result.samples.len(),
+            run.result.metadata.started_at,
+        ),
+    );
+    html.push_str("<section><h2>Samples</h2>");
+
+    for sample in &run.result.samples {
+        let status = if sample_has_failure(sample) { "sample-failed" } else { "sample-ok" };
+        html.push_str(&format!(
+            "<article class=\"card {status}\"><h3>{id}</h3><p><strong>Trials:</strong> {trials} · <strong>Scored:</strong> {scored} · <strong>Errors:</strong> {errors}</p>",
+            id = escape_html(&sample.sample_id),
+            trials = sample.trial_count,
+            scored = sample.scored_count,
+            errors = sample.error_count,
+        ));
+        html.push_str("<ul>");
+        for trial in &sample.trials {
+            for (name, score) in &trial.scores {
+                html.push_str(&format!(
+                    "<li><strong>{}</strong>: {}</li>",
+                    escape_html(name),
+                    escape_html(&format_score(score))
+                ));
+            }
+        }
+        html.push_str("</ul></article>");
+    }
+
+    html.push_str("</section><section><h2>Annotations</h2>");
+    if annotations.is_empty() {
+        html.push_str("<p>No annotations yet.</p>");
+    } else {
+        html.push_str("<ul>");
+        for annotation in annotations {
+            html.push_str(&format!(
+                "<li><strong>{}</strong> on {}: {}</li>",
+                escape_html(&annotation.label),
+                escape_html(&annotation.sample_id),
+                escape_html(&annotation.note),
+            ));
+        }
+        html.push_str("</ul>");
+    }
+    html.push_str("</section></body></html>");
+    html
+}
+
+fn render_diff_page(comparison: &Comparison) -> String {
+    let mut html = page_shell(
+        "Run Diff",
+        format!(
+            "<h1>Diff</h1><p><strong>Baseline:</strong> {}<br><strong>Candidate:</strong> {}</p>",
+            escape_html(&comparison.baseline_id),
+            escape_html(&comparison.candidate_id),
+        ),
+    );
+    html.push_str("<section><h2>Shared scorers</h2>");
+
+    for (name, scorer) in &comparison.shared_scorers {
+        html.push_str(&format!(
+            "<article class=\"card\"><h3>{}</h3><p><strong>Aggregate delta:</strong> {:.4}</p><ul>",
+            escape_html(name),
+            scorer.aggregate_delta,
+        ));
+        for sample in scorer.sample_comparisons.values() {
+            html.push_str(&format!(
+                "<li>{}: {:?} ({:.4})</li>",
+                escape_html(&sample.sample_id),
+                sample.direction,
+                sample.delta,
+            ));
+        }
+        html.push_str("</ul></article>");
+    }
+
+    html.push_str("</section></body></html>");
+    html
+}
+
+fn page_shell(title: &str, body: String) -> String {
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>{}</title><style>body{{font-family:Inter,system-ui,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:24px}}a{{color:#7dd3fc}}.runs{{display:grid;gap:16px}}.card{{background:#111827;border:1px solid #334155;border-radius:16px;padding:16px;margin:12px 0}}.sample-failed{{border-color:#f97316}}.sample-ok{{border-color:#22c55e}}ul{{padding-left:20px}}</style></head><body>{}",
+        escape_html(title),
+        body,
+    )
+}
+
+fn sample_has_failure(sample: &evalkit::SampleResult) -> bool {
+    sample.trials.iter().any(|trial| {
+        trial.scores.values().any(|score| match score {
+            Ok(evalkit::Score::Binary(value)) => !value,
+            Ok(_) => false,
+            Err(_) => true,
+        })
+    })
+}
+
+fn format_score(score: &Result<evalkit::Score, evalkit::ScorerError>) -> String {
+    match score {
+        Ok(value) => format!("{value:?}"),
+        Err(error) => format!("error: {error}"),
+    }
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 #[cfg(test)]
