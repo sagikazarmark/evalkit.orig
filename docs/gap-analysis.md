@@ -108,6 +108,8 @@ Already present:
 - `JsonlFileTailSource` now provides a second source adapter by tailing appended JSONL `Sample` rows from disk
 - `PullExecutor` now supports an optional judge-model tier that can re-score flagged samples with a secondary scorer set
 - `PullExecutor` now supports checkpoint-based partial scoring for string outputs via `partial_string_scoring(...)`
+- `Acquisition::acquire_with_snapshots(...)` plus `AcquiredOutput` / `AcquisitionSnapshot` now let acquisitions surface real intermediate outputs to the executor
+- `PullExecutor::streaming_string_scoring(...)` now scores configured intermediate string stages from acquisition-provided snapshots
 - `ExecutionSink` and `NoopSink` provide the first sink abstraction, with per-sample notifications plus a final run completion hook
 - `evalkit-otel` now provides `OtelResultSink`, so executor-based runs can emit OTel spans through the sink interface without an extra post-processing step
 - `evalkit-otel` now provides `OtlpReceiverSource`, which adapts the in-repo OTLP receiver into a pull-based executor source over grouped sample spans
@@ -117,7 +119,7 @@ Already present:
 - `examples/prod_eval_daemon.rs` now shows a small daemon-style binary composed from library primitives and emits OTel spans through `OtelResultSink`
 
 Gaps:
-- Partial scoring is currently limited to fixed string-prefix checkpoints rather than true token-by-token or provider-stream driven evaluation
+- Streaming partial scoring now supports acquisition-provided intermediate snapshots, but there is still no token-by-token or chunk-stream protocol shared across providers
 - No additional online source adapters such as Kafka or NATS yet
 - Queueing and shutdown are currently single-process pull controls; there is still no concurrent worker pool or backpressure protocol across components
 
@@ -159,8 +161,7 @@ Gaps:
 ## Highest-Leverage Next Slice
 
 The best next implementation slice is the next Phase 2 increment:
-- extend partial scoring beyond fixed prefixes so providers or adapters can feed true streaming chunks into scoring
 - add a third source adapter, likely one of Kafka or NATS, so the source abstraction is proven against a networked stream
-- decide whether the next runtime step is a worker-pool executor or keeping concurrency in adapters/sinks
+- add a concurrent worker-pool executor so the runtime has a first-class bounded in-flight model instead of only local prefetch controls
 
 In parallel, the next runner-facing Phase 3 gap is live GitHub Action validation in a pull-request environment so the already-landed workflow can be exercised end to end.

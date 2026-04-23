@@ -21,7 +21,10 @@ mod scorer_ext;
 mod scorer_set;
 mod stats;
 
-pub use acquisition::{Acquisition, AcquisitionError, AcquisitionMetadata, current_sample_id};
+pub use acquisition::{
+    AcquiredOutput, Acquisition, AcquisitionError, AcquisitionMetadata, AcquisitionSnapshot,
+    current_sample_id,
+};
 pub use comparison::{
     Change, CompareConfig, Comparison, SampleComparison, ScorerComparison, compare,
 };
@@ -29,7 +32,8 @@ pub use dataset::Dataset;
 pub use executor::{
     AlwaysSampler, DatasetSource, ExecutionSink, Executor, ExecutorBoxError, ExecutorError,
     JsonlFileTailSource, NoopSink, PercentSampler, PullExecutor, SampleSource, Sampler,
-    SamplerBuildError, ShutdownMode, StringPrefixCheckpoint, TargetedSampler,
+    SamplerBuildError, ShutdownMode, StringPrefixCheckpoint, StringStreamStage,
+    TargetedSampler,
 };
 pub use jsonl::{read_jsonl, write_jsonl};
 pub use mapper::{MapError, Mapper};
@@ -55,17 +59,17 @@ pub use stats::{RunStats, ScorerStats};
 pub mod prelude {
     pub use crate::{
         Acquisition, AcquisitionError, AcquisitionMetadata, AndScorer, Change, CompareConfig,
-        Comparison, Dataset, DatasetSource, Direction, ExecutionSink, Executor, ExecutorBoxError,
-        ExecutorError, IgnoreReferenceScorer, JsonlFileTailSource, MapError, MapScoreScorer,
-        Mapper, NoopSink, NotScorer, OrScorer, PercentSampler, PullExecutor,
-        RUN_RESULT_SCHEMA_VERSION, Run, RunBuildError, RunError, RunMetadata, RunResult,
-        RunStats, Sample, SampleBuildError, SampleBuilder, SampleComparison, SampleSource,
-        Sampler, SamplerBuildError, Score, ScoreDefinition, ScoreOutcome, Scorer,
-        ScorerComparison, ScorerContext, ScorerError, ScorerExt, ScorerMetadata,
-        ScorerResources, ScorerSet, ScorerStats, ShutdownMode, StringPrefixCheckpoint,
-        ThenScorer, TimeoutScorer, TokenUsage, ToolCall, ToolResult, TrajectorySample,
-        TrajectoryStep, WeightedScorer, compare, current_sample_id, ignore_reference,
-        read_jsonl, write_jsonl,
+        AcquisitionSnapshot, AcquiredOutput, Comparison, Dataset, DatasetSource, Direction,
+        ExecutionSink, Executor, ExecutorBoxError, ExecutorError, IgnoreReferenceScorer,
+        JsonlFileTailSource, MapError, MapScoreScorer, Mapper, NoopSink, NotScorer, OrScorer,
+        PercentSampler, PullExecutor,
+        RUN_RESULT_SCHEMA_VERSION, Run, RunBuildError, RunError, RunMetadata, RunResult, RunStats,
+        Sample, SampleBuildError, SampleBuilder, SampleComparison, SampleSource, Sampler,
+        SamplerBuildError, Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerComparison,
+        ScorerContext, ScorerError, ScorerExt, ScorerMetadata, ScorerResources, ScorerSet,
+        ScorerStats, ShutdownMode, StringPrefixCheckpoint, StringStreamStage, ThenScorer,
+        TimeoutScorer, TokenUsage, ToolCall, ToolResult, TrajectorySample, TrajectoryStep,
+        WeightedScorer, compare, current_sample_id, ignore_reference, read_jsonl, write_jsonl,
     };
     pub use crate::{AlwaysSampler, ConversationSample, ConversationTurn, TargetedSampler};
 }

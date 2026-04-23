@@ -1,7 +1,7 @@
 use crate::{
-    Acquisition, AcquisitionError, Dataset, RunMetadata, RunResult, Sample, SampleResult, Score,
-    ScoreDefinition, ScoreOutcome, ScorerContext, ScorerError, ScorerResources, ScorerSet,
-    TrialResult,
+    AcquiredOutput, Acquisition, AcquisitionError, AcquisitionSnapshot, Dataset, RunMetadata,
+    RunResult, Sample, SampleResult, Score, ScoreDefinition, ScoreOutcome, ScorerContext,
+    ScorerError, ScorerResources, ScorerSet, TrialResult,
 };
 use chrono::Utc;
 use futures::FutureExt;
@@ -23,7 +23,8 @@ use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
 type TrialScores = Vec<(ScoreDefinition, Result<ScoreOutcome, ScorerError>)>;
-type AcquisitionFuture<'a, O> = Pin<Box<dyn Future<Output = Result<O, AcquisitionError>> + 'a>>;
+type AcquisitionFuture<'a, O> =
+    Pin<Box<dyn Future<Output = Result<AcquiredOutput<O>, AcquisitionError>> + 'a>>;
 type JudgeModelTierPredicate<I, R> =
     dyn Fn(&Sample<I, R>, &HashMap<String, Result<Score, ScorerError>>) -> bool + Send + Sync;
 type ShutdownPredicate = dyn Fn(&SampleResult) -> bool + Send + Sync;
@@ -359,13 +360,22 @@ struct JudgeModelTier<I, O, R> {
 trait PartialScoringPlan<I, O, R>: Send + Sync {
     fn definitions(&self) -> Vec<ScoreDefinition>;
     fn judge_model_pins(&self) -> Vec<String>;
-    fn score<'a>(&'a self, ctx: &'a ScorerContext<'a, I, O, R>) -> PartialScoringFuture<'a>;
+    fn score<'a>(
+        &'a self,
+        ctx: &'a ScorerContext<'a, I, O, R>,
+        snapshots: &'a [AcquisitionSnapshot<O>],
+    ) -> PartialScoringFuture<'a>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StringPrefixCheckpoint {
     name: String,
     char_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StringStreamStage {
+    name: String,
 }
 
 impl StringPrefixCheckpoint {
@@ -377,9 +387,20 @@ impl StringPrefixCheckpoint {
     }
 }
 
+impl StringStreamStage {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into() }
+    }
+}
+
 struct StringPrefixPartialScoring<I, R> {
     scorer_set: ScorerSet<I, String, R>,
     checkpoints: Vec<StringPrefixCheckpoint>,
+}
+
+struct StringStreamingPartialScoring<I, R> {
+    scorer_set: ScorerSet<I, String, R>,
+    stages: Vec<StringStreamStage>,
 }
 
 impl<I, R> StringPrefixPartialScoring<I, R> {
@@ -388,6 +409,12 @@ impl<I, R> StringPrefixPartialScoring<I, R> {
             scorer_set,
             checkpoints,
         }
+    }
+}
+
+impl<I, R> StringStreamingPartialScoring<I, R> {
+    fn new(scorer_set: ScorerSet<I, String, R>, stages: Vec<StringStreamStage>) -> Self {
+        Self { scorer_set, stages }
     }
 }
 
@@ -407,7 +434,11 @@ impl<I, R> PartialScoringPlan<I, String, R> for StringPrefixPartialScoring<I, R>
         self.scorer_set.judge_model_pins().to_vec()
     }
 
-    fn score<'a>(&'a self, ctx: &'a ScorerContext<'a, I, String, R>) -> PartialScoringFuture<'a> {
+    fn score<'a>(
+        &'a self,
+        ctx: &'a ScorerContext<'a, I, String, R>,
+        _snapshots: &'a [AcquisitionSnapshot<String>],
+    ) -> PartialScoringFuture<'a> {
         Box::pin(async move {
             let mut results = Vec::new();
 
@@ -433,6 +464,63 @@ impl<I, R> PartialScoringPlan<I, String, R> for StringPrefixPartialScoring<I, R>
                             rename_score_definition(
                                 &definition,
                                 &format!("partial:{}", checkpoint.name),
+                            ),
+                            result,
+                        )
+                    },
+                ));
+            }
+
+            results
+        })
+    }
+}
+
+impl<I, R> PartialScoringPlan<I, String, R> for StringStreamingPartialScoring<I, R> {
+    fn definitions(&self) -> Vec<ScoreDefinition> {
+        self.stages
+            .iter()
+            .flat_map(|stage| {
+                self.scorer_set.definitions().iter().map(move |definition| {
+                    rename_score_definition(definition, &format!("stream:{}", stage.name))
+                })
+            })
+            .collect()
+    }
+
+    fn judge_model_pins(&self) -> Vec<String> {
+        self.scorer_set.judge_model_pins().to_vec()
+    }
+
+    fn score<'a>(
+        &'a self,
+        ctx: &'a ScorerContext<'a, I, String, R>,
+        snapshots: &'a [AcquisitionSnapshot<String>],
+    ) -> PartialScoringFuture<'a> {
+        Box::pin(async move {
+            let mut results = Vec::new();
+
+            for stage in &self.stages {
+                let Some(snapshot) = snapshots.iter().find(|snapshot| snapshot.label == stage.name) else {
+                    continue;
+                };
+
+                let snapshot_ctx = ScorerContext {
+                    run_id: ctx.run_id,
+                    sample_id: ctx.sample_id,
+                    trial_index: ctx.trial_index,
+                    metadata: ctx.metadata,
+                    input: ctx.input,
+                    output: &snapshot.output,
+                    reference: ctx.reference,
+                };
+
+                results.extend(self.scorer_set.score(&snapshot_ctx).await.into_iter().map(
+                    |(definition, result)| {
+                        (
+                            rename_score_definition(
+                                &definition,
+                                &format!("stream:{}", stage.name),
                             ),
                             result,
                         )
@@ -566,6 +654,17 @@ where
         self.partial_scoring = Some(Box::new(StringPrefixPartialScoring::new(
             scorer_set,
             checkpoints,
+        )));
+        self
+    }
+
+    pub fn streaming_string_scoring(
+        mut self,
+        scorer_set: ScorerSet<I, String, R>,
+        stages: Vec<StringStreamStage>,
+    ) -> Self {
+        self.partial_scoring = Some(Box::new(StringStreamingPartialScoring::new(
+            scorer_set, stages,
         )));
         self
     }
@@ -714,14 +813,14 @@ where
             .catch_unwind()
             .await
         {
-            Ok(Ok(output)) => {
+            Ok(Ok(acquired)) => {
                 let ctx = ScorerContext {
                     run_id,
                     sample_id: &sample.id,
                     trial_index,
                     metadata: &sample.metadata,
                     input: &sample.input,
-                    output: &output,
+                    output: &acquired.output,
                     reference: sample.reference.as_ref(),
                 };
 
@@ -733,7 +832,8 @@ where
                         let tiered = self
                             .maybe_execute_judge_model_tier(sample, &ctx, flatten_scores(scores))
                             .await;
-                        self.maybe_execute_partial_scoring(&ctx, tiered).await
+                        self.maybe_execute_partial_scoring(&ctx, &acquired.snapshots, tiered)
+                            .await
                     }
                     Err(_) => FlattenedTrial {
                         scores: scorer_panic_scores(definitions),
@@ -761,7 +861,10 @@ where
         }
     }
 
-    async fn acquire_output(&self, sample: &Sample<I, R>) -> Result<O, AcquisitionError> {
+    async fn acquire_output(
+        &self,
+        sample: &Sample<I, R>,
+    ) -> Result<AcquiredOutput<O>, AcquisitionError> {
         crate::acquisition::with_current_sample_id(
             &sample.id,
             self.acquire_output_inner(&sample.input),
@@ -769,7 +872,7 @@ where
         .await
     }
 
-    async fn acquire_output_inner(&self, input: &I) -> Result<O, AcquisitionError> {
+    async fn acquire_output_inner(&self, input: &I) -> Result<AcquiredOutput<O>, AcquisitionError> {
         match self.sample_timeout {
             Some(duration) => {
                 match timeout(duration, self.acquisition.acquire_boxed(input)).await {
@@ -828,6 +931,7 @@ where
     async fn maybe_execute_partial_scoring(
         &self,
         ctx: &ScorerContext<'_, I, O, R>,
+        snapshots: &[AcquisitionSnapshot<O>],
         primary: FlattenedTrial,
     ) -> FlattenedTrial {
         let Some(plan) = self.partial_scoring.as_deref() else {
@@ -836,7 +940,10 @@ where
 
         let definitions = plan.definitions();
 
-        match AssertUnwindSafe(plan.score(ctx)).catch_unwind().await {
+        match AssertUnwindSafe(plan.score(ctx, snapshots))
+            .catch_unwind()
+            .await
+        {
             Ok(scores) => merge_flattened_trials(primary, flatten_scores(scores)),
             Err(_) => merge_flattened_trials(
                 primary,
@@ -899,7 +1006,7 @@ where
     O: 'static,
 {
     fn acquire_boxed<'a>(&'a self, input: &'a I) -> AcquisitionFuture<'a, O> {
-        Box::pin(async move { self.acquire(input).await })
+        Box::pin(async move { self.acquire_with_snapshots(input).await })
     }
 }
 
@@ -1324,13 +1431,14 @@ fn git_stdout_bytes(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AlwaysSampler, DatasetSource, ExecutionSink, Executor, JsonlFileTailSource,
-        PercentSampler, PullExecutor, Sampler, SamplerBuildError, ShutdownMode,
-        StringPrefixCheckpoint, TargetedSampler,
+        AlwaysSampler, DatasetSource, ExecutionSink, Executor, JsonlFileTailSource, PercentSampler,
+        PullExecutor, Sampler, SamplerBuildError, ShutdownMode, StringPrefixCheckpoint,
+        StringStreamStage, TargetedSampler,
     };
     use crate::{
-        AcquisitionError, Dataset, RunResult, Sample, SampleResult, SampleSource, Score,
-        ScoreDefinition, Scorer, ScorerContext, ScorerError, ScorerMetadata, ScorerSet,
+        AcquiredOutput, Acquisition, AcquisitionError, AcquisitionSnapshot, Dataset, RunResult,
+        Sample, SampleResult, SampleSource, Score, ScoreDefinition, Scorer, ScorerContext,
+        ScorerError, ScorerMetadata, ScorerSet,
     };
     use serde_json::Value;
     use std::fs::OpenOptions;
@@ -1404,6 +1512,26 @@ mod tests {
 
         fn definition(&self) -> ScoreDefinition {
             ScoreDefinition::new("prefix_length")
+        }
+    }
+
+    struct StreamingEchoAcquisition;
+
+    impl Acquisition<String, String> for StreamingEchoAcquisition {
+        async fn acquire(&self, input: &String) -> Result<String, AcquisitionError> {
+            Ok(format!("echo::{input}"))
+        }
+
+        async fn acquire_with_snapshots(
+            &self,
+            input: &String,
+        ) -> Result<AcquiredOutput<String>, AcquisitionError> {
+            Ok(AcquiredOutput::new(format!("echo::{input}"))
+                .with_snapshot(AcquisitionSnapshot::new("prefix", String::from("ec")))
+                .with_snapshot(AcquisitionSnapshot::new(
+                    "mid",
+                    format!("echo::{input}"),
+                )))
         }
     }
 
@@ -1714,6 +1842,54 @@ mod tests {
 
         assert_eq!(result.metadata.score_definitions.len(), 2);
         assert_eq!(*partial_score, Score::Numeric(2.0));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pull_executor_streaming_string_scoring_uses_acquisition_snapshots() {
+        let dataset = Dataset::new(vec![Sample::new(
+            "hello".to_string(),
+            "echo::hello".to_string(),
+        )]);
+        let primary = ScorerSet::<String, String, String>::builder()
+            .scorer(ExactMatchScorer)
+            .build();
+        let partial = ScorerSet::<String, String, String>::builder()
+            .scorer(PrefixLengthScorer)
+            .build();
+
+        let mut executor = PullExecutor::new(
+            DatasetSource::new(dataset),
+            StreamingEchoAcquisition,
+            primary,
+            AlwaysSampler,
+            super::NoopSink,
+        )
+        .streaming_string_scoring(
+            partial,
+            vec![StringStreamStage::new("prefix"), StringStreamStage::new("mid")],
+        );
+
+        let result = executor.execute().await.unwrap();
+
+        assert_eq!(result.metadata.score_definitions.len(), 3);
+        assert_eq!(
+            result.samples[0].trials[0]
+                .scores
+                .get("prefix_length@stream:prefix")
+                .unwrap()
+                .as_ref()
+                .unwrap(),
+            &Score::Numeric(2.0)
+        );
+        assert_eq!(
+            result.samples[0].trials[0]
+                .scores
+                .get("prefix_length@stream:mid")
+                .unwrap()
+                .as_ref()
+                .unwrap(),
+            &Score::Numeric(11.0)
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

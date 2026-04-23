@@ -1,7 +1,10 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::future::Future;
 use std::time::Duration;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::task_local;
 
 task_local! {
@@ -17,6 +20,50 @@ pub struct AcquisitionMetadata {
 impl Default for AcquisitionMetadata {
     fn default() -> Self {
         Self { mode: "inline" }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AcquisitionSnapshot<O> {
+    pub label: String,
+    pub output: O,
+    #[serde(default)]
+    pub metadata: HashMap<String, Value>,
+}
+
+impl<O> AcquisitionSnapshot<O> {
+    pub fn new(label: impl Into<String>, output: O) -> Self {
+        Self {
+            label: label.into(),
+            output,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn metadata(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.metadata.insert(key.into(), value);
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AcquiredOutput<O> {
+    pub output: O,
+    #[serde(default)]
+    pub snapshots: Vec<AcquisitionSnapshot<O>>,
+}
+
+impl<O> AcquiredOutput<O> {
+    pub fn new(output: O) -> Self {
+        Self {
+            output,
+            snapshots: Vec::new(),
+        }
+    }
+
+    pub fn with_snapshot(mut self, snapshot: AcquisitionSnapshot<O>) -> Self {
+        self.snapshots.push(snapshot);
+        self
     }
 }
 
@@ -69,6 +116,10 @@ impl Error for AcquisitionError {
 #[allow(async_fn_in_trait)]
 pub trait Acquisition<I, O>: Send + Sync {
     async fn acquire(&self, input: &I) -> Result<O, AcquisitionError>;
+
+    async fn acquire_with_snapshots(&self, input: &I) -> Result<AcquiredOutput<O>, AcquisitionError> {
+        self.acquire(input).await.map(AcquiredOutput::new)
+    }
 
     fn metadata(&self) -> AcquisitionMetadata {
         AcquisitionMetadata::default()

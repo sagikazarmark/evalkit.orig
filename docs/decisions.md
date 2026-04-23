@@ -197,3 +197,16 @@ Why:
 
 Rejected alternative:
 Introduce a multi-stage internal scheduler first and expose queue internals publicly. That would add substantial surface area before there is evidence that the current pull executor needs a full worker runtime.
+
+## 2026-04-23 - Carry real acquisition snapshots into partial scoring
+
+Decision:
+Add optional intermediate outputs to the acquisition surface via `AcquiredOutput` and `AcquisitionSnapshot`, then let the executor's partial scoring plans evaluate those snapshots.
+
+Why:
+- This makes partial scoring depend on real provider or adapter progress instead of only synthetic prefixes derived after the fact.
+- The default `Acquisition::acquire_with_snapshots(...)` implementation keeps existing acquisitions source-compatible.
+- Snapshot labels give the executor a stable bridge between acquisition stages and scorer definitions without forcing a token-stream trait into every acquisition immediately.
+
+Rejected alternative:
+Teach partial scoring only from the final output by slicing prefixes or chunks after acquisition completes. That was useful as a first proof of concept, but it cannot represent true provider stages or adapter-emitted intermediate results.
