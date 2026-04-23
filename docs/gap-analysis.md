@@ -4,12 +4,12 @@ This document compares the current codebase to `docs/ROADMAP.md` and identifies 
 
 ## Recommendation
 
-Phase 0 is complete. The next work should move into Phase 1.
+Phases 0 and 1 are functionally complete in-repo. The next work should move into Phase 2 while finishing the remaining runner ergonomics from Phase 3.
 
 Recommended build order:
-1. Freeze and publish the run-log schema as a documented Phase 1 artifact.
-2. Formalize the subprocess plugin protocol and ship reference shims.
-3. Finish the remaining `evalkit-scorers-llm` work on top of the newly landed anyllm-backed primitive.
+1. Introduce the first `Executor` trait plus sampling primitives for Phase 2.
+2. Add dataset splits / tags / filters to the CLI runner.
+3. Exercise the source-only GitHub Action and TypeScript shim in a live environment once a JS runtime and PR context are available.
 
 ## Current State Summary
 
@@ -75,7 +75,7 @@ Remaining work:
 
 ## Phase 1 - Polyglot Protocol And Run-Log Schema
 
-Status: early partials only
+Status: exit criteria met, with follow-on scorer depth still open
 
 Already present:
 - JSONL read/write helpers exist
@@ -110,7 +110,7 @@ Gaps:
 
 ## Phase 3 - CI / Developer Workflow
 
-Status: partial CLI workflow foundation
+Status: substantial workflow foundation landed
 
 Already present:
 - `evalkit-cli` exists as a binary crate
@@ -121,6 +121,7 @@ Already present:
 
 Gaps:
 - The GitHub Action is source-only right now; it was not exercised against a live pull request from this environment
+- No dataset splits / tags / filters in the runner yet
 
 ## Phase 4 - App Surface
 
@@ -144,9 +145,9 @@ Gaps:
 
 ## Highest-Leverage Next Slice
 
-The best next implementation slice is finishing the remaining Phase 1(c) depth:
-- add portable cost reporting on top of the new scorer resource hook when provider crates can supply it
-- add richer classifier-side metadata capture such as reasoning or confidence alongside the new calibrated helper
-- deepen `g_eval` beyond prompt-level step plans into a fuller multi-pass or self-generated evaluation flow
+The best next implementation slice is the start of Phase 2:
+- add a first `Executor` trait that can pull samples, acquire, score, and push results through an explicit sink
+- land `AlwaysSampler`, `PercentSampler`, and `TargetedSampler` alongside that executor surface
+- thread the existing `evalkit-otel::OtelResultEmitter` in as the default sink example
 
-That sequence turns the newly landed wrappers into a more complete LLM scorer foundation instead of stopping at the first public API shape.
+In parallel, the next runner-facing Phase 3 gap is dataset splits / tags / filters so CI and local workflows can target subsets without external preprocessing.
