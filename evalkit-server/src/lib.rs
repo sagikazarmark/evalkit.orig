@@ -81,6 +81,30 @@ pub struct PromotionResult {
     pub output_path: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AlertRule {
+    pub id: i64,
+    pub name: String,
+    pub scorer_name: String,
+    pub min_value: f64,
+    pub created_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateAlertRule {
+    pub name: String,
+    pub scorer_name: String,
+    pub min_value: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AlertStatus {
+    pub rule: AlertRule,
+    pub run_id: String,
+    pub observed_value: Option<f64>,
+    pub triggered: bool,
+}
+
 #[derive(Debug)]
 pub enum ServerError {
     NotFound(String),
@@ -343,6 +367,71 @@ impl RunStore {
         })
     }
 
+    pub fn create_alert_rule(&self, rule: &CreateAlertRule) -> Result<AlertRule, ServerError> {
+        let connection = self.connection()?;
+        let created_at = Utc::now();
+        connection
+            .execute(
+                "INSERT INTO alert_rules (name, scorer_name, min_value, created_at) VALUES (?1, ?2, ?3, ?4)",
+                params![rule.name, rule.scorer_name, rule.min_value, created_at.to_rfc3339()],
+            )
+            .map_err(store_error)?;
+
+        Ok(AlertRule {
+            id: connection.last_insert_rowid(),
+            name: rule.name.clone(),
+            scorer_name: rule.scorer_name.clone(),
+            min_value: rule.min_value,
+            created_at,
+        })
+    }
+
+    pub fn list_alert_rules(&self) -> Result<Vec<AlertRule>, ServerError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id, name, scorer_name, min_value, created_at FROM alert_rules ORDER BY created_at ASC",
+            )
+            .map_err(store_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(AlertRule {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    scorer_name: row.get(2)?,
+                    min_value: row.get(3)?,
+                    created_at: parse_timestamp(row.get::<_, String>(4)?)?,
+                })
+            })
+            .map_err(store_error)?;
+
+        let mut rules = Vec::new();
+        for row in rows {
+            rules.push(row.map_err(store_error)?);
+        }
+        Ok(rules)
+    }
+
+    pub fn evaluate_alerts(&self, run_id: &str) -> Result<Vec<AlertStatus>, ServerError> {
+        let run = self
+            .get_run(run_id)?
+            .ok_or_else(|| ServerError::NotFound(format!("run `{run_id}` not found")))?;
+        let rules = self.list_alert_rules()?;
+
+        Ok(rules
+            .into_iter()
+            .map(|rule| {
+                let observed_value = average_score(&run.result, &rule.scorer_name);
+                AlertStatus {
+                    rule: rule.clone(),
+                    run_id: run_id.to_string(),
+                    triggered: observed_value.is_some_and(|value| value < rule.min_value),
+                    observed_value,
+                }
+            })
+            .collect())
+    }
+
     fn init_schema(&self) -> Result<(), ServerError> {
         let connection = self.connection()?;
         connection
@@ -366,6 +455,13 @@ impl RunStore {
                     created_at TEXT NOT NULL,
                     promoted_at TEXT,
                     FOREIGN KEY(run_id) REFERENCES runs(run_id)
+                );
+                CREATE TABLE IF NOT EXISTS alert_rules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    scorer_name TEXT NOT NULL,
+                    min_value REAL NOT NULL,
+                    created_at TEXT NOT NULL
                 );",
             )
             .map_err(store_error)
@@ -381,15 +477,19 @@ pub fn router(store: RunStore) -> Router {
 
     Router::new()
         .route("/", get(home_page))
+        .route("/dashboard", get(dashboard_page))
         .route("/runs/:run_id", get(run_detail_page))
         .route("/runs/:left/diff/:right", get(diff_page))
         .route("/runs/:run_id/annotations", axum::routing::post(create_annotation_form))
         .route("/runs/:run_id/promote", axum::routing::post(promote_annotations_form))
+        .route("/alert-rules", axum::routing::post(create_alert_rule_form))
         .route("/healthz", get(healthz))
         .route("/api/runs", get(list_runs).post(create_run))
         .route("/api/runs/:run_id", get(get_run))
         .route("/api/runs/:run_id/annotations", get(list_annotations).post(create_annotation))
         .route("/api/runs/:run_id/promote", axum::routing::post(promote_annotations))
+        .route("/api/runs/:run_id/alerts", get(get_alerts))
+        .route("/api/alert-rules", get(list_alert_rules).post(create_alert_rule))
         .route("/api/runs/:left/diff/:right", get(diff_runs))
         .with_state(state)
 }
@@ -400,6 +500,17 @@ async fn healthz() -> &'static str {
 
 async fn home_page(State(state): State<AppState>) -> Result<Html<String>, ServerError> {
     Ok(Html(render_home_page(&state.store.list_runs()?)))
+}
+
+async fn dashboard_page(State(state): State<AppState>) -> Result<Html<String>, ServerError> {
+    let runs = state.store.list_runs()?;
+    let rules = state.store.list_alert_rules()?;
+    let mut alerts = Vec::new();
+    for run in runs.iter().take(5) {
+        alerts.extend(state.store.evaluate_alerts(&run.run_id)?);
+    }
+
+    Ok(Html(render_dashboard_page(&runs, &rules, &alerts)))
 }
 
 async fn list_runs(State(state): State<AppState>) -> Result<Json<Vec<RunSummary>>, ServerError> {
@@ -474,6 +585,14 @@ async fn promote_annotations_form(
     Ok(Redirect::to(&format!("/runs/{run_id}")))
 }
 
+async fn create_alert_rule_form(
+    State(state): State<AppState>,
+    Form(rule): Form<CreateAlertRule>,
+) -> Result<Redirect, ServerError> {
+    state.store.create_alert_rule(&rule)?;
+    Ok(Redirect::to("/dashboard"))
+}
+
 async fn run_detail_page(
     State(state): State<AppState>,
     AxumPath(run_id): AxumPath<String>,
@@ -493,6 +612,26 @@ async fn diff_page(
 ) -> Result<Html<String>, ServerError> {
     let comparison = state.store.diff_runs(&left, &right)?;
     Ok(Html(render_diff_page(&comparison)))
+}
+
+async fn create_alert_rule(
+    State(state): State<AppState>,
+    Json(rule): Json<CreateAlertRule>,
+) -> Result<(StatusCode, Json<AlertRule>), ServerError> {
+    Ok((StatusCode::CREATED, Json(state.store.create_alert_rule(&rule)?)))
+}
+
+async fn list_alert_rules(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<AlertRule>>, ServerError> {
+    Ok(Json(state.store.list_alert_rules()?))
+}
+
+async fn get_alerts(
+    State(state): State<AppState>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Result<Json<Vec<AlertStatus>>, ServerError> {
+    Ok(Json(state.store.evaluate_alerts(&run_id)?))
 }
 
 fn parse_timestamp(value: String) -> Result<chrono::DateTime<Utc>, rusqlite::Error> {
@@ -606,6 +745,57 @@ fn render_run_detail_page(run: &StoredRun, annotations: &[AnnotationRecord]) -> 
     html
 }
 
+fn render_dashboard_page(runs: &[RunSummary], rules: &[AlertRule], alerts: &[AlertStatus]) -> String {
+    let mut html = page_shell(
+        "Dashboard",
+        String::from("<h1>Prod-Eval Dashboard</h1><p>Recent runs, alert rules, and threshold breaches.</p>"),
+    );
+    html.push_str("<section><h2>Alert rules</h2><form method=\"post\" action=\"/alert-rules\"><label>Name <input name=\"name\" required></label><br><label>Scorer <input name=\"scorer_name\" required></label><br><label>Minimum value <input name=\"min_value\" type=\"number\" step=\"0.01\" required></label><br><button type=\"submit\">Create rule</button></form>");
+    if rules.is_empty() {
+        html.push_str("<p>No alert rules configured.</p>");
+    } else {
+        html.push_str("<ul>");
+        for rule in rules {
+            html.push_str(&format!(
+                "<li><strong>{}</strong> on {} below {:.3}</li>",
+                escape_html(&rule.name),
+                escape_html(&rule.scorer_name),
+                rule.min_value,
+            ));
+        }
+        html.push_str("</ul>");
+    }
+    html.push_str("</section><section><h2>Recent runs</h2><ul>");
+    for run in runs.iter().take(5) {
+        html.push_str(&format!(
+            "<li><a href=\"/runs/{}\">{}</a> · {} samples · <a href=\"/api/runs/{}/alerts\">alert json</a></li>",
+            run.run_id,
+            run.run_id,
+            run.sample_count,
+            run.run_id,
+        ));
+    }
+    html.push_str("</ul></section><section><h2>Triggered alerts</h2>");
+    let triggered = alerts.iter().filter(|alert| alert.triggered).collect::<Vec<_>>();
+    if triggered.is_empty() {
+        html.push_str("<p>No active alerts.</p>");
+    } else {
+        html.push_str("<ul>");
+        for alert in triggered {
+            html.push_str(&format!(
+                "<li><strong>{}</strong> on run {}: observed {:.3}, threshold {:.3}</li>",
+                escape_html(&alert.rule.name),
+                escape_html(&alert.run_id),
+                alert.observed_value.unwrap_or_default(),
+                alert.rule.min_value,
+            ));
+        }
+        html.push_str("</ul>");
+    }
+    html.push_str("</section></body></html>");
+    html
+}
+
 fn render_diff_page(comparison: &Comparison) -> String {
     let mut html = page_shell(
         "Run Diff",
@@ -671,9 +861,40 @@ fn escape_html(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
+fn average_score(run: &RunResult, scorer_name: &str) -> Option<f64> {
+    let mut values = Vec::new();
+
+    for sample in &run.samples {
+        for trial in &sample.trials {
+            let Some(score) = trial.scores.get(scorer_name) else {
+                continue;
+            };
+            if let Some(value) = score_value(score) {
+                values.push(value);
+            }
+        }
+    }
+
+    if values.is_empty() {
+        None
+    } else {
+        Some(values.iter().sum::<f64>() / values.len() as f64)
+    }
+}
+
+fn score_value(score: &Result<evalkit::Score, evalkit::ScorerError>) -> Option<f64> {
+    match score {
+        Ok(evalkit::Score::Binary(value)) => Some(if *value { 1.0 } else { 0.0 }),
+        Ok(evalkit::Score::Numeric(value)) => Some(*value),
+        Ok(evalkit::Score::Structured { score, .. }) => Some(*score),
+        Ok(evalkit::Score::Metric { value, .. }) => Some(*value),
+        Ok(evalkit::Score::Label(_)) | Ok(_) | Err(_) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CreateAnnotation, PromoteAnnotationsRequest, RunStore, StoredRun};
+    use super::{CreateAlertRule, CreateAnnotation, PromoteAnnotationsRequest, RunStore, StoredRun};
     use chrono::{Duration, Utc};
     use evalkit::{Direction, RunMetadata, RunResult, Sample, SampleResult, Score, ScoreDefinition, TrialResult};
     use serde_json::json;
@@ -773,5 +994,18 @@ mod tests {
         assert!(promoted.contains("sample-a"));
         assert!(promoted.contains("needs_review"));
         assert!(store.list_annotations("run-a").unwrap()[0].promoted_at.is_some());
+
+        let rule = store
+            .create_alert_rule(&CreateAlertRule {
+                name: String::from("Exact match floor"),
+                scorer_name: String::from("exact_match"),
+                min_value: 0.5,
+            })
+            .unwrap();
+        assert_eq!(rule.scorer_name, "exact_match");
+
+        let alerts = store.evaluate_alerts("run-b").unwrap();
+        assert_eq!(alerts.len(), 1);
+        assert!(alerts[0].triggered);
     }
 }

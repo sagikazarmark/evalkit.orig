@@ -140,13 +140,20 @@ Gaps:
 
 ## Phase 4 - App Surface
 
-Status: not started
+Status: initial app surface landed
+
+Already present:
+- `evalkit-server` now exists as a standalone workspace crate
+- SQLite-backed run storage now exists for `RunResult` payloads plus source sample snapshots
+- HTTP API routes now cover list / get / diff / annotate / promote / alert-rule flows
+- Minimal server-rendered web UI now covers run browsing, run drill-down, diff viewing, and dashboard pages
+- Annotation flow now writes promoted dataset JSONL entries back out from stored source samples
+- Threshold alert rules and a basic dashboard now exist on top of stored runs
 
 Gaps:
-- No `evalkit-server`
-- No SQLite-backed run store
-- No web UI
-- No annotation flow
+- The current UI is intentionally minimal and server-rendered; there is still no richer review workflow or bulk triage surface
+- Dashboard alerts currently evaluate stored run results rather than directly owning OTLP ingestion inside the server process
+- There is still no authentication, multi-user workflow, or background job model
 
 ## Phase 5 - Scale And Governance
 
@@ -160,10 +167,12 @@ Gaps:
 
 ## Highest-Leverage Next Slice
 
-The best next implementation slice is the next Phase 2 increment:
-- add a third source adapter, likely one of Kafka or NATS, so the source abstraction is proven against a networked stream
-- if provider-stream support becomes important, lift acquisition snapshots into a more explicit chunk/token stream contract
+With non-networked Phase 2 and the first Phase 4 surface now in place, the remaining roadmap work shifts to Phase 5:
+- distributed run sharding
+- PII scrubbing hooks in the eval pipeline
+- drift detection on streaming eval results
+- red-team / adversarial scorer packs
 
-With networked sources intentionally deferred, the remaining roadmap work now shifts to Phase 4.
+In parallel, the intentionally deferred gaps remain live GitHub Action validation and optional networked Phase 2 sources.
 
 In parallel, the next runner-facing Phase 3 gap is live GitHub Action validation in a pull-request environment so the already-landed workflow can be exercised end to end.
