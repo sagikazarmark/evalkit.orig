@@ -88,12 +88,13 @@ Already present:
 - The kernel now aggregates scorer-side token usage and cost through `score_with_resources`, and judge token usage can flow into `SampleResult`
 - `g_eval` now auto-generates explicit evaluation steps from rubric criteria and also supports caller-provided step overrides
 - `llm_classifier` now accepts richer typed label definitions with optional descriptions, not just bare label strings
+- `calibrated_llm_classifier` can now turn label outputs into numeric `Score::Structured` results using per-label calibration scores
 
 Gaps:
 - No reference TypeScript plugin shim yet
 - anyllm-backed judges currently populate token usage in `SampleResult`, but not cost because the provider layer does not expose portable cost data yet
 - Reasoning capture is currently limited to numeric and binary judges because `Score::Structured` requires a numeric primary score
-- `llm_classifier` now supports richer label definitions, but classifier-side metadata and calibration helpers are still missing
+- `llm_classifier` now supports richer label definitions and calibrated structured scores, but richer classifier-side metadata still remains
 - `g_eval` now has explicit steps, but it is still not a fuller multi-pass or self-generated evaluation flow
 
 ## Phase 2 - Streaming / Online Scoring
@@ -143,7 +144,7 @@ Gaps:
 
 The best next implementation slice is finishing the remaining Phase 1(c) depth:
 - add portable cost reporting on top of the new scorer resource hook when provider crates can supply it
-- add classifier-side metadata capture or calibration helpers on top of the richer label-definition API
+- add richer classifier-side metadata capture such as reasoning or confidence alongside the new calibrated helper
 - deepen `g_eval` beyond prompt-level step plans into a fuller multi-pass or self-generated evaluation flow
 
 That sequence turns the newly landed wrappers into a more complete LLM scorer foundation instead of stopping at the first public API shape.

@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::time::Duration;
@@ -74,6 +75,26 @@ where
         labels,
         instructions.into(),
     ))
+}
+
+/// Creates a closed-set classifier that maps labels onto numeric structured scores.
+pub fn calibrated_llm_classifier<P, I>(
+    provider: P,
+    model: impl Into<String>,
+    labels: I,
+    instructions: impl Into<String>,
+) -> Result<CalibratedLabelScorer<LlmJudge>, LlmJudgeBuildError>
+where
+    P: ChatProvider + 'static,
+    P::Stream: 'static,
+    I: IntoIterator<Item = ClassifierLabel>,
+{
+    let labels = normalize_classifier_labels(labels)?;
+    let inner =
+        llm_classifier_with_normalized_labels(provider, model, labels.clone(), instructions.into());
+    let name = inner.definition.name.clone();
+
+    CalibratedLabelScorer::new(inner, name, labels)
 }
 
 fn llm_classifier_with_normalized_labels<P>(
@@ -238,11 +259,13 @@ impl From<&str> for PromptTemplate {
 }
 
 /// Closed-set label definition for `llm_classifier`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ClassifierLabel {
     pub label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing)]
+    pub score: Option<f64>,
 }
 
 impl ClassifierLabel {
@@ -250,12 +273,119 @@ impl ClassifierLabel {
         Self {
             label: label.into(),
             description: None,
+            score: None,
         }
     }
 
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
+    }
+
+    pub fn score(mut self, score: f64) -> Self {
+        self.score = Some(score);
+        self
+    }
+}
+
+/// Wraps a label-producing scorer and maps labels onto numeric structured scores.
+#[derive(Debug)]
+pub struct CalibratedLabelScorer<S> {
+    inner: S,
+    label_scores: BTreeMap<String, f64>,
+    label_definitions: Vec<ClassifierLabel>,
+    definition: ScoreDefinition,
+}
+
+impl<S> CalibratedLabelScorer<S> {
+    pub fn new(
+        inner: S,
+        name: impl Into<String>,
+        labels: Vec<ClassifierLabel>,
+    ) -> Result<Self, LlmJudgeBuildError> {
+        let label_scores = extract_label_scores(&labels)?;
+        let definition = ScoreDefinition::maximize(format!("{}_calibrated", name.into()));
+
+        Ok(Self {
+            inner,
+            label_scores,
+            label_definitions: labels,
+            definition,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct MissingCalibratedLabelError {
+    label: String,
+}
+
+impl Display for MissingCalibratedLabelError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "classifier returned uncalibrated label '{}'", self.label)
+    }
+}
+
+impl Error for MissingCalibratedLabelError {}
+
+#[derive(Debug)]
+struct CalibratedClassifierTypeMismatchError {
+    score: Score,
+}
+
+impl Display for CalibratedClassifierTypeMismatchError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "calibrated classifier requires the inner scorer to return Score::Label, got {:?}",
+            self.score
+        )
+    }
+}
+
+impl Error for CalibratedClassifierTypeMismatchError {}
+
+impl<I, O, R, S> Scorer<I, O, R> for CalibratedLabelScorer<S>
+where
+    S: Scorer<I, O, R>,
+{
+    async fn score(&self, ctx: &ScorerContext<'_, I, O, R>) -> Result<Score, ScorerError> {
+        Ok(self.score_with_resources(ctx).await?.score)
+    }
+
+    async fn score_with_resources(
+        &self,
+        ctx: &ScorerContext<'_, I, O, R>,
+    ) -> Result<ScoreOutcome, ScorerError> {
+        let outcome = self.inner.score_with_resources(ctx).await?;
+
+        match outcome.score {
+            Score::Label(label) => {
+                let Some(score) = self.label_scores.get(&label).copied() else {
+                    return Err(ScorerError::invalid_input(MissingCalibratedLabelError {
+                        label,
+                    }));
+                };
+
+                Ok(ScoreOutcome::new(Score::Structured {
+                    score,
+                    reasoning: String::new(),
+                    metadata: calibrated_label_metadata(&label, score, &self.label_definitions),
+                })
+                .with_resources(outcome.resources))
+            }
+            other => Err(ScorerError::invalid_input(
+                CalibratedClassifierTypeMismatchError { score: other },
+            )),
+        }
+    }
+
+    fn definition(&self) -> ScoreDefinition {
+        self.definition.clone()
+    }
+
+    fn metadata(&self) -> ScorerMetadata {
+        self.inner.metadata()
     }
 }
 
@@ -724,6 +854,8 @@ pub enum LlmJudgeBuildError {
     EmptyEntries { field: &'static str },
     BlankEntry { field: &'static str, index: usize },
     DuplicateEntry { field: &'static str, value: String },
+    MissingScore { label: String },
+    NonFiniteScore { label: String },
 }
 
 impl Display for LlmJudgeBuildError {
@@ -735,6 +867,12 @@ impl Display for LlmJudgeBuildError {
             }
             Self::DuplicateEntry { field, value } => {
                 write!(f, "{field} must not contain duplicate entry '{value}'")
+            }
+            Self::MissingScore { label } => {
+                write!(f, "label '{label}' must define a calibration score")
+            }
+            Self::NonFiniteScore { label } => {
+                write!(f, "label '{label}' must define a finite calibration score")
             }
         }
     }
@@ -851,6 +989,7 @@ where
         normalized.push(ClassifierLabel {
             label: name.to_owned(),
             description,
+            score: label.score,
         });
     }
 
@@ -859,6 +998,51 @@ where
     }
 
     Ok(normalized)
+}
+
+fn extract_label_scores(
+    labels: &[ClassifierLabel],
+) -> Result<BTreeMap<String, f64>, LlmJudgeBuildError> {
+    let mut scores = BTreeMap::new();
+
+    for label in labels {
+        let Some(score) = label.score else {
+            return Err(LlmJudgeBuildError::MissingScore {
+                label: label.label.clone(),
+            });
+        };
+
+        if !score.is_finite() {
+            return Err(LlmJudgeBuildError::NonFiniteScore {
+                label: label.label.clone(),
+            });
+        }
+
+        scores.insert(label.label.clone(), score);
+    }
+
+    Ok(scores)
+}
+
+fn calibrated_label_metadata(label: &str, score: f64, labels: &[ClassifierLabel]) -> Value {
+    let labels = labels
+        .iter()
+        .map(|label| {
+            json!({
+                "label": label.label,
+                "description": label.description,
+                "score": label.score,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    json!({
+        "classifier": {
+            "label": label,
+            "score": score,
+            "labels": labels,
+        }
+    })
 }
 
 fn render_classifier_labels(labels: &[ClassifierLabel]) -> String {
@@ -894,8 +1078,9 @@ fn render_numbered_list(entries: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClassifierLabel, LlmJudgeBuildError, LlmJudgeOutput, PromptTemplate, g_eval,
-        g_eval_with_steps, llm_classifier, llm_classifier_with_labels, llm_judge,
+        ClassifierLabel, LlmJudgeBuildError, LlmJudgeOutput, PromptTemplate,
+        calibrated_llm_classifier, g_eval, g_eval_with_steps, llm_classifier,
+        llm_classifier_with_labels, llm_judge,
     };
     use anyllm::{
         ChatCapability, ChatResponseBuilder, Error as AnyLlmError, MockProvider, ResponseFormat,
@@ -1152,6 +1337,58 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn calibrated_llm_classifier_returns_structured_score_with_label_metadata() {
+        let provider = MockProvider::with_response(
+            ChatResponseBuilder::new()
+                .text(r#"{"label":"reject"}"#)
+                .build(),
+        )
+        .with_supported_chat_capabilities([ChatCapability::StructuredOutput]);
+
+        let scorer = calibrated_llm_classifier(
+            provider,
+            "judge-model",
+            [
+                ClassifierLabel::new("approve")
+                    .description("Use when the answer is correct and grounded.")
+                    .score(1.0),
+                ClassifierLabel::new("reject")
+                    .description("Use when the answer is wrong or unsupported.")
+                    .score(0.0),
+            ],
+            "Classify whether the answer should be accepted.",
+        )
+        .unwrap();
+
+        let input = "question".to_string();
+        let output = "answer".to_string();
+        let reference = "gold".to_string();
+        let ctx = ScorerContext::new(&input, &output, Some(&reference));
+
+        let score = scorer.score(&ctx).await.unwrap();
+
+        match score {
+            Score::Structured {
+                score,
+                reasoning,
+                metadata,
+            } => {
+                assert_eq!(score, 0.0);
+                assert!(reasoning.is_empty());
+                assert_eq!(metadata["classifier"]["label"], "reject");
+                assert_eq!(metadata["classifier"]["score"], 0.0);
+                assert_eq!(
+                    metadata["classifier"]["labels"][1]["description"],
+                    "Use when the answer is wrong or unsupported."
+                );
+            }
+            other => panic!("expected structured score, got {other:?}"),
+        }
+
+        assert_eq!(scorer.definition.name, "llm_classifier_calibrated");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn g_eval_renders_criteria_and_returns_structured_score() {
         let provider = MockProvider::with_response(
             ChatResponseBuilder::new()
@@ -1283,6 +1520,35 @@ mod tests {
             LlmJudgeBuildError::DuplicateEntry {
                 field: "labels",
                 value: "approve".to_string(),
+            }
+        );
+
+        assert_eq!(
+            calibrated_llm_classifier(
+                MockProvider::empty(),
+                "judge-model",
+                [
+                    ClassifierLabel::new("approve").score(1.0),
+                    ClassifierLabel::new("reject"),
+                ],
+                "Classify the answer.",
+            )
+            .unwrap_err(),
+            LlmJudgeBuildError::MissingScore {
+                label: "reject".to_string(),
+            }
+        );
+
+        assert_eq!(
+            calibrated_llm_classifier(
+                MockProvider::empty(),
+                "judge-model",
+                [ClassifierLabel::new("approve").score(f64::NAN)],
+                "Classify the answer.",
+            )
+            .unwrap_err(),
+            LlmJudgeBuildError::NonFiniteScore {
+                label: "approve".to_string(),
             }
         );
     }
