@@ -126,11 +126,11 @@ Already present:
 - `evalkit diff <baseline> <candidate>` now exists and can emit markdown plus optional JSON output from kernel comparisons
 - `evalkit watch` now reruns evals on file changes and supports a bounded `--max-runs` mode for automation
 - `docs/cli-config.md` now formalizes the TOML config shape used by `evalkit run` and `evalkit watch`
+- `evalkit run` and `evalkit watch` now support dataset selection by `split`, `tags`, and exact-match metadata filters via the TOML config
 - GitHub Action source now exists under `.github/actions/evalkit-pr-comment/` and wraps `evalkit run` plus `evalkit diff`
 
 Gaps:
 - The GitHub Action is source-only right now; it was not exercised against a live pull request from this environment
-- No dataset splits / tags / filters in the runner yet
 
 ## Phase 4 - App Surface
 
@@ -159,4 +159,4 @@ The best next implementation slice is the next Phase 2 increment:
 - add judge-model tiering so targeted rescore flows can be composed directly on the executor path
 - add partial or incomplete-output scoring so the executor can evaluate streaming generations before completion
 
-In parallel, the next runner-facing Phase 3 gap is dataset splits / tags / filters so CI and local workflows can target subsets without external preprocessing.
+In parallel, the next runner-facing Phase 3 gap is live GitHub Action validation in a pull-request environment so the already-landed workflow can be exercised end to end.

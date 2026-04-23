@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use evalkit_providers::{HttpAcquisition, SubprocessAcquisition, SubprocessScorer};
 use evalkit_scorers_text::{contains, exact_match, json_schema};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
@@ -111,11 +111,22 @@ struct WatchArgs {
 struct Config {
     acquisition: AcquisitionConfig,
     #[serde(default)]
+    dataset: DatasetSelectionConfig,
+    #[serde(default)]
     run: RunConfig,
     #[serde(rename = "scorer", default)]
     scorers: Vec<ScorerConfigEntry>,
     #[serde(default)]
     threshold: HashMap<String, f64>,
+}
+
+#[derive(Deserialize, Default)]
+struct DatasetSelectionConfig {
+    split: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    metadata: HashMap<String, Value>,
 }
 
 /// Flat struct — either `url` (HTTP) or `command` (subprocess plugin) must be set, not both.
@@ -199,6 +210,11 @@ struct DatasetRow {
     id: Option<String>,
     input: String,
     reference: Option<String>,
+    split: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    metadata: HashMap<String, Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -327,7 +343,7 @@ async fn run_command(args: RunArgs) -> Result<bool, CliError> {
     }
 
     // Load dataset
-    let dataset = load_dataset(&args.dataset)?;
+    let dataset = load_dataset(&args.dataset, &config.dataset)?;
 
     // Build acquisition
     let acquisition = build_acquisition(config.acquisition)?;
@@ -541,7 +557,10 @@ fn build_acquisition(cfg: AcquisitionConfig) -> Result<CliAcquisition, CliError>
     }
 }
 
-fn load_dataset(path: &PathBuf) -> Result<Dataset<String, String>, CliError> {
+fn load_dataset(
+    path: &PathBuf,
+    selection: &DatasetSelectionConfig,
+) -> Result<Dataset<String, String>, CliError> {
     let file = File::open(path)
         .map_err(|e| CliError::Dataset(format!("cannot open {}: {e}", path.display())))?;
     let mut samples = Vec::new();
@@ -555,12 +574,28 @@ fn load_dataset(path: &PathBuf) -> Result<Dataset<String, String>, CliError> {
         let row: DatasetRow = serde_json::from_str(&line)
             .map_err(|e| CliError::Dataset(format!("invalid JSON at line {}: {e}", idx + 1)))?;
 
+        if !row_matches_selection(&row, selection) {
+            continue;
+        }
+
         let mut builder = Sample::<String, String>::builder(row.input);
         if let Some(id) = row.id {
             builder = builder.id(id);
         }
         if let Some(reference) = row.reference {
             builder = builder.reference(reference);
+        }
+        if let Some(split) = row.split {
+            builder = builder.metadata("split", Value::String(split));
+        }
+        if !row.tags.is_empty() {
+            builder = builder.metadata(
+                "tags",
+                Value::Array(row.tags.into_iter().map(Value::String).collect()),
+            );
+        }
+        for (key, value) in row.metadata {
+            builder = builder.metadata(key, value);
         }
         samples.push(
             builder.build().map_err(|e| {
@@ -574,6 +609,28 @@ fn load_dataset(path: &PathBuf) -> Result<Dataset<String, String>, CliError> {
     }
 
     Ok(samples.into())
+}
+
+fn row_matches_selection(row: &DatasetRow, selection: &DatasetSelectionConfig) -> bool {
+    if let Some(expected_split) = selection.split.as_deref() {
+        if row.split.as_deref() != Some(expected_split) {
+            return false;
+        }
+    }
+
+    if !selection.tags.is_empty()
+        && !selection
+            .tags
+            .iter()
+            .all(|expected| row.tags.iter().any(|tag| tag == expected))
+    {
+        return false;
+    }
+
+    selection
+        .metadata
+        .iter()
+        .all(|(key, expected)| row.metadata.get(key) == Some(expected))
 }
 
 fn load_run_result(path: &PathBuf) -> Result<RunResult, CliError> {
@@ -782,6 +839,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use evalkit::{RunMetadata, RunResult, SampleResult, TrialResult};
     use std::time::Duration;
+    use tempfile::tempdir;
 
     #[test]
     fn plugin_scorer_requires_a_command() {
@@ -844,6 +902,77 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "config error: [acquisition] subprocess plugins always use the canonical `input`/`output` protocol fields"
+        );
+    }
+
+    #[test]
+    fn load_dataset_applies_split_tag_and_metadata_filters() {
+        let temp = tempdir().unwrap();
+        let dataset_path = temp.path().join("dataset.jsonl");
+        std::fs::write(
+            &dataset_path,
+            concat!(
+                "{\"id\":\"keep\",\"input\":\"hello\",\"reference\":\"echo::hello\",\"split\":\"validation\",\"tags\":[\"math\",\"hard\"],\"metadata\":{\"locale\":\"en\"}}\n",
+                "{\"id\":\"drop-split\",\"input\":\"hola\",\"reference\":\"echo::hola\",\"split\":\"train\",\"tags\":[\"math\",\"hard\"],\"metadata\":{\"locale\":\"en\"}}\n",
+                "{\"id\":\"drop-tag\",\"input\":\"bonjour\",\"reference\":\"echo::bonjour\",\"split\":\"validation\",\"tags\":[\"math\"],\"metadata\":{\"locale\":\"en\"}}\n"
+            ),
+        )
+        .unwrap();
+
+        let dataset = load_dataset(
+            &dataset_path,
+            &DatasetSelectionConfig {
+                split: Some(String::from("validation")),
+                tags: vec![String::from("math"), String::from("hard")],
+                metadata: HashMap::from([(
+                    String::from("locale"),
+                    Value::String(String::from("en")),
+                )]),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(dataset.samples.len(), 1);
+        assert_eq!(dataset.samples[0].id, "keep");
+        assert_eq!(
+            dataset.samples[0].metadata.get("split"),
+            Some(&Value::String(String::from("validation")))
+        );
+        assert_eq!(
+            dataset.samples[0].metadata.get("tags"),
+            Some(&Value::Array(vec![
+                Value::String(String::from("math")),
+                Value::String(String::from("hard")),
+            ]))
+        );
+        assert_eq!(
+            dataset.samples[0].metadata.get("locale"),
+            Some(&Value::String(String::from("en")))
+        );
+    }
+
+    #[test]
+    fn load_dataset_reports_when_filters_remove_every_sample() {
+        let temp = tempdir().unwrap();
+        let dataset_path = temp.path().join("dataset.jsonl");
+        std::fs::write(
+            &dataset_path,
+            "{\"input\":\"hello\",\"reference\":\"echo::hello\",\"split\":\"train\"}\n",
+        )
+        .unwrap();
+
+        let err = load_dataset(
+            &dataset_path,
+            &DatasetSelectionConfig {
+                split: Some(String::from("validation")),
+                ..DatasetSelectionConfig::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "dataset error: dataset file contains no samples"
         );
     }
 

@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
 use evalkit::{
-    read_jsonl, write_jsonl, Comparison, RunMetadata, RunResult, SampleResult, Score,
-    ScoreDefinition, TrialResult,
+    Comparison, RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, TrialResult,
+    read_jsonl, write_jsonl,
 };
 use tempfile::tempdir;
 
@@ -134,4 +134,60 @@ fn watch_command_runs_initial_eval_when_max_runs_is_one() {
 
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("Running eval..."));
+}
+
+#[test]
+fn run_command_filters_dataset_by_split_tags_and_metadata() {
+    let temp = tempdir().unwrap();
+    let dataset_path = temp.path().join("dataset.jsonl");
+    let config_path = temp.path().join("eval.toml");
+    let output_path = temp.path().join("result.jsonl");
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let plugin_path = repo_root.join("python/evalkit_plugin/examples/echo_acquisition.py");
+
+    std::fs::write(
+        &dataset_path,
+        concat!(
+            "{\"id\":\"keep\",\"input\":\"hello\",\"reference\":\"echo::hello\",\"split\":\"validation\",\"tags\":[\"smoke\",\"en\"],\"metadata\":{\"locale\":\"en\"}}\n",
+            "{\"id\":\"drop\",\"input\":\"bonjour\",\"reference\":\"echo::bonjour\",\"split\":\"validation\",\"tags\":[\"smoke\"],\"metadata\":{\"locale\":\"fr\"}}\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &config_path,
+        format!(
+            concat!(
+                "[acquisition]\n",
+                "command = [\"python3\", \"{}\"]\n\n",
+                "[dataset]\n",
+                "split = \"validation\"\n",
+                "tags = [\"smoke\", \"en\"]\n",
+                "metadata = {{ locale = \"en\" }}\n\n",
+                "[[scorer]]\n",
+                "type = \"exact_match\"\n"
+            ),
+            plugin_path.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_evalkit"))
+        .arg("run")
+        .arg("--dataset")
+        .arg(&dataset_path)
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--output")
+        .arg(&output_path)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+
+    let result = read_jsonl(BufReader::new(File::open(&output_path).unwrap())).unwrap();
+    assert_eq!(result.samples.len(), 1);
+    assert_eq!(result.samples[0].sample_id, "keep");
 }

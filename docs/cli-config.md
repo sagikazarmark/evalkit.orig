@@ -17,6 +17,9 @@ The dataset file is separate from the TOML config.
 [acquisition]
 # ... required
 
+[dataset]
+# ... optional dataset selection filters
+
 [run]
 # ... optional
 
@@ -34,15 +37,38 @@ The dataset is JSONL, one sample per line.
 Supported fields:
 
 ```json
-{"id":"sample-1","input":"What is 2 + 2?","reference":"4"}
+{"id":"sample-1","input":"What is 2 + 2?","reference":"4","split":"validation","tags":["smoke"],"metadata":{"locale":"en"}}
 ```
 
 Fields:
 - `input`: required string
 - `reference`: optional string
 - `id`: optional string
+- `split`: optional string
+- `tags`: optional string array
+- `metadata`: optional JSON object
 
 Empty lines are ignored.
+
+## `[dataset]`
+
+This table is optional and filters which dataset rows are included in a run.
+
+```toml
+[dataset]
+split = "validation"
+tags = ["smoke", "en"]
+metadata = { locale = "en" }
+```
+
+Fields:
+- `split`: optional string exact match against the row's `split`
+- `tags`: optional string array; every configured tag must be present in the row's `tags`
+- `metadata`: optional inline table of exact-match metadata filters
+
+Notes:
+- rows that pass filtering keep `split`, `tags`, and `metadata` on `Sample.metadata`
+- if filters exclude every row, `evalkit run` fails loudly instead of producing an empty run
 
 ## `[acquisition]`
 
@@ -190,6 +216,10 @@ If any configured threshold is not met, `evalkit run` exits with status code `1`
 [acquisition]
 command = ["python3", "model.py"]
 timeout_secs = 30
+
+[dataset]
+split = "validation"
+tags = ["smoke"]
 
 [run]
 trials = 2
