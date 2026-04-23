@@ -4,12 +4,12 @@ This document compares the current codebase to `docs/ROADMAP.md` and identifies 
 
 ## Recommendation
 
-Phases 0 and 1 are functionally complete in-repo. The next work should move into Phase 2 while finishing the remaining runner ergonomics from Phase 3.
+Phases 0 and 1 are functionally complete in-repo. Phase 2 has now started with a first executor/sampler/sink surface, and the next work should deepen that online path while finishing the remaining runner ergonomics from Phase 3.
 
 Recommended build order:
-1. Introduce the first `Executor` trait plus sampling primitives for Phase 2.
+1. Add a real streaming `ExecutionSink` adapter around `evalkit-otel::OtelResultEmitter` and land the first source adapter.
 2. Add dataset splits / tags / filters to the CLI runner.
-3. Exercise the source-only GitHub Action and TypeScript shim in a live environment once a JS runtime and PR context are available.
+3. Add judge-model tiering on top of the new executor path.
 
 ## Current State Summary
 
@@ -90,9 +90,9 @@ Already present:
 - `llm_classifier` now accepts richer typed label definitions with optional descriptions, not just bare label strings
 - `calibrated_llm_classifier` can now turn label outputs into numeric `Score::Structured` results using per-label calibration scores
 - Reference TypeScript plugin shim source now lives under `typescript/evalkit_plugin/`
+- `devenv.nix` now enables Bun and the TypeScript plugin shim typechecks successfully through `devenv shell`
 
 Gaps:
-- The TypeScript plugin shim is source-only right now; local runtime verification is still blocked because this environment has no JS runtime installed
 - anyllm-backed judges currently populate token usage in `SampleResult`, but not cost because the provider layer does not expose portable cost data yet
 - Reasoning capture is currently limited to numeric and binary judges because `Score::Structured` requires a numeric primary score
 - `llm_classifier` now supports richer label definitions and calibrated structured scores, but richer classifier-side metadata still remains
@@ -100,13 +100,22 @@ Gaps:
 
 ## Phase 2 - Streaming / Online Scoring
 
-Status: not started
+Status: initial foundation landed
+
+Already present:
+- `src/executor.rs` now introduces a first `Executor` trait plus a pull-based `PullExecutor`
+- `SampleSource` and `DatasetSource` provide the first explicit source abstraction for online-style execution
+- `ExecutionSink` and `NoopSink` provide the first sink abstraction, with per-sample notifications plus a final run completion hook
+- `AlwaysSampler`, `PercentSampler`, and `TargetedSampler` now exist in the kernel
+- The executor path reuses existing acquisition timeout handling, scorer execution, score validation, judge model pin collection, and run metadata fingerprinting from the batch runner
+- `examples/prod_eval_daemon.rs` now shows a small daemon-style binary composed from library primitives and emits OTel spans from the resulting `RunResult`
 
 Gaps:
-- No `Executor` trait
-- No online sources such as Kafka, NATS, or file tailing
-- No partial-stream scoring path
-- No streaming sink abstraction
+- `evalkit-otel::OtelResultEmitter` is demonstrated as a post-run emission step, but there is not yet a dedicated sink adapter that streams directly through the sink interface
+- No online source adapters such as Kafka, NATS, file tailing, or `OtlpReceiver` bridging yet
+- No partial-stream scoring path for incomplete outputs yet
+- No judge-model tiering pipeline yet
+- No explicit backpressure, bounded queue, or graceful shutdown controls yet
 
 ## Phase 3 - CI / Developer Workflow
 
@@ -145,9 +154,9 @@ Gaps:
 
 ## Highest-Leverage Next Slice
 
-The best next implementation slice is the start of Phase 2:
-- add a first `Executor` trait that can pull samples, acquire, score, and push results through an explicit sink
-- land `AlwaysSampler`, `PercentSampler`, and `TargetedSampler` alongside that executor surface
-- thread the existing `evalkit-otel::OtelResultEmitter` in as the default sink example
+The best next implementation slice is the next Phase 2 increment:
+- add an `ExecutionSink` adapter that emits through `evalkit-otel::OtelResultEmitter` without waiting for a separate post-processing step
+- land the first real source adapter, ideally by bridging an existing in-repo primitive such as `OtlpReceiver` or a simple file tailer
+- add judge-model tiering so targeted rescore flows can be composed directly on the executor path
 
 In parallel, the next runner-facing Phase 3 gap is dataset splits / tags / filters so CI and local workflows can target subsets without external preprocessing.

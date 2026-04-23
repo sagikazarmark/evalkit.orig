@@ -308,6 +308,7 @@ name = "evalkit"
 version = "0.2.0"
 dependencies = [
  "chrono",
+ "evalkit-otel",
  "futures",
  "regex",
  "serde",

@@ -133,3 +133,20 @@ Why:
 
 Rejected alternative:
 Introduce a `Unit` enum immediately. That risks baking in an incomplete unit catalog before token, cost, latency, and retrieval metrics have all landed.
+
+## 2026-04-23 - Start Phase 2 with a pull-based `Executor` plus source/sampler/sink traits
+
+Decision:
+Introduce a separate `Executor` trait for online execution and start with a minimal pull-based implementation:
+- `PullExecutor`
+- `SampleSource` / `DatasetSource`
+- `ExecutionSink`
+- `AlwaysSampler`, `PercentSampler`, and `TargetedSampler`
+
+Why:
+- This keeps the existing `Run` type batch-focused while proving the Phase 2 execution seams against real code.
+- A pull-based executor is the smallest production-usable shape that can reuse the kernel's existing acquisition, scoring, timeout, metadata, and fingerprinting logic.
+- Separating source, sampler, and sink gives later source adapters, targeted rescoring, and streaming emitters stable insertion points without prematurely freezing queueing or concurrency policy.
+
+Rejected alternative:
+Build the first Phase 2 API around a fully concurrent queued worker system with backpressure controls from day one. That may still be the right long-term runtime, but it would force queue semantics, shutdown behavior, and threading policy into the API before the simpler source/sampler/sink boundaries have been tested.

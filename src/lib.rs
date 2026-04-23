@@ -3,6 +3,7 @@
 mod acquisition;
 mod comparison;
 mod dataset;
+mod executor;
 mod jsonl;
 mod mapper;
 mod math;
@@ -25,6 +26,11 @@ pub use comparison::{
     Change, CompareConfig, Comparison, SampleComparison, ScorerComparison, compare,
 };
 pub use dataset::Dataset;
+pub use executor::{
+    AlwaysSampler, DatasetSource, ExecutionSink, Executor, ExecutorBoxError, ExecutorError,
+    NoopSink, PercentSampler, PullExecutor, SampleSource, Sampler, SamplerBuildError,
+    TargetedSampler,
+};
 pub use jsonl::{read_jsonl, write_jsonl};
 pub use mapper::{MapError, Mapper};
 pub use run::{Run, RunBuildError, RunError};
@@ -49,13 +55,15 @@ pub use stats::{RunStats, ScorerStats};
 pub mod prelude {
     pub use crate::{
         Acquisition, AcquisitionError, AcquisitionMetadata, AndScorer, Change, CompareConfig,
-        Comparison, Dataset, Direction, IgnoreReferenceScorer, MapError, MapScoreScorer, Mapper,
-        NotScorer, OrScorer, RUN_RESULT_SCHEMA_VERSION, Run, RunBuildError, RunError, RunMetadata,
-        RunResult, RunStats, Sample, SampleBuildError, SampleBuilder, SampleComparison, Score,
+        Comparison, Dataset, DatasetSource, Direction, ExecutionSink, Executor, ExecutorBoxError,
+        ExecutorError, IgnoreReferenceScorer, MapError, MapScoreScorer, Mapper, NoopSink,
+        NotScorer, OrScorer, PercentSampler, PullExecutor, RUN_RESULT_SCHEMA_VERSION, Run,
+        RunBuildError, RunError, RunMetadata, RunResult, RunStats, Sample, SampleBuildError,
+        SampleBuilder, SampleComparison, SampleSource, Sampler, SamplerBuildError, Score,
         ScoreDefinition, ScoreOutcome, Scorer, ScorerComparison, ScorerContext, ScorerError,
         ScorerExt, ScorerMetadata, ScorerResources, ScorerSet, ScorerStats, ThenScorer,
         TimeoutScorer, TokenUsage, ToolCall, ToolResult, TrajectorySample, TrajectoryStep,
         WeightedScorer, compare, current_sample_id, ignore_reference, read_jsonl, write_jsonl,
     };
-    pub use crate::{ConversationSample, ConversationTurn};
+    pub use crate::{AlwaysSampler, ConversationSample, ConversationTurn, TargetedSampler};
 }
