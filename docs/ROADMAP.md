@@ -1,5 +1,9 @@
 # evalkit Roadmap
 
+> **Note:** This roadmap remains the canonical long-range plan.
+>
+> For the updated kernel-boundary decision, near-term sequencing, and verification requirements, see `docs/evalkit-kernel-boundary-plan.md`, which amends this roadmap on that specific topic.
+
 > **Working hypothesis (not a commitment).** A generic, Rust-native evaluation library + toolkit. Library-first; app surface grows only as the library matures. Polyglot via a stable subprocess plugin protocol. OTel-friendly on both sides (ingest + emit). Stay neutral — integrate with observability platforms, don't compete with them. This framing will be re-tested after each phase.
 >
 > **Explicit non-goals.** A hosted SaaS. A prompt-management product. A full observability UI. Coupling to any single agent framework. Replacing DeepEval/Ragas metric catalogs — adopt their vocabulary, don't fork it.

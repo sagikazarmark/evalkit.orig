@@ -1,5 +1,9 @@
 # Roadmap Gap Analysis
 
+> **Note:** This document remains the current-state inventory.
+>
+> For the updated interpretation of that state, plus the revised kernel-boundary priority and execution order, see `docs/evalkit-kernel-boundary-plan.md`, which amends this document on that specific topic.
+
 This document compares the current codebase to `docs/ROADMAP.md` and identifies the next implementation slices.
 
 ## Recommendation
