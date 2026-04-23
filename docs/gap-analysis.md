@@ -106,12 +106,12 @@ Already present:
 - `src/executor.rs` now introduces a first `Executor` trait plus a pull-based `PullExecutor`
 - `SampleSource` and `DatasetSource` provide the first explicit source abstraction for online-style execution
 - `ExecutionSink` and `NoopSink` provide the first sink abstraction, with per-sample notifications plus a final run completion hook
+- `evalkit-otel` now provides `OtelResultSink`, so executor-based runs can emit OTel spans through the sink interface without an extra post-processing step
 - `AlwaysSampler`, `PercentSampler`, and `TargetedSampler` now exist in the kernel
 - The executor path reuses existing acquisition timeout handling, scorer execution, score validation, judge model pin collection, and run metadata fingerprinting from the batch runner
-- `examples/prod_eval_daemon.rs` now shows a small daemon-style binary composed from library primitives and emits OTel spans from the resulting `RunResult`
+- `examples/prod_eval_daemon.rs` now shows a small daemon-style binary composed from library primitives and emits OTel spans through `OtelResultSink`
 
 Gaps:
-- `evalkit-otel::OtelResultEmitter` is demonstrated as a post-run emission step, but there is not yet a dedicated sink adapter that streams directly through the sink interface
 - No online source adapters such as Kafka, NATS, file tailing, or `OtlpReceiver` bridging yet
 - No partial-stream scoring path for incomplete outputs yet
 - No judge-model tiering pipeline yet
@@ -155,8 +155,8 @@ Gaps:
 ## Highest-Leverage Next Slice
 
 The best next implementation slice is the next Phase 2 increment:
-- add an `ExecutionSink` adapter that emits through `evalkit-otel::OtelResultEmitter` without waiting for a separate post-processing step
 - land the first real source adapter, ideally by bridging an existing in-repo primitive such as `OtlpReceiver` or a simple file tailer
 - add judge-model tiering so targeted rescore flows can be composed directly on the executor path
+- add partial or incomplete-output scoring so the executor can evaluate streaming generations before completion
 
 In parallel, the next runner-facing Phase 3 gap is dataset splits / tags / filters so CI and local workflows can target subsets without external preprocessing.

@@ -1,7 +1,8 @@
 use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use evalkit::{
-    Acquisition, AcquisitionError, AcquisitionMetadata, RunResult, Score, current_sample_id,
+    Acquisition, AcquisitionError, AcquisitionMetadata, ExecutionSink, ExecutorBoxError,
+    RunResult, Score, current_sample_id,
 };
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
@@ -573,6 +574,11 @@ pub struct OtelResultEmitter {
     namespace: String,
 }
 
+pub struct OtelResultSink {
+    emitter: OtelResultEmitter,
+    spans: Arc<Mutex<Vec<Span>>>,
+}
+
 impl OtelResultEmitter {
     pub fn new() -> Self {
         Self {
@@ -725,11 +731,57 @@ impl OtelResultEmitter {
     }
 }
 
+impl OtelResultSink {
+    pub fn new() -> Self {
+        Self {
+            emitter: OtelResultEmitter::new(),
+            spans: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
+        self.emitter = self.emitter.with_namespace(namespace);
+        self
+    }
+
+    pub fn spans(&self) -> Arc<Mutex<Vec<Span>>> {
+        Arc::clone(&self.spans)
+    }
+}
+
+impl Default for OtelResultSink {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ExecutionSink for OtelResultSink {
+    async fn finish(&mut self, result: &RunResult) -> Result<(), ExecutorBoxError> {
+        let emitted = self.emitter.emit(result);
+        let mut stored = self.spans.lock().map_err(|_| {
+            Box::new(ResultSinkError("OTel span sink mutex poisoned")) as ExecutorBoxError
+        })?;
+        stored.extend(emitted);
+        Ok(())
+    }
+}
+
 impl Default for OtelResultEmitter {
     fn default() -> Self {
         Self::new()
     }
 }
+
+#[derive(Debug)]
+struct ResultSinkError(&'static str);
+
+impl Display for ResultSinkError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl Error for ResultSinkError {}
 
 impl OtlpReceiver {
     pub async fn start() -> Result<Self, TraceBackendError> {
@@ -1185,6 +1237,20 @@ mod tests {
                 event.attributes.get("evalkit.error") == Some(&json!("bad output"))
             })
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn otel_result_sink_collects_spans_on_finish() {
+        let mut sink = OtelResultSink::new();
+        let stored = sink.spans();
+        let result = run_result_fixture();
+
+        sink.finish(&result).await.unwrap();
+
+        let spans = stored.lock().unwrap();
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].operation_name, "eval.run");
+        assert_eq!(spans[1].operation_name, "eval.sample");
     }
 
     async fn post_otlp(port: u16, body: &str) {

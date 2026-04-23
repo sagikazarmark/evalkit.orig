@@ -3,7 +3,7 @@
 //! Run with: cargo run --example prod_eval_daemon
 
 use evalkit::prelude::*;
-use evalkit_otel::OtelResultEmitter;
+use evalkit_otel::OtelResultSink;
 
 struct ExactMatchScorer;
 
@@ -35,20 +35,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .scorer(ExactMatchScorer)
         .build();
 
+    let sink = OtelResultSink::new();
+    let spans = sink.spans();
+
     let mut executor = PullExecutor::new(
         DatasetSource::new(dataset),
         acquisition,
         scorer_set,
         AlwaysSampler,
-        NoopSink,
+        sink,
     )
     .trials(2);
 
     let result = executor.execute().await?;
-    let spans = OtelResultEmitter::new().emit(&result);
 
     println!("{}", result.stats().summary());
-    println!("emitted_spans: {}", spans.len());
+    println!(
+        "emitted_spans: {}",
+        spans.lock().expect("OTel span sink mutex poisoned").len()
+    );
 
     Ok(())
 }

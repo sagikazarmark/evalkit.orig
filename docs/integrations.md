@@ -122,7 +122,7 @@ Add lazily as demand appears — most users bring their own data.
 - [ ] `opik` exporter            — Comet's OSS eval platform
 
 ### OTel-native
-- [x] `otel-span` emitter        — interim `evalkit-otel::OtelResultEmitter` for `RunResult` spans in the `evalkit.*` namespace
+- [x] `otel-span` emitter        — interim `evalkit-otel::OtelResultEmitter` plus `OtelResultSink` for executor-integrated `RunResult` span emission in the `evalkit.*` namespace
 - [ ] `otel-metrics` emitter     — push aggregate metrics
 
 ### Push targets
