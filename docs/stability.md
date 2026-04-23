@@ -2,19 +2,27 @@
 
 This file defines the Phase 0 stability target for `evalkit` and the planned extension crates.
 
+See also: `docs/root-crate-boundary-audit.md`
+
 ## Kernel Crate
 
 `evalkit` is the semver anchor for the workspace.
 
 Stable after Phase 0:
-- Public traits and structs re-exported from `src/lib.rs`
+- Root exports classified as `KEEP` in `docs/root-crate-boundary-audit.md`
 - `RunResult`, `SampleResult`, `TrialResult`, and `RunMetadata` field meanings
 - `AcquisitionError` and `ScorerError` variant names and semantics
 - Score names and serialized `Score` variant tags
 
 Unstable before Phase 0 exit:
+- Root exports classified as `MOVE` in `docs/root-crate-boundary-audit.md`
 - Any API that is present only behind cargo feature flags that will be extracted into dedicated crates
 - Internal helper types not re-exported from the crate root
+
+Transitional root exports:
+- Runtime-oriented executor, source, sink, sampler, scrubber, sharding, and stream-helper APIs are transitional and should leave `evalkit` during the split.
+- `read_jsonl` / `write_jsonl` are transitional convenience APIs and should move to an IO/exporter layer.
+- Conversation and trajectory sample-shape types are transitional convenience APIs and should move out of the root crate.
 
 Semver rules:
 - Removing or renaming a public item is a breaking change.
@@ -52,3 +60,4 @@ Phase 0 ends with the split complete:
 - `evalkit` keeps the kernel only.
 - Specialized capabilities live in their own crates rather than behind root-crate feature flags.
 - The umbrella crate does not hide specialized crates from advanced callers.
+- The root crate boundary matches `docs/root-crate-boundary-audit.md`.

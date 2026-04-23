@@ -52,6 +52,8 @@ The repo can keep server, CLI, exporter, provider, and OTel crates. Those are us
 
 The root crate must be re-audited and split into three buckets.
 
+Audit result: `docs/root-crate-boundary-audit.md`
+
 ### Bucket A: definitely kernel
 
 These belong in `evalkit` unless the audit finds a strong reason otherwise:
@@ -82,6 +84,13 @@ Do not inherit these into the kernel by accident. Decide them on purpose.
 - JSONL read/write helpers
 - conversation / trajectory sample shapes
 - any helper whose main value is operational rather than semantic
+
+### Bucket C decisions, now locked
+
+- `Run`: keep in `evalkit` as the stable batch entrypoint, but clean up runtime-heavy implementation details.
+- `read_jsonl` / `write_jsonl`: move out of the root crate to a future IO/exporter layer.
+- `ConversationSample` / `TrajectorySample` and related tool/turn/step types: move out of the root crate to an optional sample-shapes crate.
+- `current_sample_id`: treat as operational helper and move out of the long-term root surface.
 
 ## Desired crate shape
 
