@@ -80,6 +80,26 @@ pub struct ShardedSource<Src> {
     shard: ShardSpec,
 }
 
+pub trait Scrubber<I, O, R = ()>: Send + Sync {
+    fn scrub_sample(&self, _sample: &mut Sample<I, R>) {}
+
+    fn scrub_output(&self, _output: &mut O) {}
+
+    fn scrub_snapshots(&self, snapshots: &mut [AcquisitionSnapshot<O>]) {
+        for snapshot in snapshots {
+            self.scrub_output(&mut snapshot.output);
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct NoopScrubber;
+
+#[derive(Clone, Debug)]
+pub struct RegexPiiScrubber {
+    rules: Vec<(regex::Regex, String)>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShardBuildError {
     ZeroTotal,
@@ -138,6 +158,62 @@ impl ShardSpec {
 impl<Src> ShardedSource<Src> {
     pub fn new(inner: Src, shard: ShardSpec) -> Self {
         Self { inner, shard }
+    }
+}
+
+impl RegexPiiScrubber {
+    pub fn new() -> Self {
+        Self { rules: Vec::new() }
+    }
+
+    pub fn with_rule(
+        mut self,
+        pattern: &str,
+        replacement: impl Into<String>,
+    ) -> Result<Self, regex::Error> {
+        self.rules
+            .push((regex::Regex::new(pattern)?, replacement.into()));
+        Ok(self)
+    }
+
+    pub fn with_email_redaction(self) -> Result<Self, regex::Error> {
+        self.with_rule(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", "[redacted-email]")
+            .map(|scrubber| scrubber.case_insensitive_last())
+    }
+
+    pub fn with_phone_redaction(self) -> Result<Self, regex::Error> {
+        self.with_rule(r"\+?[0-9][0-9\-() ]{6,}[0-9]", "[redacted-phone]")
+    }
+
+    fn case_insensitive_last(mut self) -> Self {
+        if let Some((pattern, replacement)) = self.rules.pop() {
+            let rebuilt = regex::Regex::new(&format!("(?i:{})", pattern.as_str()))
+                .expect("existing regex should remain valid with case-insensitive wrapper");
+            self.rules.push((rebuilt, replacement));
+        }
+        self
+    }
+
+    fn scrub_text(&self, text: &mut String) {
+        for (pattern, replacement) in &self.rules {
+            *text = pattern.replace_all(text, replacement.as_str()).into_owned();
+        }
+    }
+}
+
+impl<I, O, R> Scrubber<I, O, R> for NoopScrubber {}
+
+impl Scrubber<String, String, String> for RegexPiiScrubber {
+    fn scrub_sample(&self, sample: &mut Sample<String, String>) {
+        self.scrub_text(&mut sample.input);
+        if let Some(reference) = &mut sample.reference {
+            self.scrub_text(reference);
+        }
+        scrub_json_strings(&mut sample.metadata, self);
+    }
+
+    fn scrub_output(&self, output: &mut String) {
+        self.scrub_text(output);
     }
 }
 
@@ -431,6 +507,7 @@ pub struct PullExecutor<I, O, R, Src, Samp, Sink> {
     scorer_set: Arc<ScorerSet<I, O, R>>,
     judge_model_tier: Option<Arc<JudgeModelTier<I, O, R>>>,
     partial_scoring: Option<Arc<dyn PartialScoringPlan<I, O, R>>>,
+    scrubber: Option<Arc<dyn Scrubber<I, O, R>>>,
     sampler: Samp,
     sink: Sink,
     trial_count: usize,
@@ -643,6 +720,7 @@ struct SharedExecutionState<I, O, R> {
     scorer_set: Arc<ScorerSet<I, O, R>>,
     judge_model_tier: Option<Arc<JudgeModelTier<I, O, R>>>,
     partial_scoring: Option<Arc<dyn PartialScoringPlan<I, O, R>>>,
+    scrubber: Option<Arc<dyn Scrubber<I, O, R>>>,
     trial_count: usize,
     sample_timeout: Option<Duration>,
 }
@@ -654,6 +732,7 @@ impl<I, O, R> Clone for SharedExecutionState<I, O, R> {
             scorer_set: Arc::clone(&self.scorer_set),
             judge_model_tier: self.judge_model_tier.clone(),
             partial_scoring: self.partial_scoring.clone(),
+            scrubber: self.scrubber.clone(),
             trial_count: self.trial_count,
             sample_timeout: self.sample_timeout,
         }
@@ -691,6 +770,7 @@ where
             scorer_set: Arc::new(scorer_set),
             judge_model_tier: None,
             partial_scoring: None,
+            scrubber: None,
             sampler,
             sink,
             trial_count: 1,
@@ -744,6 +824,14 @@ where
 
     pub fn sample_timeout(mut self, sample_timeout: Duration) -> Self {
         self.sample_timeout = Some(sample_timeout);
+        self
+    }
+
+    pub fn scrubber<Scr>(mut self, scrubber: Scr) -> Self
+    where
+        Scr: Scrubber<I, O, R> + 'static,
+    {
+        self.scrubber = Some(Arc::new(scrubber));
         self
     }
 
@@ -1009,6 +1097,7 @@ where
             scorer_set: Arc::clone(&self.scorer_set),
             judge_model_tier: self.judge_model_tier.clone(),
             partial_scoring: self.partial_scoring.clone(),
+            scrubber: self.scrubber.clone(),
             trial_count: self.trial_count,
             sample_timeout: self.sample_timeout,
         }
@@ -1035,7 +1124,11 @@ where
                 .await
                 .map_err(ExecutorError::Source)?
             {
-                Some(sample) if self.sampler.should_sample(&sample) => queue.push_back(sample),
+                Some(sample) if self.sampler.should_sample(&sample) => {
+                    let mut sample = sample;
+                    self.scrub_sample(&mut sample);
+                    queue.push_back(sample)
+                }
                 Some(_) => continue,
                 None => *source_exhausted = true,
             }
@@ -1063,6 +1156,8 @@ where
                 .map_err(ExecutorError::Source)?
             {
                 Some(sample) if self.sampler.should_sample(&sample) => {
+                    let mut sample = sample;
+                    self.scrub_sample(&mut sample);
                     scheduled_samples.push(sample.clone());
                     queue.push_back((*next_index, sample));
                     *next_index += 1;
@@ -1082,6 +1177,12 @@ where
                 .shutdown
                 .as_ref()
                 .is_some_and(|shutdown| (shutdown.predicate)(sample_result))
+    }
+
+    fn scrub_sample(&self, sample: &mut Sample<I, R>) {
+        if let Some(scrubber) = self.scrubber.as_ref() {
+            scrubber.scrub_sample(sample);
+        }
     }
 }
 
@@ -1139,7 +1240,8 @@ where
         .catch_unwind()
         .await
     {
-        Ok(Ok(acquired)) => {
+        Ok(Ok(mut acquired)) => {
+            scrub_acquired_output(state, &mut acquired);
             let ctx = ScorerContext {
                 run_id,
                 sample_id: &sample.id,
@@ -1482,6 +1584,31 @@ fn stable_bucket(bytes: &[u8], total: usize) -> usize {
     (fingerprint.state % total as u64) as usize
 }
 
+fn scrub_acquired_output<I, O, R>(
+    state: &SharedExecutionState<I, O, R>,
+    acquired: &mut AcquiredOutput<O>,
+) {
+    if let Some(scrubber) = state.scrubber.as_ref() {
+        scrubber.scrub_output(&mut acquired.output);
+        scrubber.scrub_snapshots(&mut acquired.snapshots);
+    }
+}
+
+fn scrub_json_strings(metadata: &mut HashMap<String, Value>, scrubber: &RegexPiiScrubber) {
+    for value in metadata.values_mut() {
+        scrub_json_value(value, scrubber);
+    }
+}
+
+fn scrub_json_value(value: &mut Value, scrubber: &RegexPiiScrubber) {
+    match value {
+        Value::String(text) => scrubber.scrub_text(text),
+        Value::Array(values) => values.iter_mut().for_each(|value| scrub_json_value(value, scrubber)),
+        Value::Object(map) => map.values_mut().for_each(|value| scrub_json_value(value, scrubber)),
+        _ => {}
+    }
+}
+
 fn fingerprint_samples<I, R>(
     metadata: &HashMap<String, Value>,
     samples: &[Sample<I, R>],
@@ -1750,8 +1877,8 @@ fn git_stdout_bytes(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
 mod tests {
     use super::{
         AlwaysSampler, DatasetSource, ExecutionSink, Executor, JsonlFileTailSource, PercentSampler,
-        PullExecutor, Sampler, SamplerBuildError, ShardBuildError, ShardSpec, ShardedSource,
-        ShutdownMode, StringPrefixCheckpoint, StringStreamStage, TargetedSampler,
+        PullExecutor, RegexPiiScrubber, Sampler, SamplerBuildError, ShardBuildError, ShardSpec,
+        ShardedSource, ShutdownMode, StringPrefixCheckpoint, StringStreamStage, TargetedSampler,
     };
     use crate::{
         AcquiredOutput, Acquisition, AcquisitionError, AcquisitionSnapshot, Dataset, RunResult,
@@ -1869,6 +1996,25 @@ mod tests {
 
         fn max_in_flight(&self) -> usize {
             self.max_in_flight.load(Ordering::SeqCst)
+        }
+    }
+
+    struct RedactedEchoScorer;
+
+    impl Scorer<String, String, String> for RedactedEchoScorer {
+        async fn score(
+            &self,
+            ctx: &ScorerContext<'_, String, String, String>,
+        ) -> Result<Score, ScorerError> {
+            Ok(Score::Binary(
+                ctx.input.contains("[redacted-email]")
+                    && ctx.output.contains("[redacted-email]")
+                    && ctx.reference.is_some_and(|reference| reference.contains("[redacted-email]")),
+            ))
+        }
+
+        fn definition(&self) -> ScoreDefinition {
+            ScoreDefinition::maximize("redaction_applied")
         }
     }
 
@@ -2311,6 +2457,45 @@ mod tests {
                 .as_ref()
                 .unwrap(),
             &Score::Numeric(11.0)
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pull_executor_scrubber_redacts_sample_and_output_strings() {
+        let dataset = Dataset::new(vec![
+            Sample::builder(String::from("email me at person@example.com"))
+                .id("pii")
+                .reference(String::from("reply to person@example.com"))
+                .build()
+                .unwrap(),
+        ]);
+        let acquisition = |_input: &String| async move {
+            Ok::<_, AcquisitionError>(String::from("sent to person@example.com"))
+        };
+        let scorer_set = ScorerSet::<String, String, String>::builder()
+            .scorer(RedactedEchoScorer)
+            .build();
+        let scrubber = RegexPiiScrubber::new().with_email_redaction().unwrap();
+
+        let mut executor = PullExecutor::new(
+            DatasetSource::new(dataset),
+            acquisition,
+            scorer_set,
+            AlwaysSampler,
+            super::NoopSink,
+        )
+        .scrubber(scrubber);
+
+        let result = executor.execute().await.unwrap();
+
+        assert_eq!(
+            result.samples[0].trials[0]
+                .scores
+                .get("redaction_applied")
+                .unwrap()
+                .as_ref()
+                .unwrap(),
+            &Score::Binary(true)
         );
     }
 

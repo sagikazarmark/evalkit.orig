@@ -31,9 +31,10 @@ pub use comparison::{
 pub use dataset::Dataset;
 pub use executor::{
     AlwaysSampler, DatasetSource, ExecutionSink, Executor, ExecutorBoxError, ExecutorError,
-    JsonlFileTailSource, NoopSink, PercentSampler, PullExecutor, SampleSource, Sampler,
-    SamplerBuildError, ShardBuildError, ShardSpec, ShardedSource, ShutdownMode,
-    StringPrefixCheckpoint, StringStreamStage, TargetedSampler,
+    JsonlFileTailSource, NoopScrubber, NoopSink, PercentSampler, PullExecutor,
+    RegexPiiScrubber, SampleSource, Sampler, SamplerBuildError, Scrubber, ShardBuildError,
+    ShardSpec, ShardedSource, ShutdownMode, StringPrefixCheckpoint, StringStreamStage,
+    TargetedSampler,
 };
 pub use jsonl::{read_jsonl, write_jsonl};
 pub use mapper::{MapError, Mapper};
@@ -61,13 +62,13 @@ pub mod prelude {
         Acquisition, AcquisitionError, AcquisitionMetadata, AndScorer, Change, CompareConfig,
         AcquisitionSnapshot, AcquiredOutput, Comparison, Dataset, DatasetSource, Direction,
         ExecutionSink, Executor, ExecutorBoxError, ExecutorError, IgnoreReferenceScorer,
-        JsonlFileTailSource, MapError, MapScoreScorer, Mapper, NoopSink, NotScorer, OrScorer,
-        PercentSampler, PullExecutor,
+        JsonlFileTailSource, MapError, MapScoreScorer, Mapper, NoopScrubber, NoopSink,
+        NotScorer, OrScorer, PercentSampler, PullExecutor, RegexPiiScrubber,
         RUN_RESULT_SCHEMA_VERSION, Run, RunBuildError, RunError, RunMetadata, RunResult, RunStats,
         Sample, SampleBuildError, SampleBuilder, SampleComparison, SampleSource, Sampler,
         SamplerBuildError, Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerComparison,
         ScorerContext, ScorerError, ScorerExt, ScorerMetadata, ScorerResources, ScorerSet,
-        ScorerStats, ShardBuildError, ShardSpec, ShardedSource, ShutdownMode,
+        ScorerStats, Scrubber, ShardBuildError, ShardSpec, ShardedSource, ShutdownMode,
         StringPrefixCheckpoint, StringStreamStage, ThenScorer, TimeoutScorer, TokenUsage,
         ToolCall, ToolResult, TrajectorySample, TrajectoryStep, WeightedScorer, compare,
         current_sample_id, ignore_reference, read_jsonl, write_jsonl,
