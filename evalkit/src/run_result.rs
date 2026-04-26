@@ -55,7 +55,7 @@ pub struct RunMetadata {
     pub duration: Duration,
     pub trial_count: usize,
     pub score_definitions: Vec<ScoreDefinition>,
-    pub acquisition_mode: String,
+    pub source_mode: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

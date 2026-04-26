@@ -15,7 +15,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use evalkit::{
-    Acquisition, AcquisitionError, Change, CompareConfig, Comparison, Dataset, Run, RunResult,
+    OutputSource, OutputSourceError, Change, CompareConfig, Comparison, Dataset, Run, RunResult,
     RunStats, Sample, Score, ScoreDefinition, Scorer, ScorerContext, ScorerError, ScorerSet,
     ScorerStats, compare, read_jsonl, write_jsonl,
 };
@@ -218,19 +218,19 @@ struct DatasetRow {
 }
 
 // ---------------------------------------------------------------------------
-// Unified acquisition enum
+// Unified output source enum
 // ---------------------------------------------------------------------------
 
-enum CliAcquisition {
+enum CliOutputSource {
     Http(HttpAcquisition),
     Subprocess(SubprocessAcquisition),
 }
 
-impl Acquisition<String, String> for CliAcquisition {
-    async fn acquire(&self, input: &String) -> Result<String, AcquisitionError> {
+impl OutputSource<String, String> for CliOutputSource {
+    async fn produce(&self, input: &String) -> Result<String, OutputSourceError> {
         match self {
-            Self::Http(a) => a.acquire(input).await,
-            Self::Subprocess(a) => a.acquire(input).await,
+            Self::Http(a) => a.produce(input).await,
+            Self::Subprocess(a) => a.produce(input).await,
         }
     }
 }
@@ -345,8 +345,8 @@ async fn run_command(args: RunArgs) -> Result<bool, CliError> {
     // Load dataset
     let dataset = load_dataset(&args.dataset, &config.dataset)?;
 
-    // Build acquisition
-    let acquisition = build_acquisition(config.acquisition)?;
+    // Build output source
+    let source = build_source(config.acquisition)?;
 
     // Build scorers and scorer set
     let cli_scorers = build_cli_scorers(&config.scorers)?;
@@ -361,7 +361,7 @@ async fn run_command(args: RunArgs) -> Result<bool, CliError> {
     // Build run
     let mut run_builder = Run::builder()
         .dataset(dataset)
-        .acquisition(acquisition)
+        .source(source)
         .scorer_set(scorer_set)
         .trials(config.run.trials)
         .concurrency(config.run.concurrency);
@@ -516,9 +516,9 @@ async fn watch_command(args: WatchArgs) -> Result<bool, CliError> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn build_acquisition(cfg: AcquisitionConfig) -> Result<CliAcquisition, CliError> {
+fn build_source(cfg: AcquisitionConfig) -> Result<CliOutputSource, CliError> {
     match (cfg.url, cfg.command) {
-        (Some(url), None) => Ok(CliAcquisition::Http(
+        (Some(url), None) => Ok(CliOutputSource::Http(
             HttpAcquisition::new(
                 url,
                 cfg.input_field,
@@ -542,7 +542,7 @@ fn build_acquisition(cfg: AcquisitionConfig) -> Result<CliAcquisition, CliError>
                 ));
             }
             let (program, args) = (parts[0].clone(), parts[1..].to_vec());
-            Ok(CliAcquisition::Subprocess(SubprocessAcquisition::new(
+            Ok(CliOutputSource::Subprocess(SubprocessAcquisition::new(
                 program,
                 args,
                 Duration::from_secs(cfg.timeout_secs),
@@ -885,7 +885,7 @@ mod tests {
 
     #[test]
     fn subprocess_acquisition_rejects_custom_protocol_field_names() {
-        let err = match build_acquisition(AcquisitionConfig {
+        let err = match build_source(AcquisitionConfig {
             url: None,
             command: Some(CommandSpec::Vec(vec![
                 String::from("python3"),
@@ -991,7 +991,7 @@ mod tests {
                 duration: Duration::from_secs(5),
                 trial_count: 1,
                 score_definitions: vec![ScoreDefinition::maximize("accuracy")],
-                acquisition_mode: String::from("inline"),
+                source_mode: String::from("inline"),
             },
             samples: vec![SampleResult {
                 sample_id: String::from("sample-1"),
@@ -1024,7 +1024,7 @@ mod tests {
                 duration: Duration::from_secs(5),
                 trial_count: 1,
                 score_definitions: vec![ScoreDefinition::maximize("accuracy")],
-                acquisition_mode: String::from("inline"),
+                source_mode: String::from("inline"),
             },
             samples: vec![SampleResult {
                 sample_id: String::from("sample-1"),

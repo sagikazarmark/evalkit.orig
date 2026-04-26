@@ -1,5 +1,5 @@
 use evalkit::{
-    AcquisitionError, Direction, MapError, Run, RunBuildError, Sample, Score, ScoreDefinition,
+    OutputSourceError, Direction, MapError, Run, RunBuildError, Sample, Score, ScoreDefinition,
     ScoreOutcome, Scorer, ScorerContext, ScorerError, ScorerMetadata, ScorerResources, ScorerSet,
     TokenUsage,
 };
@@ -179,12 +179,12 @@ async fn run_builder_executes_dataset_and_returns_sample_results() {
 
     let run = Run::builder()
         .dataset(samples)
-        .acquisition(|input: &String| {
+        .source(|input: &String| {
             let output = match input.as_str() {
                 "What is 2+2?" => String::from("4"),
                 _ => String::from("Paris"),
             };
-            async move { Ok::<_, AcquisitionError>(output) }
+            async move { Ok::<_, OutputSourceError>(output) }
         })
         .scorer(ExactMatchScorer)
         .build()
@@ -195,7 +195,7 @@ async fn run_builder_executes_dataset_and_returns_sample_results() {
     assert_eq!(result.samples.len(), 2);
     assert_eq!(result.metadata.trial_count, 1);
     assert_eq!(result.metadata.seed, None);
-    assert_eq!(result.metadata.acquisition_mode, "inline");
+    assert_eq!(result.metadata.source_mode, "inline");
     assert_eq!(result.metadata.dataset_fingerprint.len(), 16);
     assert_eq!(result.metadata.scorer_fingerprint.len(), 16);
     assert_eq!(result.metadata.score_definitions.len(), 1);
@@ -238,7 +238,7 @@ async fn run_accepts_multiple_scorers_and_scorer_sets() {
 
     let run = Run::builder()
         .dataset(vec![sample])
-        .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("four")) })
+        .source(|_: &String| async { Ok::<_, OutputSourceError>(String::from("four")) })
         .scorer(ExactMatchScorer)
         .scorer_set(scorer_set)
         .trials(2)
@@ -293,7 +293,7 @@ async fn run_aggregates_scorer_resources_into_sample_results() {
 
     let run = Run::builder()
         .dataset(vec![sample])
-        .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("output")) })
+        .source(|_: &String| async { Ok::<_, OutputSourceError>(String::from("output")) })
         .scorer(ResourceReportingScorer {
             name: "judge_a",
             score: Score::Numeric(0.5),
@@ -326,7 +326,7 @@ async fn run_metadata_captures_an_explicit_seed() {
 
     let run = Run::builder()
         .dataset(vec![sample])
-        .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("four")) })
+        .source(|_: &String| async { Ok::<_, OutputSourceError>(String::from("four")) })
         .scorer(ExactMatchScorer)
         .seed(42)
         .build()
@@ -343,7 +343,7 @@ async fn run_metadata_auto_populates_code_identity_when_git_is_available() {
 
     let run = Run::builder()
         .dataset(vec![sample])
-        .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("four")) })
+        .source(|_: &String| async { Ok::<_, OutputSourceError>(String::from("four")) })
         .scorer(ExactMatchScorer)
         .build()
         .unwrap();
@@ -360,7 +360,7 @@ async fn run_metadata_collects_judge_model_pins_from_standalone_scorers() {
 
     let run = Run::builder()
         .dataset(vec![sample])
-        .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("four")) })
+        .source(|_: &String| async { Ok::<_, OutputSourceError>(String::from("four")) })
         .scorer(JudgePinnedScorer {
             name: "judge_a",
             judge_model_pin: "gpt-4o@2026-04-01",
@@ -399,7 +399,7 @@ async fn run_metadata_collects_judge_model_pins_from_scorer_sets() {
 
     let run = Run::builder()
         .dataset(vec![sample])
-        .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("four")) })
+        .source(|_: &String| async { Ok::<_, OutputSourceError>(String::from("four")) })
         .scorer_set(scorer_set)
         .judge_model_pin("gpt-4o@2026-04-01")
         .build()
@@ -422,7 +422,7 @@ async fn run_metadata_captures_explicit_reproducibility_fields() {
 
     let run = Run::builder()
         .dataset(vec![sample])
-        .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("four")) })
+        .source(|_: &String| async { Ok::<_, OutputSourceError>(String::from("four")) })
         .scorer(ExactMatchScorer)
         .code_commit("abc123")
         .code_fingerprint("tree:deadbeef")
@@ -457,7 +457,7 @@ async fn global_mappers_apply_before_standalone_scorers_and_scorer_sets() {
 
     let run = Run::builder()
         .dataset(vec![sample])
-        .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("four")) })
+        .source(|_: &String| async { Ok::<_, OutputSourceError>(String::from("four")) })
         .map_output(|output: &String| Ok(output.len()))
         .map_reference(|reference: &String| Ok(reference.len()))
         .scorer(LengthScorer { name: "global_len" })
@@ -494,7 +494,7 @@ async fn build_validates_duplicates_and_execute_validates_scores_and_timeouts() 
 
     let duplicate_sample_error = match Run::builder()
         .dataset(vec![duplicate_a, duplicate_b])
-        .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("output")) })
+        .source(|_: &String| async { Ok::<_, OutputSourceError>(String::from("output")) })
         .scorer(ExactMatchScorer)
         .build()
     {
@@ -512,7 +512,7 @@ async fn build_validates_duplicates_and_execute_validates_scores_and_timeouts() 
             String::from("prompt"),
             String::from("ref"),
         )])
-        .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("output")) })
+        .source(|_: &String| async { Ok::<_, OutputSourceError>(String::from("output")) })
         .scorer(ExactMatchScorer)
         .scorer(ExactMatchScorer)
         .build()
@@ -531,7 +531,7 @@ async fn build_validates_duplicates_and_execute_validates_scores_and_timeouts() 
             String::from("prompt"),
             String::from("ref"),
         )])
-        .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("output")) })
+        .source(|_: &String| async { Ok::<_, OutputSourceError>(String::from("output")) })
         .scorer(NaNScorer)
         .build()
         .unwrap();
@@ -553,9 +553,9 @@ async fn build_validates_duplicates_and_execute_validates_scores_and_timeouts() 
             String::from("slow"),
             String::from("reference"),
         )])
-        .acquisition(|_: &String| async {
+        .source(|_: &String| async {
             tokio::time::sleep(Duration::from_millis(20)).await;
-            Ok::<_, AcquisitionError>(String::from("late"))
+            Ok::<_, OutputSourceError>(String::from("late"))
         })
         .scorer(ExactMatchScorer)
         .sample_timeout(Duration::from_millis(1))
@@ -573,7 +573,7 @@ async fn build_validates_duplicates_and_execute_validates_scores_and_timeouts() 
             .as_ref()
             .unwrap_err()
             .to_string(),
-        AcquisitionError::Timeout(Duration::from_millis(1)).to_string()
+        OutputSourceError::Timeout(Duration::from_millis(1)).to_string()
     );
 }
 
@@ -584,7 +584,7 @@ async fn global_mapper_failures_propagate_to_every_affected_scorer() {
             String::from("prompt"),
             String::from("ref"),
         )])
-        .acquisition(|_: &String| async { Ok::<_, AcquisitionError>(String::from("output")) })
+        .source(|_: &String| async { Ok::<_, OutputSourceError>(String::from("output")) })
         .map_output(|_: &String| Err(MapError(Box::new(TestError("map failed")))))
         .scorer(LengthScorer { name: "len_a" })
         .scorer(LengthScorer { name: "len_b" })

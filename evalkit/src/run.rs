@@ -1,5 +1,5 @@
 use crate::{
-    Acquisition, AcquisitionError, Dataset, MapError, Mapper, RunMetadata, RunResult, Sample,
+    OutputSource, OutputSourceError, Dataset, MapError, Mapper, RunMetadata, RunResult, Sample,
     SampleResult, Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerContext, ScorerError,
     ScorerResources, ScorerSet, TrialResult,
 };
@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 type TrialScores = Vec<(ScoreDefinition, Result<ScoreOutcome, ScorerError>)>;
 type TrialFuture<'a> = Pin<Box<dyn Future<Output = TrialScores> + 'a>>;
-type AcquisitionFuture<'a, O> = Pin<Box<dyn Future<Output = Result<O, AcquisitionError>> + 'a>>;
+type OutputSourceFuture<'a, O> = Pin<Box<dyn Future<Output = Result<O, OutputSourceError>> + 'a>>;
 
 struct ExecutedTrial {
     result: TrialResult,
@@ -38,7 +38,7 @@ struct FlattenedTrial {
 #[non_exhaustive]
 pub enum RunBuildError {
     NoDataset,
-    NoAcquisition,
+    NoSource,
     NoScorer,
     EmptyDataset,
     DuplicateSampleIds(Vec<String>),
@@ -50,7 +50,7 @@ impl Display for RunBuildError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoDataset => f.write_str("run is missing a dataset"),
-            Self::NoAcquisition => f.write_str("run is missing an acquisition"),
+            Self::NoSource => f.write_str("run is missing an output source"),
             Self::NoScorer => f.write_str("run is missing a scorer or scorer set"),
             Self::EmptyDataset => f.write_str("run dataset must contain at least one sample"),
             Self::DuplicateSampleIds(ids) => {
@@ -97,7 +97,7 @@ impl Error for RunError {
 
 pub struct Run<I, O, R = ()> {
     dataset: Dataset<I, R>,
-    acquisition: Box<dyn ErasedAcquisition<I, O>>,
+    source: Box<dyn ErasedOutputSource<I, O>>,
     definitions: Vec<ScoreDefinition>,
     executor: Box<dyn RunExecutor<I, O, R>>,
     trial_count: usize,
@@ -107,7 +107,7 @@ pub struct Run<I, O, R = ()> {
     code_commit: Option<String>,
     code_fingerprint: Option<String>,
     judge_model_pins: Vec<String>,
-    acquisition_mode: &'static str,
+    source_mode: &'static str,
 }
 
 impl Run<(), (), ()> {
@@ -145,7 +145,7 @@ impl<I, O, R> Run<I, O, R> {
                 duration,
                 trial_count: self.trial_count,
                 score_definitions: self.definitions.clone(),
-                acquisition_mode: self.acquisition_mode.to_string(),
+                source_mode: self.source_mode.to_string(),
             },
             samples,
         })
@@ -185,7 +185,7 @@ impl<I, O, R> Run<I, O, R> {
     ) -> ExecutedTrial {
         let started = Instant::now();
 
-        let flattened = match AssertUnwindSafe(self.acquire_output(sample))
+        let flattened = match AssertUnwindSafe(self.produce_output(sample))
             .catch_unwind()
             .await
         {
@@ -212,11 +212,11 @@ impl<I, O, R> Run<I, O, R> {
                 }
             }
             Ok(Err(err)) => FlattenedTrial {
-                scores: acquisition_failure_scores(&self.definitions, err),
+                scores: source_failure_scores(&self.definitions, err),
                 resources: ScorerResources::default(),
             },
             Err(_) => FlattenedTrial {
-                scores: acquisition_failure_scores(&self.definitions, AcquisitionError::Panicked),
+                scores: source_failure_scores(&self.definitions, OutputSourceError::Panicked),
                 resources: ScorerResources::default(),
             },
         };
@@ -231,23 +231,23 @@ impl<I, O, R> Run<I, O, R> {
         }
     }
 
-    async fn acquire_output(&self, sample: &Sample<I, R>) -> Result<O, AcquisitionError> {
-        crate::acquisition::with_current_sample_id(
+    async fn produce_output(&self, sample: &Sample<I, R>) -> Result<O, OutputSourceError> {
+        crate::source::with_current_sample_id(
             &sample.id,
-            self.acquire_output_inner(&sample.input),
+            self.produce_output_inner(&sample.input),
         )
         .await
     }
 
-    async fn acquire_output_inner(&self, input: &I) -> Result<O, AcquisitionError> {
+    async fn produce_output_inner(&self, input: &I) -> Result<O, OutputSourceError> {
         match self.sample_timeout {
             Some(duration) => {
-                match timeout(duration, self.acquisition.acquire_boxed(input)).await {
+                match timeout(duration, self.source.produce_boxed(input)).await {
                     Ok(result) => result,
-                    Err(_) => Err(AcquisitionError::Timeout(duration)),
+                    Err(_) => Err(OutputSourceError::Timeout(duration)),
                 }
             }
-            None => self.acquisition.acquire_boxed(input).await,
+            None => self.source.produce_boxed(input).await,
         }
     }
 }
@@ -270,16 +270,16 @@ pub struct RunBuilderWithDataset<I, R> {
 }
 
 impl<I, R> RunBuilderWithDataset<I, R> {
-    pub fn acquisition<O, A>(self, acquisition: A) -> RunBuilderConfigured<I, O, R>
+    pub fn source<O, S>(self, source: S) -> RunBuilderConfigured<I, O, R>
     where
-        A: Acquisition<I, O> + 'static,
+        S: OutputSource<I, O> + 'static,
         O: 'static,
     {
-        let acquisition_mode = acquisition.metadata().mode;
+        let source_mode = source.metadata().mode;
 
         RunBuilderConfigured::<I, O, R> {
             dataset: self.dataset,
-            acquisition: Box::new(acquisition),
+            source: Box::new(source),
             output_mapper: None,
             reference_mapper: None,
             trial_count: 1,
@@ -289,7 +289,7 @@ impl<I, R> RunBuilderWithDataset<I, R> {
             code_commit: None,
             code_fingerprint: None,
             judge_model_pins: Vec::new(),
-            acquisition_mode,
+            source_mode,
             _mapped: PhantomData,
         }
     }
@@ -305,7 +305,7 @@ pub struct RunBuilderConfigured<
     ReferenceState = Unmapped,
 > {
     dataset: Dataset<I, R>,
-    acquisition: Box<dyn ErasedAcquisition<I, O>>,
+    source: Box<dyn ErasedOutputSource<I, O>>,
     output_mapper: Option<Box<dyn Mapper<O, O2>>>,
     reference_mapper: Option<Box<dyn Mapper<R, R2>>>,
     trial_count: usize,
@@ -315,7 +315,7 @@ pub struct RunBuilderConfigured<
     code_commit: Option<String>,
     code_fingerprint: Option<String>,
     judge_model_pins: Vec<String>,
-    acquisition_mode: &'static str,
+    source_mode: &'static str,
     _mapped: PhantomData<fn() -> (O2, R2, OutputState, ReferenceState)>,
 }
 
@@ -329,7 +329,7 @@ pub struct RunBuilderWithTargets<
     ReferenceState = Unmapped,
 > {
     dataset: Dataset<I, R>,
-    acquisition: Box<dyn ErasedAcquisition<I, O>>,
+    source: Box<dyn ErasedOutputSource<I, O>>,
     output_mapper: Option<Box<dyn Mapper<O, O2>>>,
     reference_mapper: Option<Box<dyn Mapper<R, R2>>>,
     targets: Vec<ScoringTarget<I, O2, R2>>,
@@ -340,7 +340,7 @@ pub struct RunBuilderWithTargets<
     code_commit: Option<String>,
     code_fingerprint: Option<String>,
     judge_model_pins: Vec<String>,
-    acquisition_mode: &'static str,
+    source_mode: &'static str,
     _mapped: PhantomData<fn() -> (O2, R2, OutputState, ReferenceState)>,
 }
 
@@ -357,7 +357,7 @@ impl<I, O, R, R2, ReferenceState> RunBuilderConfigured<I, O, R, O, R2, Unmapped,
     {
         RunBuilderConfigured::<I, O, R, O3, R2, Mapped, ReferenceState> {
             dataset: self.dataset,
-            acquisition: self.acquisition,
+            source: self.source,
             output_mapper: Some(Box::new(mapper)),
             reference_mapper: self.reference_mapper,
             trial_count: self.trial_count,
@@ -367,7 +367,7 @@ impl<I, O, R, R2, ReferenceState> RunBuilderConfigured<I, O, R, O, R2, Unmapped,
             code_commit: self.code_commit,
             code_fingerprint: self.code_fingerprint,
             judge_model_pins: self.judge_model_pins,
-            acquisition_mode: self.acquisition_mode,
+            source_mode: self.source_mode,
             _mapped: PhantomData,
         }
     }
@@ -383,7 +383,7 @@ impl<I, O, R, O2, OutputState> RunBuilderConfigured<I, O, R, O2, R, OutputState,
     {
         RunBuilderConfigured::<I, O, R, O2, R3, OutputState, Mapped> {
             dataset: self.dataset,
-            acquisition: self.acquisition,
+            source: self.source,
             output_mapper: self.output_mapper,
             reference_mapper: Some(Box::new(mapper)),
             trial_count: self.trial_count,
@@ -393,7 +393,7 @@ impl<I, O, R, O2, OutputState> RunBuilderConfigured<I, O, R, O2, R, OutputState,
             code_commit: self.code_commit,
             code_fingerprint: self.code_fingerprint,
             judge_model_pins: self.judge_model_pins,
-            acquisition_mode: self.acquisition_mode,
+            source_mode: self.source_mode,
             _mapped: PhantomData,
         }
     }
@@ -415,7 +415,7 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
 
         RunBuilderWithTargets {
             dataset: self.dataset,
-            acquisition: self.acquisition,
+            source: self.source,
             output_mapper: self.output_mapper,
             reference_mapper: self.reference_mapper,
             targets: vec![target],
@@ -426,7 +426,7 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
             code_commit: self.code_commit,
             code_fingerprint: self.code_fingerprint,
             judge_model_pins,
-            acquisition_mode: self.acquisition_mode,
+            source_mode: self.source_mode,
             _mapped: PhantomData,
         }
     }
@@ -446,7 +446,7 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
 
         RunBuilderWithTargets {
             dataset: self.dataset,
-            acquisition: self.acquisition,
+            source: self.source,
             output_mapper: self.output_mapper,
             reference_mapper: self.reference_mapper,
             targets: vec![target],
@@ -457,7 +457,7 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
             code_commit: self.code_commit,
             code_fingerprint: self.code_fingerprint,
             judge_model_pins,
-            acquisition_mode: self.acquisition_mode,
+            source_mode: self.source_mode,
             _mapped: PhantomData,
         }
     }
@@ -565,7 +565,7 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
             return Err(RunBuildError::DuplicateSampleIds(duplicate_sample_ids));
         }
 
-        if self.acquisition_mode == "observe"
+        if self.source_mode == "observe"
             && self
                 .dataset
                 .samples
@@ -807,7 +807,7 @@ impl<I: 'static, O: 'static, R: 'static> RunBuilderWithTargets<I, O, R, O, R, Un
 
         Ok(Run {
             dataset: this.dataset,
-            acquisition: this.acquisition,
+            source: this.source,
             definitions,
             executor: Box::new(RawRunExecutor {
                 targets: this.targets,
@@ -819,7 +819,7 @@ impl<I: 'static, O: 'static, R: 'static> RunBuilderWithTargets<I, O, R, O, R, Un
             code_commit: this.code_commit,
             code_fingerprint: this.code_fingerprint,
             judge_model_pins: this.judge_model_pins,
-            acquisition_mode: this.acquisition_mode,
+            source_mode: this.source_mode,
         })
     }
 }
@@ -836,7 +836,7 @@ impl<I: 'static, O: 'static, R: 'static, O2: 'static>
 
         Ok(Run {
             dataset: this.dataset,
-            acquisition: this.acquisition,
+            source: this.source,
             definitions,
             executor: Box::new(OutputMappedRunExecutor {
                 output_mapper,
@@ -849,7 +849,7 @@ impl<I: 'static, O: 'static, R: 'static, O2: 'static>
             code_commit: this.code_commit,
             code_fingerprint: this.code_fingerprint,
             judge_model_pins: this.judge_model_pins,
-            acquisition_mode: this.acquisition_mode,
+            source_mode: this.source_mode,
         })
     }
 }
@@ -866,7 +866,7 @@ impl<I: 'static, O: 'static, R: 'static, R2: 'static>
 
         Ok(Run {
             dataset: this.dataset,
-            acquisition: this.acquisition,
+            source: this.source,
             definitions,
             executor: Box::new(ReferenceMappedRunExecutor {
                 reference_mapper,
@@ -879,7 +879,7 @@ impl<I: 'static, O: 'static, R: 'static, R2: 'static>
             code_commit: this.code_commit,
             code_fingerprint: this.code_fingerprint,
             judge_model_pins: this.judge_model_pins,
-            acquisition_mode: this.acquisition_mode,
+            source_mode: this.source_mode,
         })
     }
 }
@@ -899,7 +899,7 @@ impl<I: 'static, O: 'static, R: 'static, O2: 'static, R2: 'static>
 
         Ok(Run {
             dataset: this.dataset,
-            acquisition: this.acquisition,
+            source: this.source,
             definitions,
             executor: Box::new(FullyMappedRunExecutor {
                 output_mapper,
@@ -913,22 +913,22 @@ impl<I: 'static, O: 'static, R: 'static, O2: 'static, R2: 'static>
             code_commit: this.code_commit,
             code_fingerprint: this.code_fingerprint,
             judge_model_pins: this.judge_model_pins,
-            acquisition_mode: this.acquisition_mode,
+            source_mode: this.source_mode,
         })
     }
 }
 
-trait ErasedAcquisition<I, O>: Send + Sync {
-    fn acquire_boxed<'a>(&'a self, input: &'a I) -> AcquisitionFuture<'a, O>;
+trait ErasedOutputSource<I, O>: Send + Sync {
+    fn produce_boxed<'a>(&'a self, input: &'a I) -> OutputSourceFuture<'a, O>;
 }
 
-impl<I, O, A> ErasedAcquisition<I, O> for A
+impl<I, O, S> ErasedOutputSource<I, O> for S
 where
-    A: Acquisition<I, O> + Send + Sync,
+    S: OutputSource<I, O> + Send + Sync,
     O: 'static,
 {
-    fn acquire_boxed<'a>(&'a self, input: &'a I) -> AcquisitionFuture<'a, O> {
-        Box::pin(async move { self.acquire(input).await })
+    fn produce_boxed<'a>(&'a self, input: &'a I) -> OutputSourceFuture<'a, O> {
+        Box::pin(async move { self.produce(input).await })
     }
 }
 
@@ -1260,9 +1260,9 @@ fn scorer_panic_scores(
         .collect()
 }
 
-fn acquisition_failure_scores(
+fn source_failure_scores(
     definitions: &[ScoreDefinition],
-    err: AcquisitionError,
+    err: OutputSourceError,
 ) -> HashMap<String, Result<Score, ScorerError>> {
     let shared_err = Arc::new(err);
 
@@ -1271,7 +1271,7 @@ fn acquisition_failure_scores(
         .map(|definition| {
             (
                 definition.name.clone(),
-                Err(ScorerError::provider(SharedAcquisitionError(Arc::clone(
+                Err(ScorerError::provider(SharedOutputSourceError(Arc::clone(
                     &shared_err,
                 )))),
             )
@@ -1348,15 +1348,15 @@ impl Display for InvalidScoreError {
 impl Error for InvalidScoreError {}
 
 #[derive(Debug)]
-struct SharedAcquisitionError(Arc<AcquisitionError>);
+struct SharedOutputSourceError(Arc<OutputSourceError>);
 
-impl Display for SharedAcquisitionError {
+impl Display for SharedOutputSourceError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Display::fmt(&self.0, f)
     }
 }
 
-impl Error for SharedAcquisitionError {
+impl Error for SharedOutputSourceError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         self.0.source()
     }

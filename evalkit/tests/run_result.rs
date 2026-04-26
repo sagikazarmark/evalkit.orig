@@ -25,7 +25,7 @@ fn metadata() -> RunMetadata {
             name: "accuracy".to_owned(),
             direction: Some(Direction::Maximize),
         }],
-        acquisition_mode: "inline".to_owned(),
+        source_mode: "inline".to_owned(),
     }
 }
 

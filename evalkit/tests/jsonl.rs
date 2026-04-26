@@ -26,7 +26,7 @@ fn run_result() -> RunResult {
                 name: "latency".to_owned(),
                 direction: Some(Direction::Minimize),
             }],
-            acquisition_mode: "inline".to_owned(),
+            source_mode: "inline".to_owned(),
         },
         samples: vec![
             SampleResult {
@@ -146,7 +146,7 @@ fn read_jsonl_round_trips_back_to_a_typed_run_result() {
 #[test]
 fn read_jsonl_supports_legacy_metadata_first_files() {
     let legacy = concat!(
-        "{\"record_type\":\"metadata\",\"metadata\":{\"run_id\":\"run-legacy\",\"seed\":null,\"dataset_fingerprint\":\"dataset-legacy\",\"scorer_fingerprint\":\"scorers-legacy\",\"started_at\":\"2026-04-03T12:00:00Z\",\"completed_at\":\"2026-04-03T12:00:05Z\",\"duration\":{\"secs\":5,\"nanos\":0},\"trial_count\":1,\"score_definitions\":[],\"acquisition_mode\":\"inline\"}}\n",
+        "{\"record_type\":\"metadata\",\"metadata\":{\"run_id\":\"run-legacy\",\"seed\":null,\"dataset_fingerprint\":\"dataset-legacy\",\"scorer_fingerprint\":\"scorers-legacy\",\"started_at\":\"2026-04-03T12:00:00Z\",\"completed_at\":\"2026-04-03T12:00:05Z\",\"duration\":{\"secs\":5,\"nanos\":0},\"trial_count\":1,\"score_definitions\":[],\"source_mode\":\"inline\"}}\n",
         "{\"record_type\":\"sample\",\"sample\":{\"sample_id\":\"sample-1\",\"trials\":[],\"trial_count\":0,\"scored_count\":0,\"error_count\":0,\"token_usage\":{\"input\":0,\"output\":0,\"cache_read\":0,\"cache_write\":0},\"cost_usd\":null}}\n"
     );
 
@@ -163,7 +163,7 @@ fn read_jsonl_supports_legacy_metadata_first_files() {
 fn read_jsonl_rejects_unknown_schema_versions() {
     let invalid = concat!(
         "{\"record_type\":\"header\",\"schema_version\":\"99\"}\n",
-        "{\"record_type\":\"metadata\",\"metadata\":{\"run_id\":\"run-legacy\",\"seed\":null,\"dataset_fingerprint\":\"dataset-legacy\",\"scorer_fingerprint\":\"scorers-legacy\",\"started_at\":\"2026-04-03T12:00:00Z\",\"completed_at\":\"2026-04-03T12:00:05Z\",\"duration\":{\"secs\":5,\"nanos\":0},\"trial_count\":1,\"score_definitions\":[],\"acquisition_mode\":\"inline\"}}\n"
+        "{\"record_type\":\"metadata\",\"metadata\":{\"run_id\":\"run-legacy\",\"seed\":null,\"dataset_fingerprint\":\"dataset-legacy\",\"scorer_fingerprint\":\"scorers-legacy\",\"started_at\":\"2026-04-03T12:00:00Z\",\"completed_at\":\"2026-04-03T12:00:05Z\",\"duration\":{\"secs\":5,\"nanos\":0},\"trial_count\":1,\"score_definitions\":[],\"source_mode\":\"inline\"}}\n"
     );
 
     let err = read_jsonl(invalid.as_bytes()).expect_err("unknown schema version should fail");

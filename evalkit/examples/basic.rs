@@ -57,10 +57,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
     let dataset = Dataset::new(samples);
 
-    // --- Acquisition ---------------------------------------------------
+    // --- Source --------------------------------------------------------
     // In production this would call an LLM. Here we return canned answers
     // so the example runs without any API key.
-    let acquisition = |input: &String| {
+    let source = |input: &String| {
         let answer = match input.as_str() {
             "What is 2 + 2?" => "4",
             "What is the capital of France?" => "Paris",
@@ -69,13 +69,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => "",
         }
         .to_string();
-        async move { Ok::<_, AcquisitionError>(answer) }
+        async move { Ok::<_, OutputSourceError>(answer) }
     };
 
     // --- Run -----------------------------------------------------------
     let run = Run::builder()
         .dataset(dataset)
-        .acquisition(acquisition)
+        .source(source)
         // exact_match: output must equal reference exactly.
         .scorer(ExactMatchScorer)
         // contains: output must contain the reference as a substring.

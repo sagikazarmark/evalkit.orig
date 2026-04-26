@@ -25,7 +25,7 @@ fn fixture_run(run_id: &str, accuracy: f64) -> RunResult {
             duration: Duration::from_secs(5),
             trial_count: 1,
             score_definitions: vec![ScoreDefinition::maximize("accuracy")],
-            acquisition_mode: String::from("inline"),
+            source_mode: String::from("inline"),
         },
         samples: vec![SampleResult {
             sample_id: String::from("sample-1"),

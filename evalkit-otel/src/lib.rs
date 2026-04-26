@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use evalkit::{
-    Acquisition, AcquisitionError, AcquisitionMetadata, RunResult, Sample, Score,
+    OutputSource, OutputSourceError, SourceMetadata, RunResult, Sample, Score,
 };
 use evalkit_runtime::{ExecutionSink, ExecutorBoxError, SampleSource, current_sample_id};
 use http_body_util::{BodyExt, Full};
@@ -97,7 +97,7 @@ where
     }
 }
 
-pub struct Observe {
+pub struct OtelObserver {
     backend: Box<dyn ErasedTraceBackend>,
     correlation_id: String,
     sample_attribute: String,
@@ -105,12 +105,12 @@ pub struct Observe {
     cached_spans: Mutex<Option<HashMap<String, Vec<Span>>>>,
 }
 
-impl Observe {
+impl OtelObserver {
     pub fn builder() -> ObserveBuilder {
         ObserveBuilder
     }
 
-    async fn grouped_spans(&self) -> Result<HashMap<String, Vec<Span>>, AcquisitionError> {
+    async fn grouped_spans(&self) -> Result<HashMap<String, Vec<Span>>, OutputSourceError> {
         if let Some(cached) = self
             .cached_spans
             .lock()
@@ -131,8 +131,8 @@ impl Observe {
         .await
         {
             Ok(Ok(grouped)) => grouped,
-            Ok(Err(err)) => return Err(AcquisitionError::BackendUnavailable(Box::new(err))),
-            Err(_) => return Err(AcquisitionError::Timeout(self.timeout)),
+            Ok(Err(err)) => return Err(OutputSourceError::BackendUnavailable(Box::new(err))),
+            Err(_) => return Err(OutputSourceError::Timeout(self.timeout)),
         };
 
         *self.cached_spans.lock().expect("observe cache poisoned") = Some(grouped.clone());
@@ -141,11 +141,11 @@ impl Observe {
     }
 }
 
-impl<I> Acquisition<I, Vec<Span>> for Observe {
-    async fn acquire(&self, _input: &I) -> Result<Vec<Span>, AcquisitionError> {
+impl<I> OutputSource<I, Vec<Span>> for OtelObserver {
+    async fn produce(&self, _input: &I) -> Result<Vec<Span>, OutputSourceError> {
         let sample_id = current_sample_id().ok_or_else(|| {
-            AcquisitionError::ExecutionFailed(Box::new(ParseTraceError(String::from(
-                "observe acquisition requires Run to provide the current sample id",
+            OutputSourceError::ExecutionFailed(Box::new(ParseTraceError(String::from(
+                "OtelObserver requires Run to provide the current sample id",
             ))))
         })?;
         let grouped = self.grouped_spans().await?;
@@ -153,14 +153,14 @@ impl<I> Acquisition<I, Vec<Span>> for Observe {
         grouped
             .get(&sample_id)
             .cloned()
-            .ok_or_else(|| AcquisitionError::TraceNotFound {
+            .ok_or_else(|| OutputSourceError::TraceNotFound {
                 correlation_id: self.correlation_id.clone(),
                 sample_id,
             })
     }
 
-    fn metadata(&self) -> AcquisitionMetadata {
-        AcquisitionMetadata::default().mode("observe")
+    fn metadata(&self) -> SourceMetadata {
+        SourceMetadata::default().mode("observe")
     }
 }
 
@@ -236,8 +236,8 @@ pub struct ObserveBuilderReady {
 }
 
 impl ObserveBuilderReady {
-    pub fn build(self) -> Observe {
-        Observe {
+    pub fn build(self) -> OtelObserver {
+        OtelObserver {
             backend: self.backend,
             correlation_id: self.correlation_id,
             sample_attribute: self.sample_attribute,
@@ -730,8 +730,8 @@ impl OtelResultEmitter {
                 Value::from(result.metadata.trial_count as u64),
             ),
             (
-                self.key("acquisition_mode"),
-                Value::String(result.metadata.acquisition_mode.clone()),
+                self.key("source_mode"),
+                Value::String(result.metadata.source_mode.clone()),
             ),
         ])
     }
@@ -1643,7 +1643,7 @@ mod tests {
                     name: String::from("accuracy"),
                     direction: Some(Direction::Maximize),
                 }],
-                acquisition_mode: String::from("inline"),
+                source_mode: String::from("inline"),
             },
             samples: vec![SampleResult {
                 sample_id: String::from("sample-1"),

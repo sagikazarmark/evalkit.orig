@@ -163,7 +163,7 @@ mod tests {
                 duration: Duration::from_secs(1),
                 trial_count: 1,
                 score_definitions: vec![ScoreDefinition::new("exact_match")],
-                acquisition_mode: "inline".into(),
+                source_mode: "inline".into(),
             },
             samples: samples
                 .into_iter()

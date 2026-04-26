@@ -12,13 +12,13 @@
 use std::time::Duration;
 
 use crate::run::{RunBuilderConfigured, RunBuilderWithTargets, Unmapped};
-use crate::{Acquisition, Dataset, Run, RunError, RunResult, Sample, Scorer};
+use crate::{OutputSource, Dataset, Run, RunError, RunResult, Sample, Scorer};
 
 /// Entry point of the happy-path facade.
 ///
 /// ```ignore
 /// let result = Eval::new(samples)
-///     .acquire(acquisition)
+///     .source(my_source)
 ///     .scorer(MyScorer)
 ///     .trials(3)
 ///     .run()
@@ -44,21 +44,21 @@ impl<I, R> Eval<I, R> {
         Self { dataset }
     }
 
-    /// Attach an acquisition step and move to the next phase.
-    pub fn acquire<O, A>(self, acquisition: A) -> EvalTask<I, O, R>
+    /// Attach a source step and move to the next phase.
+    pub fn source<O, S>(self, source: S) -> EvalTask<I, O, R>
     where
-        A: Acquisition<I, O> + 'static,
+        S: OutputSource<I, O> + 'static,
         O: 'static,
     {
         EvalTask {
             inner: Run::builder()
                 .dataset(self.dataset)
-                .acquisition(acquisition),
+                .source(source),
         }
     }
 }
 
-/// Post-acquire, pre-scorer state.
+/// Post-source, pre-scorer state.
 ///
 /// Exists so the type system enforces that every `EvalRun` has at least one
 /// scorer attached. The only legal next move is `scorer(...)`.
@@ -141,7 +141,7 @@ impl<I: 'static, O: 'static, R: 'static> EvalRun<I, O, R> {
 mod tests {
     use super::Eval;
     use crate::{
-        AcquisitionError, Run, Sample, Score, ScoreDefinition, Scorer, ScorerContext, ScorerError,
+        OutputSourceError, Run, Sample, Score, ScoreDefinition, Scorer, ScorerContext, ScorerError,
     };
 
     struct ExactMatch;
@@ -196,17 +196,17 @@ mod tests {
     async fn facade_produces_same_shape_as_kernel_path() {
         let trials = 2;
 
-        let facade_acquire = |input: &String| {
+        let facade_source = |input: &String| {
             let input = input.clone();
-            async move { Ok::<_, AcquisitionError>(input) }
+            async move { Ok::<_, OutputSourceError>(input) }
         };
-        let kernel_acquire = |input: &String| {
+        let kernel_source = |input: &String| {
             let input = input.clone();
-            async move { Ok::<_, AcquisitionError>(input) }
+            async move { Ok::<_, OutputSourceError>(input) }
         };
 
         let facade_result = Eval::new(fixture_samples())
-            .acquire(facade_acquire)
+            .source(facade_source)
             .scorer(ExactMatch)
             .scorer(Contains)
             .trials(trials)
@@ -217,7 +217,7 @@ mod tests {
 
         let kernel_result = Run::builder()
             .dataset(crate::Dataset::new(fixture_samples()))
-            .acquisition(kernel_acquire)
+            .source(kernel_source)
             .scorer(ExactMatch)
             .scorer(Contains)
             .trials(trials)
@@ -275,8 +275,8 @@ mod tests {
         assert_eq!(facade_result.metadata.trial_count, trials);
         assert_eq!(facade_result.metadata.seed, kernel_result.metadata.seed);
         assert_eq!(
-            facade_result.metadata.acquisition_mode,
-            kernel_result.metadata.acquisition_mode
+            facade_result.metadata.source_mode,
+            kernel_result.metadata.source_mode
         );
         assert_eq!(
             facade_result.metadata.score_definitions,

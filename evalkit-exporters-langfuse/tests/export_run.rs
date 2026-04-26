@@ -24,7 +24,7 @@ fn make_result() -> RunResult {
             duration: Duration::from_secs(1),
             trial_count: 1,
             score_definitions: vec![ScoreDefinition::new("exact_match")],
-            acquisition_mode: "inline".into(),
+            source_mode: "inline".into(),
         },
         samples: vec![SampleResult {
             sample_id: "sample-1".into(),

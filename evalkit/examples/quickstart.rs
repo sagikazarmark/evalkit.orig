@@ -29,18 +29,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     ];
 
-    let acquisition = |input: &String| {
+    let source = |input: &String| {
         let answer = match input.as_str() {
             "What is 2 + 2?" => "4",
             "What is the capital of France?" => "Paris",
             _ => "",
         }
         .to_string();
-        async move { Ok::<_, AcquisitionError>(answer) }
+        async move { Ok::<_, OutputSourceError>(answer) }
     };
 
     let result = Eval::new(samples)
-        .acquire(acquisition)
+        .source(source)
         .scorer(ExactMatchScorer)
         .trials(3)
         .run()

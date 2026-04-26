@@ -24,7 +24,7 @@ fn metadata(
         duration: Duration::from_secs(5),
         trial_count,
         score_definitions,
-        acquisition_mode: "inline".to_owned(),
+        source_mode: "inline".to_owned(),
     }
 }
 

@@ -1,9 +1,9 @@
 use chrono::{DateTime, Utc};
 use evalkit::{
-    AcquisitionError, Run, RunBuildError, Sample, Score, ScoreDefinition, Scorer, ScorerContext,
+    OutputSourceError, Run, RunBuildError, Sample, Score, ScoreDefinition, Scorer, ScorerContext,
     ScorerError,
 };
-use evalkit_otel::{Observe, Span, SpanEvent, TraceBackend, TraceBackendError};
+use evalkit_otel::{OtelObserver, Span, SpanEvent, TraceBackend, TraceBackendError};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -69,7 +69,7 @@ async fn observe_mode_runs_from_grouped_spans_and_scores_like_inline_mode() {
         .reference(String::from("hello"))
         .build()
         .unwrap();
-    let observe = Observe::builder()
+    let observe = OtelObserver::builder()
         .backend(RecordingBackend {
             grouped_spans: HashMap::from([(
                 String::from("sample-a"),
@@ -84,7 +84,7 @@ async fn observe_mode_runs_from_grouped_spans_and_scores_like_inline_mode() {
 
     let run = Run::builder()
         .dataset(vec![sample])
-        .acquisition(observe)
+        .source(observe)
         .map_output(|spans: &Vec<Span>| Ok(output_attribute(spans)))
         .scorer(ExactMatchScorer)
         .trials(2)
@@ -93,7 +93,7 @@ async fn observe_mode_runs_from_grouped_spans_and_scores_like_inline_mode() {
 
     let result = run.execute().await.unwrap();
 
-    assert_eq!(result.metadata.acquisition_mode, "observe");
+    assert_eq!(result.metadata.source_mode, "observe");
     assert_eq!(result.samples[0].trial_count, 2);
     assert_eq!(result.samples[0].scored_count, 2);
     assert_eq!(result.samples[0].error_count, 0);
@@ -123,7 +123,7 @@ async fn observe_mode_maps_missing_sample_spans_to_trace_not_found() {
         .reference(String::from("hello"))
         .build()
         .unwrap();
-    let observe = Observe::builder()
+    let observe = OtelObserver::builder()
         .backend(RecordingBackend {
             grouped_spans: HashMap::from([(
                 String::from("sample-other"),
@@ -138,7 +138,7 @@ async fn observe_mode_maps_missing_sample_spans_to_trace_not_found() {
 
     let run = Run::builder()
         .dataset(vec![sample])
-        .acquisition(observe)
+        .source(observe)
         .map_output(|spans: &Vec<Span>| Ok(output_attribute(spans)))
         .scorer(ExactMatchScorer)
         .build()
@@ -156,7 +156,7 @@ async fn observe_mode_maps_missing_sample_spans_to_trace_not_found() {
             .as_ref()
             .unwrap_err()
             .to_string(),
-        AcquisitionError::TraceNotFound {
+        OutputSourceError::TraceNotFound {
             correlation_id: String::from("run-missing"),
             sample_id: String::from("sample-missing"),
         }
@@ -171,7 +171,7 @@ async fn observe_mode_uses_collection_timeout_for_backend_fetches() {
         .reference(String::from("hello"))
         .build()
         .unwrap();
-    let observe = Observe::builder()
+    let observe = OtelObserver::builder()
         .backend(DelayedBackend {
             delay: Duration::from_millis(20),
         })
@@ -182,7 +182,7 @@ async fn observe_mode_uses_collection_timeout_for_backend_fetches() {
 
     let run = Run::builder()
         .dataset(vec![sample])
-        .acquisition(observe)
+        .source(observe)
         .map_output(|spans: &Vec<Span>| Ok(output_attribute(spans)))
         .scorer(ExactMatchScorer)
         .sample_timeout(Duration::from_millis(50))
@@ -199,13 +199,13 @@ async fn observe_mode_uses_collection_timeout_for_backend_fetches() {
             .as_ref()
             .unwrap_err()
             .to_string(),
-        AcquisitionError::Timeout(Duration::from_millis(1)).to_string()
+        OutputSourceError::Timeout(Duration::from_millis(1)).to_string()
     );
 }
 
 #[test]
 fn observe_mode_requires_non_generated_sample_ids() {
-    let observe = Observe::builder()
+    let observe = OtelObserver::builder()
         .backend(RecordingBackend {
             grouped_spans: HashMap::new(),
             calls: Arc::new(Mutex::new(Vec::new())),
@@ -220,7 +220,7 @@ fn observe_mode_requires_non_generated_sample_ids() {
             String::from("prompt"),
             String::from("hello"),
         )])
-        .acquisition(observe)
+        .source(observe)
         .map_output(|spans: &Vec<Span>| Ok(output_attribute(spans)))
         .scorer(ExactMatchScorer)
         .build()

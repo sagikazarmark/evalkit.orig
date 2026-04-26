@@ -8,11 +8,11 @@
 //! See `docs/root-crate-boundary-audit.md` for the boundary decision.
 
 use evalkit::{
-    AcquiredOutput, Acquisition, AcquisitionError, AcquisitionSnapshot, Dataset, RunMetadata,
+    SourceOutput, OutputSource, OutputSourceError, OutputSnapshot, Dataset, RunMetadata,
     RunResult, Sample, SampleResult, Score, ScoreDefinition, ScoreOutcome, ScorerContext,
     ScorerError, ScorerResources, ScorerSet, TrialResult,
 };
-pub use evalkit::acquisition::current_sample_id;
+pub use evalkit::source::current_sample_id;
 use chrono::Utc;
 use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
 use serde::de::DeserializeOwned;
@@ -33,8 +33,8 @@ use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
 type TrialScores = Vec<(ScoreDefinition, Result<ScoreOutcome, ScorerError>)>;
-type AcquisitionFuture<'a, O> =
-    Pin<Box<dyn Future<Output = Result<AcquiredOutput<O>, AcquisitionError>> + 'a>>;
+type OutputSourceFuture<'a, O> =
+    Pin<Box<dyn Future<Output = Result<SourceOutput<O>, OutputSourceError>> + 'a>>;
 type JudgeModelTierPredicate<I, R> =
     dyn Fn(&Sample<I, R>, &HashMap<String, Result<Score, ScorerError>>) -> bool + Send + Sync;
 type ShutdownPredicate = dyn Fn(&SampleResult) -> bool + Send + Sync;
@@ -95,7 +95,7 @@ pub trait Scrubber<I, O, R = ()>: Send + Sync {
 
     fn scrub_output(&self, _output: &mut O) {}
 
-    fn scrub_snapshots(&self, snapshots: &mut [AcquisitionSnapshot<O>]) {
+    fn scrub_snapshots(&self, snapshots: &mut [OutputSnapshot<O>]) {
         for snapshot in snapshots {
             self.scrub_output(&mut snapshot.output);
         }
@@ -513,7 +513,7 @@ impl Error for SamplerBuildError {}
 
 pub struct PullExecutor<I, O, R, Src, Samp, Sink> {
     source: Src,
-    acquisition: Arc<dyn ErasedAcquisition<I, O>>,
+    output_source: Arc<dyn ErasedOutputSource<I, O>>,
     scorer_set: Arc<ScorerSet<I, O, R>>,
     judge_model_tier: Option<Arc<JudgeModelTier<I, O, R>>>,
     partial_scoring: Option<Arc<dyn PartialScoringPlan<I, O, R>>>,
@@ -530,7 +530,7 @@ pub struct PullExecutor<I, O, R, Src, Samp, Sink> {
     seed: Option<u64>,
     code_commit: Option<String>,
     code_fingerprint: Option<String>,
-    acquisition_mode: &'static str,
+    source_mode: &'static str,
 }
 
 struct JudgeModelTier<I, O, R> {
@@ -544,7 +544,7 @@ trait PartialScoringPlan<I, O, R>: Send + Sync {
     fn score<'a>(
         &'a self,
         ctx: &'a ScorerContext<'a, I, O, R>,
-        snapshots: &'a [AcquisitionSnapshot<O>],
+        snapshots: &'a [OutputSnapshot<O>],
     ) -> PartialScoringFuture<'a>;
 }
 
@@ -618,7 +618,7 @@ impl<I, R> PartialScoringPlan<I, String, R> for StringPrefixPartialScoring<I, R>
     fn score<'a>(
         &'a self,
         ctx: &'a ScorerContext<'a, I, String, R>,
-        _snapshots: &'a [AcquisitionSnapshot<String>],
+        _snapshots: &'a [OutputSnapshot<String>],
     ) -> PartialScoringFuture<'a> {
         Box::pin(async move {
             let mut results = Vec::new();
@@ -676,7 +676,7 @@ impl<I, R> PartialScoringPlan<I, String, R> for StringStreamingPartialScoring<I,
     fn score<'a>(
         &'a self,
         ctx: &'a ScorerContext<'a, I, String, R>,
-        snapshots: &'a [AcquisitionSnapshot<String>],
+        snapshots: &'a [OutputSnapshot<String>],
     ) -> PartialScoringFuture<'a> {
         Box::pin(async move {
             let mut results = Vec::new();
@@ -726,7 +726,7 @@ struct ShutdownControl {
 }
 
 struct SharedExecutionState<I, O, R> {
-    acquisition: Arc<dyn ErasedAcquisition<I, O>>,
+    output_source: Arc<dyn ErasedOutputSource<I, O>>,
     scorer_set: Arc<ScorerSet<I, O, R>>,
     judge_model_tier: Option<Arc<JudgeModelTier<I, O, R>>>,
     partial_scoring: Option<Arc<dyn PartialScoringPlan<I, O, R>>>,
@@ -738,7 +738,7 @@ struct SharedExecutionState<I, O, R> {
 impl<I, O, R> Clone for SharedExecutionState<I, O, R> {
     fn clone(&self) -> Self {
         Self {
-            acquisition: Arc::clone(&self.acquisition),
+            output_source: Arc::clone(&self.output_source),
             scorer_set: Arc::clone(&self.scorer_set),
             judge_model_tier: self.judge_model_tier.clone(),
             partial_scoring: self.partial_scoring.clone(),
@@ -760,23 +760,23 @@ where
     Samp: Sampler<I, R>,
     Sink: ExecutionSink,
 {
-    pub fn new<A>(
+    pub fn new<S>(
         source: Src,
-        acquisition: A,
+        output_source: S,
         scorer_set: ScorerSet<I, O, R>,
         sampler: Samp,
         sink: Sink,
     ) -> Self
     where
-        A: Acquisition<I, O> + 'static,
+        S: OutputSource<I, O> + 'static,
         O: 'static,
     {
-        let acquisition_mode = acquisition.metadata().mode;
+        let source_mode = output_source.metadata().mode;
         let detected = detect_code_identity_from_current_dir();
 
         Self {
             source,
-            acquisition: Arc::new(acquisition),
+            output_source: Arc::new(output_source),
             scorer_set: Arc::new(scorer_set),
             judge_model_tier: None,
             partial_scoring: None,
@@ -793,7 +793,7 @@ where
             seed: None,
             code_commit: detected.code_commit,
             code_fingerprint: detected.code_fingerprint,
-            acquisition_mode,
+            source_mode,
         }
     }
 
@@ -941,7 +941,7 @@ where
                 duration: started.elapsed(),
                 trial_count: self.trial_count,
                 score_definitions: definitions,
-                acquisition_mode: self.acquisition_mode.to_string(),
+                source_mode: self.source_mode.to_string(),
             },
             samples: sample_results,
         };
@@ -1103,7 +1103,7 @@ where
 
     fn shared_state(&self) -> SharedExecutionState<I, O, R> {
         SharedExecutionState {
-            acquisition: Arc::clone(&self.acquisition),
+            output_source: Arc::clone(&self.output_source),
             scorer_set: Arc::clone(&self.scorer_set),
             judge_model_tier: self.judge_model_tier.clone(),
             partial_scoring: self.partial_scoring.clone(),
@@ -1246,19 +1246,19 @@ where
 {
     let started = Instant::now();
 
-    let flattened = match AssertUnwindSafe(acquire_output_with_state(state, sample))
+    let flattened = match AssertUnwindSafe(produce_output_with_state(state, sample))
         .catch_unwind()
         .await
     {
-        Ok(Ok(mut acquired)) => {
-            scrub_acquired_output(state, &mut acquired);
+        Ok(Ok(mut produced)) => {
+            scrub_produced_output(state, &mut produced);
             let ctx = ScorerContext::with_scope(
                 run_id,
                 &sample.id,
                 trial_index,
                 &sample.metadata,
                 &sample.input,
-                &acquired.output,
+                &produced.output,
                 sample.reference.as_ref(),
             );
 
@@ -1277,7 +1277,7 @@ where
                     maybe_execute_partial_scoring_with_state(
                         state,
                         &ctx,
-                        &acquired.snapshots,
+                        &produced.snapshots,
                         tiered,
                     )
                     .await
@@ -1289,11 +1289,11 @@ where
             }
         }
         Ok(Err(err)) => FlattenedTrial {
-            scores: acquisition_failure_scores(definitions, err),
+            scores: source_failure_scores(definitions, err),
             resources: ScorerResources::default(),
         },
         Err(_) => FlattenedTrial {
-            scores: acquisition_failure_scores(definitions, AcquisitionError::Panicked),
+            scores: source_failure_scores(definitions, OutputSourceError::Panicked),
             resources: ScorerResources::default(),
         },
     };
@@ -1308,22 +1308,22 @@ where
     }
 }
 
-async fn acquire_output_with_state<I, O, R>(
+async fn produce_output_with_state<I, O, R>(
     state: &SharedExecutionState<I, O, R>,
     sample: &Sample<I, R>,
-) -> Result<AcquiredOutput<O>, AcquisitionError>
+) -> Result<SourceOutput<O>, OutputSourceError>
 where
     I: Clone + Send + Sync + 'static,
     O: Send + Sync + 'static,
     R: Clone + Send + Sync + 'static,
 {
-    evalkit::acquisition::with_current_sample_id(&sample.id, async {
+    evalkit::source::with_current_sample_id(&sample.id, async {
         match state.sample_timeout {
-            Some(duration) => match timeout(duration, state.acquisition.acquire_boxed(&sample.input)).await {
+            Some(duration) => match timeout(duration, state.output_source.produce_boxed(&sample.input)).await {
                 Ok(result) => result,
-                Err(_) => Err(AcquisitionError::Timeout(duration)),
+                Err(_) => Err(OutputSourceError::Timeout(duration)),
             },
-            None => state.acquisition.acquire_boxed(&sample.input).await,
+            None => state.output_source.produce_boxed(&sample.input).await,
         }
     })
     .await
@@ -1381,7 +1381,7 @@ where
 async fn maybe_execute_partial_scoring_with_state<I, O, R>(
     state: &SharedExecutionState<I, O, R>,
     ctx: &ScorerContext<'_, I, O, R>,
-    snapshots: &[AcquisitionSnapshot<O>],
+    snapshots: &[OutputSnapshot<O>],
     primary: FlattenedTrial,
 ) -> FlattenedTrial
 where
@@ -1420,17 +1420,17 @@ struct FlattenedTrial {
     resources: ScorerResources,
 }
 
-trait ErasedAcquisition<I, O>: Send + Sync {
-    fn acquire_boxed<'a>(&'a self, input: &'a I) -> AcquisitionFuture<'a, O>;
+trait ErasedOutputSource<I, O>: Send + Sync {
+    fn produce_boxed<'a>(&'a self, input: &'a I) -> OutputSourceFuture<'a, O>;
 }
 
-impl<I, O, A> ErasedAcquisition<I, O> for A
+impl<I, O, A> ErasedOutputSource<I, O> for A
 where
-    A: Acquisition<I, O> + Send + Sync,
+    A: OutputSource<I, O> + Send + Sync,
     O: 'static,
 {
-    fn acquire_boxed<'a>(&'a self, input: &'a I) -> AcquisitionFuture<'a, O> {
-        Box::pin(async move { self.acquire_with_snapshots(input).await })
+    fn produce_boxed<'a>(&'a self, input: &'a I) -> OutputSourceFuture<'a, O> {
+        Box::pin(async move { self.produce_with_snapshots(input).await })
     }
 }
 
@@ -1490,9 +1490,9 @@ fn tier_predicate_panic_scores(
         .collect()
 }
 
-fn acquisition_failure_scores(
+fn source_failure_scores(
     definitions: &[ScoreDefinition],
-    err: AcquisitionError,
+    err: OutputSourceError,
 ) -> HashMap<String, Result<Score, ScorerError>> {
     let shared_err = Arc::new(err);
 
@@ -1501,7 +1501,7 @@ fn acquisition_failure_scores(
         .map(|definition| {
             (
                 definition.name.clone(),
-                Err(ScorerError::provider(SharedAcquisitionError(Arc::clone(
+                Err(ScorerError::provider(SharedOutputSourceError(Arc::clone(
                     &shared_err,
                 )))),
             )
@@ -1568,15 +1568,15 @@ impl Display for JudgeModelTierPredicatePanicError {
 impl Error for JudgeModelTierPredicatePanicError {}
 
 #[derive(Debug)]
-struct SharedAcquisitionError(Arc<AcquisitionError>);
+struct SharedOutputSourceError(Arc<OutputSourceError>);
 
-impl Display for SharedAcquisitionError {
+impl Display for SharedOutputSourceError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Display::fmt(&self.0, f)
     }
 }
 
-impl Error for SharedAcquisitionError {
+impl Error for SharedOutputSourceError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         self.0.source()
     }
@@ -1594,13 +1594,13 @@ fn stable_bucket(bytes: &[u8], total: usize) -> usize {
     (fingerprint.state % total as u64) as usize
 }
 
-fn scrub_acquired_output<I, O, R>(
+fn scrub_produced_output<I, O, R>(
     state: &SharedExecutionState<I, O, R>,
-    acquired: &mut AcquiredOutput<O>,
+    produced: &mut SourceOutput<O>,
 ) {
     if let Some(scrubber) = state.scrubber.as_ref() {
-        scrubber.scrub_output(&mut acquired.output);
-        scrubber.scrub_snapshots(&mut acquired.snapshots);
+        scrubber.scrub_output(&mut produced.output);
+        scrubber.scrub_snapshots(&mut produced.snapshots);
     }
 }
 
@@ -1891,7 +1891,7 @@ mod tests {
         ShardedSource, ShutdownMode, StringPrefixCheckpoint, StringStreamStage, TargetedSampler,
     };
     use evalkit::{
-        AcquiredOutput, Acquisition, AcquisitionError, AcquisitionSnapshot, Dataset, RunResult,
+        SourceOutput, OutputSource, OutputSourceError, OutputSnapshot, Dataset, RunResult,
         Sample, SampleResult, Score, ScoreDefinition, Scorer, ScorerContext,
         ScorerError, ScorerMetadata, ScorerSet,
     };
@@ -1972,32 +1972,32 @@ mod tests {
         }
     }
 
-    struct StreamingEchoAcquisition;
+    struct StreamingEchoSource;
 
-    impl Acquisition<String, String> for StreamingEchoAcquisition {
-        async fn acquire(&self, input: &String) -> Result<String, AcquisitionError> {
+    impl OutputSource<String, String> for StreamingEchoSource {
+        async fn produce(&self, input: &String) -> Result<String, OutputSourceError> {
             Ok(format!("echo::{input}"))
         }
 
-        async fn acquire_with_snapshots(
+        async fn produce_with_snapshots(
             &self,
             input: &String,
-        ) -> Result<AcquiredOutput<String>, AcquisitionError> {
-            Ok(AcquiredOutput::new(format!("echo::{input}"))
-                .with_snapshot(AcquisitionSnapshot::new("prefix", String::from("ec")))
-                .with_snapshot(AcquisitionSnapshot::new(
+        ) -> Result<SourceOutput<String>, OutputSourceError> {
+            Ok(SourceOutput::new(format!("echo::{input}"))
+                .with_snapshot(OutputSnapshot::new("prefix", String::from("ec")))
+                .with_snapshot(OutputSnapshot::new(
                     "mid",
                     format!("echo::{input}"),
                 )))
         }
     }
 
-    struct DelayedTrackingAcquisition {
+    struct DelayedTrackingSource {
         max_in_flight: Arc<AtomicUsize>,
         in_flight: Arc<AtomicUsize>,
     }
 
-    impl DelayedTrackingAcquisition {
+    impl DelayedTrackingSource {
         fn new() -> Self {
             Self {
                 max_in_flight: Arc::new(AtomicUsize::new(0)),
@@ -2029,8 +2029,8 @@ mod tests {
         }
     }
 
-    impl Acquisition<String, String> for DelayedTrackingAcquisition {
-        async fn acquire(&self, input: &String) -> Result<String, AcquisitionError> {
+    impl OutputSource<String, String> for DelayedTrackingSource {
+        async fn produce(&self, input: &String) -> Result<String, OutputSourceError> {
             let current = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
 
             loop {
@@ -2144,9 +2144,9 @@ mod tests {
         let pushed = Arc::clone(&sink.pushed_sample_ids);
         let finished = Arc::clone(&sink.finished_run_id);
 
-        let acquisition = |input: &String| {
+        let source = |input: &String| {
             let output = format!("echo::{input}");
-            async move { Ok::<_, AcquisitionError>(output) }
+            async move { Ok::<_, OutputSourceError>(output) }
         };
         let scorer_set = ScorerSet::<String, String, String>::builder()
             .scorer(ExactMatchScorer)
@@ -2154,7 +2154,7 @@ mod tests {
 
         let mut executor = PullExecutor::new(
             DatasetSource::new(dataset),
-            acquisition,
+            source,
             scorer_set,
             TargetedSampler::new(|sample: &Sample<String, String>| sample.id.starts_with("keep")),
             sink,
@@ -2166,7 +2166,7 @@ mod tests {
         assert_eq!(result.samples.len(), 1);
         assert_eq!(result.samples[0].sample_id, "keep-1");
         assert_eq!(result.metadata.trial_count, 2);
-        assert_eq!(result.metadata.acquisition_mode, "inline");
+        assert_eq!(result.metadata.source_mode, "inline");
         assert_eq!(
             pushed
                 .lock()
@@ -2189,9 +2189,9 @@ mod tests {
             Sample::new("one".to_string(), "echo::one".to_string()),
             Sample::new("two".to_string(), "echo::two".to_string()),
         ]);
-        let acquisition = |input: &String| {
+        let source = |input: &String| {
             let output = format!("echo::{input}");
-            async move { Ok::<_, AcquisitionError>(output) }
+            async move { Ok::<_, OutputSourceError>(output) }
         };
         let scorer_set = ScorerSet::<String, String, String>::builder()
             .scorer(ExactMatchScorer)
@@ -2199,7 +2199,7 @@ mod tests {
 
         let mut executor = PullExecutor::new(
             DatasetSource::new(dataset),
-            acquisition,
+            source,
             scorer_set,
             AlwaysSampler,
             super::NoopSink,
@@ -2220,9 +2220,9 @@ mod tests {
                 .build()
                 .unwrap(),
         ]);
-        let acquisition = |input: &String| {
+        let source = |input: &String| {
             let output = format!("echo::{input}");
-            async move { Ok::<_, AcquisitionError>(output) }
+            async move { Ok::<_, OutputSourceError>(output) }
         };
         let scorer_set = ScorerSet::<String, String, String>::builder()
             .scorer(ReviewGateScorer)
@@ -2233,7 +2233,7 @@ mod tests {
 
         let mut executor = PullExecutor::new(
             DatasetSource::new(dataset),
-            acquisition,
+            source,
             scorer_set,
             AlwaysSampler,
             super::NoopSink,
@@ -2269,9 +2269,9 @@ mod tests {
             "one".to_string(),
             "echo::one".to_string(),
         )]);
-        let acquisition = |input: &String| {
+        let source = |input: &String| {
             let output = format!("echo::{input}");
-            async move { Ok::<_, AcquisitionError>(output) }
+            async move { Ok::<_, OutputSourceError>(output) }
         };
         let primary = ScorerSet::<String, String, String>::builder()
             .scorer(ExactMatchScorer)
@@ -2282,7 +2282,7 @@ mod tests {
 
         let mut executor = PullExecutor::new(
             DatasetSource::new(dataset),
-            acquisition,
+            source,
             primary,
             AlwaysSampler,
             super::NoopSink,
@@ -2391,9 +2391,9 @@ mod tests {
             "hello".to_string(),
             "echo::hello".to_string(),
         )]);
-        let acquisition = |input: &String| {
+        let source = |input: &String| {
             let output = format!("echo::{input}");
-            async move { Ok::<_, AcquisitionError>(output) }
+            async move { Ok::<_, OutputSourceError>(output) }
         };
         let primary = ScorerSet::<String, String, String>::builder()
             .scorer(ExactMatchScorer)
@@ -2404,7 +2404,7 @@ mod tests {
 
         let mut executor = PullExecutor::new(
             DatasetSource::new(dataset),
-            acquisition,
+            source,
             primary,
             AlwaysSampler,
             super::NoopSink,
@@ -2424,7 +2424,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn pull_executor_streaming_string_scoring_uses_acquisition_snapshots() {
+    async fn pull_executor_streaming_string_scoring_uses_source_snapshots() {
         let dataset = Dataset::new(vec![Sample::new(
             "hello".to_string(),
             "echo::hello".to_string(),
@@ -2438,7 +2438,7 @@ mod tests {
 
         let mut executor = PullExecutor::new(
             DatasetSource::new(dataset),
-            StreamingEchoAcquisition,
+            StreamingEchoSource,
             primary,
             AlwaysSampler,
             super::NoopSink,
@@ -2480,8 +2480,8 @@ mod tests {
                 .build()
                 .unwrap(),
         ]);
-        let acquisition = |_input: &String| async move {
-            Ok::<_, AcquisitionError>(String::from("sent to person@example.com"))
+        let source = |_input: &String| async move {
+            Ok::<_, OutputSourceError>(String::from("sent to person@example.com"))
         };
         let scorer_set = ScorerSet::<String, String, String>::builder()
             .scorer(RedactedEchoScorer)
@@ -2490,7 +2490,7 @@ mod tests {
 
         let mut executor = PullExecutor::new(
             DatasetSource::new(dataset),
-            acquisition,
+            source,
             scorer_set,
             AlwaysSampler,
             super::NoopSink,
@@ -2529,9 +2529,9 @@ mod tests {
                 .build()
                 .unwrap(),
         ]);
-        let acquisition = |input: &String| {
+        let source = |input: &String| {
             let output = format!("echo::{input}");
-            async move { Ok::<_, AcquisitionError>(output) }
+            async move { Ok::<_, OutputSourceError>(output) }
         };
         let scorer_set = ScorerSet::<String, String, String>::builder()
             .scorer(ExactMatchScorer)
@@ -2539,7 +2539,7 @@ mod tests {
 
         let mut executor = PullExecutor::new(
             DatasetSource::new(dataset),
-            acquisition,
+            source,
             scorer_set,
             AlwaysSampler,
             super::NoopSink,
@@ -2573,9 +2573,9 @@ mod tests {
                 .build()
                 .unwrap(),
         ]);
-        let acquisition = |input: &String| {
+        let source = |input: &String| {
             let output = format!("echo::{input}");
-            async move { Ok::<_, AcquisitionError>(output) }
+            async move { Ok::<_, OutputSourceError>(output) }
         };
         let scorer_set = ScorerSet::<String, String, String>::builder()
             .scorer(ExactMatchScorer)
@@ -2583,7 +2583,7 @@ mod tests {
 
         let mut executor = PullExecutor::new(
             DatasetSource::new(dataset),
-            acquisition,
+            source,
             scorer_set,
             AlwaysSampler,
             super::NoopSink,
@@ -2624,16 +2624,16 @@ mod tests {
                 .build()
                 .unwrap(),
         ]);
-        let acquisition = DelayedTrackingAcquisition::new();
+        let source = DelayedTrackingSource::new();
         let scorer_set = ScorerSet::<String, String, String>::builder()
             .scorer(ExactMatchScorer)
             .build();
 
         let mut executor = PullExecutor::new(
             DatasetSource::new(dataset),
-            DelayedTrackingAcquisition {
-                max_in_flight: Arc::clone(&acquisition.max_in_flight),
-                in_flight: Arc::clone(&acquisition.in_flight),
+            DelayedTrackingSource {
+                max_in_flight: Arc::clone(&source.max_in_flight),
+                in_flight: Arc::clone(&source.in_flight),
             },
             scorer_set,
             AlwaysSampler,
@@ -2652,7 +2652,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["one", "two", "three"]
         );
-        assert_eq!(acquisition.max_in_flight(), 2);
+        assert_eq!(source.max_in_flight(), 2);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -2680,7 +2680,7 @@ mod tests {
 
         let mut executor = PullExecutor::new(
             DatasetSource::new(dataset),
-            DelayedTrackingAcquisition::new(),
+            DelayedTrackingSource::new(),
             scorer_set,
             AlwaysSampler,
             super::NoopSink,
@@ -2721,7 +2721,7 @@ mod tests {
 
         let mut executor = PullExecutor::new(
             DatasetSource::new(dataset),
-            DelayedTrackingAcquisition::new(),
+            DelayedTrackingSource::new(),
             scorer_set,
             AlwaysSampler,
             super::NoopSink,

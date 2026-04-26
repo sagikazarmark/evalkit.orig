@@ -1,3 +1,9 @@
+//! Output source abstraction.
+//!
+//! `OutputSource` is the kernel umbrella for "produce evaluation output for a sample."
+//! Most evals use `Task::from_fn` or a closure (active). To evaluate an already-instrumented
+//! system, use a passive source from an adapter crate (e.g., `evalkit-otel::OtelObserver`).
+
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -13,25 +19,25 @@ task_local! {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct AcquisitionMetadata {
+pub struct SourceMetadata {
     pub mode: &'static str,
 }
 
-impl Default for AcquisitionMetadata {
+impl Default for SourceMetadata {
     fn default() -> Self {
         Self { mode: "inline" }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AcquisitionSnapshot<O> {
+pub struct OutputSnapshot<O> {
     pub label: String,
     pub output: O,
     #[serde(default)]
     pub metadata: HashMap<String, Value>,
 }
 
-impl<O> AcquisitionSnapshot<O> {
+impl<O> OutputSnapshot<O> {
     pub fn new(label: impl Into<String>, output: O) -> Self {
         Self {
             label: label.into(),
@@ -47,13 +53,13 @@ impl<O> AcquisitionSnapshot<O> {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AcquiredOutput<O> {
+pub struct SourceOutput<O> {
     pub output: O,
     #[serde(default)]
-    pub snapshots: Vec<AcquisitionSnapshot<O>>,
+    pub snapshots: Vec<OutputSnapshot<O>>,
 }
 
-impl<O> AcquiredOutput<O> {
+impl<O> SourceOutput<O> {
     pub fn new(output: O) -> Self {
         Self {
             output,
@@ -61,13 +67,13 @@ impl<O> AcquiredOutput<O> {
         }
     }
 
-    pub fn with_snapshot(mut self, snapshot: AcquisitionSnapshot<O>) -> Self {
+    pub fn with_snapshot(mut self, snapshot: OutputSnapshot<O>) -> Self {
         self.snapshots.push(snapshot);
         self
     }
 }
 
-impl AcquisitionMetadata {
+impl SourceMetadata {
     pub fn mode(mut self, mode: &'static str) -> Self {
         self.mode = mode;
         self
@@ -75,7 +81,7 @@ impl AcquisitionMetadata {
 }
 
 #[derive(Debug)]
-pub enum AcquisitionError {
+pub enum OutputSourceError {
     ExecutionFailed(Box<dyn Error + Send + Sync>),
     TraceNotFound {
         correlation_id: String,
@@ -86,10 +92,10 @@ pub enum AcquisitionError {
     Panicked,
 }
 
-impl Display for AcquisitionError {
+impl Display for OutputSourceError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ExecutionFailed(err) => write!(f, "acquisition execution failed: {err}"),
+            Self::ExecutionFailed(err) => write!(f, "output source execution failed: {err}"),
             Self::TraceNotFound {
                 correlation_id,
                 sample_id,
@@ -98,13 +104,13 @@ impl Display for AcquisitionError {
                 "no spans found for correlation_id `{correlation_id}` and sample_id `{sample_id}`"
             ),
             Self::BackendUnavailable(err) => write!(f, "trace backend unavailable: {err}"),
-            Self::Timeout(duration) => write!(f, "acquisition timed out after {duration:?}"),
-            Self::Panicked => write!(f, "acquisition panicked"),
+            Self::Timeout(duration) => write!(f, "output source timed out after {duration:?}"),
+            Self::Panicked => write!(f, "output source panicked"),
         }
     }
 }
 
-impl Error for AcquisitionError {
+impl Error for OutputSourceError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::ExecutionFailed(err) | Self::BackendUnavailable(err) => Some(err.as_ref()),
@@ -114,24 +120,24 @@ impl Error for AcquisitionError {
 }
 
 #[allow(async_fn_in_trait)]
-pub trait Acquisition<I, O>: Send + Sync {
-    async fn acquire(&self, input: &I) -> Result<O, AcquisitionError>;
+pub trait OutputSource<I, O>: Send + Sync {
+    async fn produce(&self, input: &I) -> Result<O, OutputSourceError>;
 
-    async fn acquire_with_snapshots(&self, input: &I) -> Result<AcquiredOutput<O>, AcquisitionError> {
-        self.acquire(input).await.map(AcquiredOutput::new)
+    async fn produce_with_snapshots(&self, input: &I) -> Result<SourceOutput<O>, OutputSourceError> {
+        self.produce(input).await.map(SourceOutput::new)
     }
 
-    fn metadata(&self) -> AcquisitionMetadata {
-        AcquisitionMetadata::default()
+    fn metadata(&self) -> SourceMetadata {
+        SourceMetadata::default()
     }
 }
 
-impl<I, O, F, Fut> Acquisition<I, O> for F
+impl<I, O, F, Fut> OutputSource<I, O> for F
 where
     F: Fn(&I) -> Fut + Send + Sync,
-    Fut: Future<Output = Result<O, AcquisitionError>> + Send,
+    Fut: Future<Output = Result<O, OutputSourceError>> + Send,
 {
-    async fn acquire(&self, input: &I) -> Result<O, AcquisitionError> {
+    async fn produce(&self, input: &I) -> Result<O, OutputSourceError> {
         self(input).await
     }
 }
@@ -149,7 +155,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Acquisition, AcquisitionError};
+    use super::{OutputSource, OutputSourceError};
     use std::error::Error;
     use std::fmt::{self, Display, Formatter};
     use std::time::Duration;
@@ -165,10 +171,10 @@ mod tests {
 
     impl Error for TestError {}
 
-    struct PrefixAcquisition;
+    struct PrefixSource;
 
-    impl Acquisition<String, String> for PrefixAcquisition {
-        async fn acquire(&self, input: &String) -> Result<String, AcquisitionError> {
+    impl OutputSource<String, String> for PrefixSource {
+        async fn produce(&self, input: &String) -> Result<String, OutputSourceError> {
             Ok(format!("agent::{input}"))
         }
     }
@@ -176,39 +182,39 @@ mod tests {
     fn assert_send_sync<T: Send + Sync>() {}
 
     #[tokio::test(flavor = "current_thread")]
-    async fn acquisition_trait_supports_custom_implementations() {
-        assert_send_sync::<PrefixAcquisition>();
+    async fn output_source_trait_supports_custom_implementations() {
+        assert_send_sync::<PrefixSource>();
 
-        let acquisition = PrefixAcquisition;
+        let source = PrefixSource;
         let input = String::from("prompt");
 
-        let output = acquisition.acquire(&input).await.unwrap();
+        let output = source.produce(&input).await.unwrap();
 
         assert_eq!(output, "agent::prompt");
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn acquisition_blanket_impl_supports_async_closures() {
-        let acquisition = |input: &String| {
+    async fn output_source_blanket_impl_supports_async_closures() {
+        let source = |input: &String| {
             let output = format!("{input} -> completion");
-            async move { Ok::<_, AcquisitionError>(output) }
+            async move { Ok::<_, OutputSourceError>(output) }
         };
         let input = String::from("question");
 
-        let output = acquisition.acquire(&input).await.unwrap();
+        let output = source.produce(&input).await.unwrap();
 
         assert_eq!(output, "question -> completion");
     }
 
     #[test]
-    fn acquisition_error_wrapped_variants_preserve_sources() {
-        let execution_failed = AcquisitionError::ExecutionFailed(Box::new(TestError("agent down")));
+    fn output_source_error_wrapped_variants_preserve_sources() {
+        let execution_failed = OutputSourceError::ExecutionFailed(Box::new(TestError("agent down")));
         let backend_unavailable =
-            AcquisitionError::BackendUnavailable(Box::new(TestError("jaeger offline")));
+            OutputSourceError::BackendUnavailable(Box::new(TestError("jaeger offline")));
 
         assert_eq!(
             execution_failed.to_string(),
-            "acquisition execution failed: agent down"
+            "output source execution failed: agent down"
         );
         assert_eq!(
             backend_unavailable.to_string(),
@@ -231,18 +237,18 @@ mod tests {
     }
 
     #[test]
-    fn acquisition_error_value_variants_are_distinct_from_wrapped_failures() {
-        let trace_not_found = AcquisitionError::TraceNotFound {
+    fn output_source_error_value_variants_are_distinct_from_wrapped_failures() {
+        let trace_not_found = OutputSourceError::TraceNotFound {
             correlation_id: String::from("run-123"),
             sample_id: String::from("sample-7"),
         };
-        let timeout = AcquisitionError::Timeout(Duration::from_secs(3));
+        let timeout = OutputSourceError::Timeout(Duration::from_secs(3));
 
         assert_eq!(
             trace_not_found.to_string(),
             "no spans found for correlation_id `run-123` and sample_id `sample-7`"
         );
-        assert_eq!(timeout.to_string(), "acquisition timed out after 3s");
+        assert_eq!(timeout.to_string(), "output source timed out after 3s");
         assert!(trace_not_found.source().is_none());
         assert!(timeout.source().is_none());
     }

@@ -1,7 +1,7 @@
 //! Executor throughput benchmark for the runtime extraction.
 //!
 //! Fixture: 5_000 string samples run through `PullExecutor` with an inline
-//! acquisition and a single exact-match scorer. Reported numbers:
+//! source and a single exact-match scorer. Reported numbers:
 //!
 //! - throughput: samples per second (wall-clock)
 //! - peak resident memory: VmHWM from `/proc/self/status`, in KiB
@@ -21,7 +21,7 @@ use std::fs;
 use std::time::Instant;
 
 use evalkit::{
-    AcquisitionError, Dataset, Sample, Score, ScoreDefinition, Scorer, ScorerContext, ScorerError,
+    OutputSourceError, Dataset, Sample, Score, ScoreDefinition, Scorer, ScorerContext, ScorerError,
     ScorerSet,
 };
 use evalkit_runtime::{AlwaysSampler, DatasetSource, Executor, NoopSink, PullExecutor};
@@ -77,9 +77,9 @@ fn peak_rss_kib() -> Option<u64> {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dataset = build_dataset();
-    let acquisition = |input: &String| {
+    let source = |input: &String| {
         let output = input.clone();
-        async move { Ok::<_, AcquisitionError>(output) }
+        async move { Ok::<_, OutputSourceError>(output) }
     };
     let scorer_set = ScorerSet::<String, String, String>::builder()
         .scorer(ExactMatch)
@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let started = Instant::now();
     let mut executor = PullExecutor::new(
         DatasetSource::new(dataset),
-        acquisition,
+        source,
         scorer_set,
         AlwaysSampler,
         NoopSink,

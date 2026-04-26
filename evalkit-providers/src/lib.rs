@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::time::Duration;
 
-use evalkit::{Acquisition, AcquisitionError, Score, Scorer, ScorerContext, ScorerError};
+use evalkit::{OutputSource, OutputSourceError, Score, Scorer, ScorerContext, ScorerError};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -161,8 +161,8 @@ impl HttpAcquisition {
     }
 }
 
-impl Acquisition<String, String> for HttpAcquisition {
-    async fn acquire(&self, input: &String) -> Result<String, AcquisitionError> {
+impl OutputSource<String, String> for HttpAcquisition {
+    async fn produce(&self, input: &String) -> Result<String, OutputSourceError> {
         let body = json!({ &self.input_field: input });
         let response = self
             .client
@@ -170,12 +170,12 @@ impl Acquisition<String, String> for HttpAcquisition {
             .json(&body)
             .send()
             .await
-            .map_err(|source| AcquisitionError::ExecutionFailed(Box::new(source)))?;
+            .map_err(|source| OutputSourceError::ExecutionFailed(Box::new(source)))?;
 
         let payload: Value = response
             .json()
             .await
-            .map_err(|source| AcquisitionError::ExecutionFailed(Box::new(source)))?;
+            .map_err(|source| OutputSourceError::ExecutionFailed(Box::new(source)))?;
 
         extract_string_field(&payload, &self.output_field)
     }
@@ -202,11 +202,11 @@ impl SubprocessAcquisition {
         }
     }
 
-    async fn run(&self, input: &String) -> Result<String, AcquisitionError> {
+    async fn run(&self, input: &String) -> Result<String, OutputSourceError> {
         let input_json = serde_json::to_string(&AcquisitionPluginRequest {
             input: input.clone(),
         })
-        .map_err(|source| AcquisitionError::ExecutionFailed(Box::new(source)))?;
+        .map_err(|source| OutputSourceError::ExecutionFailed(Box::new(source)))?;
 
         let mut child = TokioCommand::new(&self.program)
             .args(&self.args)
@@ -214,17 +214,17 @@ impl SubprocessAcquisition {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .map_err(|source| AcquisitionError::ExecutionFailed(Box::new(source)))?;
+            .map_err(|source| OutputSourceError::ExecutionFailed(Box::new(source)))?;
 
         if let Some(mut stdin) = child.stdin.take() {
             stdin
                 .write_all(input_json.as_bytes())
                 .await
-                .map_err(|source| AcquisitionError::ExecutionFailed(Box::new(source)))?;
+                .map_err(|source| OutputSourceError::ExecutionFailed(Box::new(source)))?;
             stdin
                 .write_all(b"\n")
                 .await
-                .map_err(|source| AcquisitionError::ExecutionFailed(Box::new(source)))?;
+                .map_err(|source| OutputSourceError::ExecutionFailed(Box::new(source)))?;
         }
 
         let stdout = child.stdout.take().expect("stdout was piped");
@@ -233,10 +233,10 @@ impl SubprocessAcquisition {
         reader
             .read_line(&mut handshake_line)
             .await
-            .map_err(|source| AcquisitionError::ExecutionFailed(Box::new(source)))?;
+            .map_err(|source| OutputSourceError::ExecutionFailed(Box::new(source)))?;
 
         if handshake_line.trim().is_empty() {
-            return Err(AcquisitionError::ExecutionFailed(Box::new(
+            return Err(OutputSourceError::ExecutionFailed(Box::new(
                 EmptyProcessOutput,
             )));
         }
@@ -244,7 +244,7 @@ impl SubprocessAcquisition {
         let handshake = parse_plugin_handshake(handshake_line.trim())
             .map_err(protocol_failure)?
             .ok_or_else(|| {
-                AcquisitionError::ExecutionFailed(Box::new(PluginProtocolError(String::from(
+                OutputSourceError::ExecutionFailed(Box::new(PluginProtocolError(String::from(
                     "acquisition plugin did not emit a handshake line",
                 ))))
             })?;
@@ -254,13 +254,13 @@ impl SubprocessAcquisition {
         reader
             .read_line(&mut response_line)
             .await
-            .map_err(|source| AcquisitionError::ExecutionFailed(Box::new(source)))?;
+            .map_err(|source| OutputSourceError::ExecutionFailed(Box::new(source)))?;
 
         let _ = child.wait().await;
 
         let trimmed = response_line.trim();
         if trimmed.is_empty() {
-            return Err(AcquisitionError::ExecutionFailed(Box::new(
+            return Err(OutputSourceError::ExecutionFailed(Box::new(
                 EmptyProcessOutput,
             )));
         }
@@ -268,12 +268,12 @@ impl SubprocessAcquisition {
         let response = parse_plugin_response(trimmed)
             .map_err(protocol_failure)?
             .ok_or_else(|| {
-                AcquisitionError::ExecutionFailed(Box::new(PluginProtocolError(String::from(
+                OutputSourceError::ExecutionFailed(Box::new(PluginProtocolError(String::from(
                     "acquisition plugin did not emit a response line",
                 ))))
             })?;
 
-        extract_plugin_response_output(response).map_err(response_failure_to_acquisition)
+        extract_plugin_response_output(response).map_err(response_failure_to_source)
     }
 }
 
@@ -371,11 +371,11 @@ impl SubprocessScorer {
     }
 }
 
-impl Acquisition<String, String> for SubprocessAcquisition {
-    async fn acquire(&self, input: &String) -> Result<String, AcquisitionError> {
+impl OutputSource<String, String> for SubprocessAcquisition {
+    async fn produce(&self, input: &String) -> Result<String, OutputSourceError> {
         tokio::time::timeout(self.timeout, self.run(input))
             .await
-            .map_err(|_| AcquisitionError::Timeout(self.timeout))?
+            .map_err(|_| OutputSourceError::Timeout(self.timeout))?
     }
 }
 
@@ -642,14 +642,14 @@ fn protocol_error(source: impl Error) -> PluginProtocolError {
     PluginProtocolError(source.to_string())
 }
 
-fn protocol_failure(error: PluginProtocolError) -> AcquisitionError {
-    AcquisitionError::ExecutionFailed(Box::new(error))
+fn protocol_failure(error: PluginProtocolError) -> OutputSourceError {
+    OutputSourceError::ExecutionFailed(Box::new(error))
 }
 
-fn response_failure_to_acquisition(error: PluginResponseError) -> AcquisitionError {
+fn response_failure_to_source(error: PluginResponseError) -> OutputSourceError {
     match error {
-        PluginResponseError::Protocol(error) => AcquisitionError::ExecutionFailed(Box::new(error)),
-        PluginResponseError::Reported(error) => AcquisitionError::ExecutionFailed(Box::new(error)),
+        PluginResponseError::Protocol(error) => OutputSourceError::ExecutionFailed(Box::new(error)),
+        PluginResponseError::Reported(error) => OutputSourceError::ExecutionFailed(Box::new(error)),
     }
 }
 
@@ -664,10 +664,10 @@ fn response_failure_to_protocol(error: PluginResponseError) -> PluginProtocolErr
     PluginProtocolError(error.to_string())
 }
 
-fn extract_string_field(payload: &Value, field: &str) -> Result<String, AcquisitionError> {
+fn extract_string_field(payload: &Value, field: &str) -> Result<String, OutputSourceError> {
     match payload.get(field).and_then(Value::as_str) {
         Some(value) => Ok(value.to_owned()),
-        None => Err(AcquisitionError::ExecutionFailed(Box::new(
+        None => Err(OutputSourceError::ExecutionFailed(Box::new(
             MissingOutputField(field.to_owned()),
         ))),
     }
@@ -717,7 +717,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "acquisition execution failed: response JSON is missing the `output` field"
+            "output source execution failed: response JSON is missing the `output` field"
         );
     }
 
@@ -744,7 +744,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn subprocess_acquisition_accepts_handshake_preamble() {
-        let acquisition = SubprocessAcquisition::new(
+        let source = SubprocessAcquisition::new(
             "sh",
             vec![
                 String::from("-c"),
@@ -755,14 +755,14 @@ mod tests {
             Duration::from_secs(1),
         );
 
-        let output = acquisition.acquire(&String::from("2+2")).await.unwrap();
+        let output = source.produce(&String::from("2+2")).await.unwrap();
 
         assert_eq!(output, "four");
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn subprocess_acquisition_maps_structured_plugin_errors() {
-        let acquisition = SubprocessAcquisition::new(
+        let source = SubprocessAcquisition::new(
             "sh",
             vec![
                 String::from("-c"),
@@ -773,7 +773,7 @@ mod tests {
             Duration::from_secs(1),
         );
 
-        let err = acquisition.acquire(&String::from("bad")).await.unwrap_err();
+        let err = source.produce(&String::from("bad")).await.unwrap_err();
 
         assert!(err.to_string().contains("plugin error [bad_input]: oops"));
     }
@@ -809,7 +809,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn subprocess_acquisition_rejects_missing_handshake() {
-        let acquisition = SubprocessAcquisition::new(
+        let source = SubprocessAcquisition::new(
             "sh",
             vec![
                 String::from("-c"),
@@ -818,7 +818,7 @@ mod tests {
             Duration::from_secs(1),
         );
 
-        let err = acquisition.acquire(&String::from("2+2")).await.unwrap_err();
+        let err = source.produce(&String::from("2+2")).await.unwrap_err();
 
         assert!(
             err.to_string()

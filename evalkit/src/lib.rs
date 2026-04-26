@@ -85,7 +85,7 @@
 //! use evalkit::current_sample_id;
 //! ```
 
-pub mod acquisition;
+pub mod source;
 mod comparison;
 mod dataset;
 mod eval;
@@ -106,8 +106,8 @@ mod scorer_ext;
 mod scorer_set;
 mod stats;
 
-pub use acquisition::{
-    AcquiredOutput, Acquisition, AcquisitionError, AcquisitionMetadata, AcquisitionSnapshot,
+pub use source::{
+    OutputSource, OutputSourceError, OutputSnapshot, SourceMetadata, SourceOutput,
 };
 pub use comparison::{
     Change, CompareConfig, Comparison, SampleComparison, ScorerComparison, compare,
@@ -137,7 +137,7 @@ pub use stats::{RunStats, ScorerStats};
 
 pub mod prelude {
     pub use crate::{
-        Acquisition, AcquisitionError, AcquisitionMetadata, AcquisitionSnapshot, AcquiredOutput,
+        OutputSource, OutputSourceError, SourceMetadata, OutputSnapshot, SourceOutput,
         AndScorer, Change, CompareConfig, Comparison, Dataset, Direction, Eval, EvalRun, EvalTask,
         IgnoreReferenceScorer, MapError, MapScoreScorer, Mapper, NotScorer, OrScorer,
         RUN_RESULT_SCHEMA_VERSION, Run, RunBuildError, RunError, RunMetadata, RunResult, RunStats,

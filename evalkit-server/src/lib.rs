@@ -69,7 +69,7 @@ pub struct RunSummary {
     pub run_id: String,
     pub started_at: chrono::DateTime<Utc>,
     pub completed_at: chrono::DateTime<Utc>,
-    pub acquisition_mode: String,
+    pub source_mode: String,
     pub sample_count: usize,
 }
 
@@ -281,7 +281,7 @@ impl RunStore {
         let connection = self.connection()?;
         let mut statement = connection
             .prepare(
-                "SELECT run_id, started_at, completed_at, acquisition_mode, sample_count FROM runs ORDER BY started_at DESC",
+                "SELECT run_id, started_at, completed_at, source_mode, sample_count FROM runs ORDER BY started_at DESC",
             )
             .map_err(store_error)?;
         let rows = statement
@@ -290,7 +290,7 @@ impl RunStore {
                     run_id: row.get(0)?,
                     started_at: parse_timestamp(row.get::<_, String>(1)?)?,
                     completed_at: parse_timestamp(row.get::<_, String>(2)?)?,
-                    acquisition_mode: row.get(3)?,
+                    source_mode: row.get(3)?,
                     sample_count: row.get::<_, i64>(4)? as usize,
                 })
             })
@@ -314,13 +314,13 @@ impl RunStore {
 
         connection
             .execute(
-                "INSERT OR REPLACE INTO runs (run_id, started_at, completed_at, acquisition_mode, sample_count, metadata_json, run_json, created_at)
+                "INSERT OR REPLACE INTO runs (run_id, started_at, completed_at, source_mode, sample_count, metadata_json, run_json, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     run.result.metadata.run_id,
                     run.result.metadata.started_at.to_rfc3339(),
                     run.result.metadata.completed_at.to_rfc3339(),
-                    run.result.metadata.acquisition_mode,
+                    run.result.metadata.source_mode,
                     run.result.samples.len() as i64,
                     metadata_json,
                     run_json,
@@ -648,7 +648,7 @@ impl RunStore {
                     run_id TEXT PRIMARY KEY,
                     started_at TEXT NOT NULL,
                     completed_at TEXT NOT NULL,
-                    acquisition_mode TEXT NOT NULL,
+                    source_mode TEXT NOT NULL,
                     sample_count INTEGER NOT NULL,
                     metadata_json TEXT NOT NULL,
                     run_json TEXT NOT NULL,
@@ -966,7 +966,7 @@ fn render_home_page(runs: &[RunSummary]) -> String {
             "<h2><a href=\"/runs/{id}\">{id}</a></h2><p><strong>Samples:</strong> {samples}<br><strong>Mode:</strong> {mode}<br><strong>Started:</strong> {started}</p>",
             id = run.run_id,
             samples = run.sample_count,
-            mode = escape_html(&run.acquisition_mode),
+            mode = escape_html(&run.source_mode),
             started = run.started_at,
         ));
         if let Some(next) = runs.get(index + 1) {
@@ -996,9 +996,9 @@ fn render_run_detail_page(
     let mut html = page_shell(
         &format!("Run {}", run.result.metadata.run_id),
         format!(
-            "<h1>Run {}</h1><p><strong>Acquisition:</strong> {}<br><strong>Samples:</strong> {}<br><strong>Started:</strong> {}<br><a href=\"/runs/{}/review\">Open review queue</a></p>",
+            "<h1>Run {}</h1><p><strong>Source Mode:</strong> {}<br><strong>Samples:</strong> {}<br><strong>Started:</strong> {}<br><a href=\"/runs/{}/review\">Open review queue</a></p>",
             run.result.metadata.run_id,
-            escape_html(&run.result.metadata.acquisition_mode),
+            escape_html(&run.result.metadata.source_mode),
             run.result.samples.len(),
             run.result.metadata.started_at,
             run.result.metadata.run_id,
@@ -2254,7 +2254,7 @@ mod tests {
                         name: String::from("exact_match"),
                         direction: Some(Direction::Maximize),
                     }],
-                    acquisition_mode: String::from("inline"),
+                    source_mode: String::from("inline"),
                 },
                 samples: vec![SampleResult {
                     sample_id: sample_id.to_string(),

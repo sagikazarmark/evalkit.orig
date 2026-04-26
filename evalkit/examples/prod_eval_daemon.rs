@@ -28,9 +28,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Sample::new("world".to_string(), "echo::world".to_string()),
     ]);
 
-    let acquisition = |input: &String| {
+    let source = |input: &String| {
         let output = format!("echo::{input}");
-        async move { Ok::<_, AcquisitionError>(output) }
+        async move { Ok::<_, OutputSourceError>(output) }
     };
     let scorer_set = ScorerSet::<String, String, String>::builder()
         .scorer(ExactMatchScorer)
@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut executor = PullExecutor::new(
         DatasetSource::new(dataset),
-        acquisition,
+        source,
         scorer_set,
         AlwaysSampler,
         sink,
