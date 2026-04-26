@@ -4,7 +4,7 @@ use serde_json::json;
 #[test]
 fn run_log_schema_matches_the_published_document() {
     let published: serde_json::Value =
-        serde_json::from_str(include_str!("../docs/schema/run-log-v1.schema.json"))
+        serde_json::from_str(include_str!("../../docs/schema/run-log-v1.schema.json"))
             .expect("published schema must be valid JSON");
 
     assert_eq!(schema::run_log_schema(), published);

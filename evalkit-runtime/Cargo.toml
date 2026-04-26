@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
-evalkit = { path = ".." }
+evalkit = { path = "../evalkit" }
 futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 regex = "1"
 serde = { version = "1", features = ["derive"] }

@@ -46,9 +46,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: cargo build --example quickstart
-        run: cargo build --example quickstart
-      - name: cargo build --example basic
-        run: cargo build --example basic
-      - name: cargo build --example prod_eval_daemon
-        run: cargo build --example prod_eval_daemon
+      - name: cargo build -p evalkit --example quickstart
+        run: cargo build -p evalkit --example quickstart
+      - name: cargo build -p evalkit --example basic
+        run: cargo build -p evalkit --example basic
+      - name: cargo build -p evalkit --example prod_eval_daemon
+        run: cargo build -p evalkit --example prod_eval_daemon
