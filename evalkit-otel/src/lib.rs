@@ -1,3 +1,10 @@
+//! OpenTelemetry-backed passive output source for evalkit.
+//!
+//! Exports [`OtelObserver`], an [`evalkit::OutputSource`] implementation that
+//! reads spans from an OTel backend instead of running the system under
+//! evaluation. Construct one via [`OtelObserver::builder()`] and pass it to
+//! the evalkit facade with `Eval::new(samples).source(observer)`.
+
 use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use evalkit::{
@@ -106,8 +113,8 @@ pub struct OtelObserver {
 }
 
 impl OtelObserver {
-    pub fn builder() -> ObserveBuilder {
-        ObserveBuilder
+    pub fn builder() -> OtelObserverBuilder {
+        OtelObserverBuilder
     }
 
     async fn grouped_spans(&self) -> Result<HashMap<String, Vec<Span>>, OutputSourceError> {
@@ -164,46 +171,46 @@ impl<I> OutputSource<I, Vec<Span>> for OtelObserver {
     }
 }
 
-pub struct ObserveBuilder;
+pub struct OtelObserverBuilder;
 
-impl ObserveBuilder {
-    pub fn backend<B>(self, backend: B) -> ObserveBuilderWithBackend
+impl OtelObserverBuilder {
+    pub fn backend<B>(self, backend: B) -> OtelObserverBuilderWithBackend
     where
         B: TraceBackend + 'static,
     {
-        ObserveBuilderWithBackend {
+        OtelObserverBuilderWithBackend {
             backend: Box::new(backend),
         }
     }
 }
 
-pub struct ObserveBuilderWithBackend {
+pub struct OtelObserverBuilderWithBackend {
     backend: Box<dyn ErasedTraceBackend>,
 }
 
-impl ObserveBuilderWithBackend {
+impl OtelObserverBuilderWithBackend {
     pub fn correlation_id(
         self,
         correlation_id: impl Into<String>,
-    ) -> ObserveBuilderWithCorrelationId {
-        ObserveBuilderWithCorrelationId {
+    ) -> OtelObserverBuilderWithCorrelationId {
+        OtelObserverBuilderWithCorrelationId {
             backend: self.backend,
             correlation_id: correlation_id.into(),
         }
     }
 }
 
-pub struct ObserveBuilderWithCorrelationId {
+pub struct OtelObserverBuilderWithCorrelationId {
     backend: Box<dyn ErasedTraceBackend>,
     correlation_id: String,
 }
 
-impl ObserveBuilderWithCorrelationId {
+impl OtelObserverBuilderWithCorrelationId {
     pub fn sample_attribute(
         self,
         sample_attribute: impl Into<String>,
-    ) -> ObserveBuilderWithSampleAttribute {
-        ObserveBuilderWithSampleAttribute {
+    ) -> OtelObserverBuilderWithSampleAttribute {
+        OtelObserverBuilderWithSampleAttribute {
             backend: self.backend,
             correlation_id: self.correlation_id,
             sample_attribute: sample_attribute.into(),
@@ -211,15 +218,15 @@ impl ObserveBuilderWithCorrelationId {
     }
 }
 
-pub struct ObserveBuilderWithSampleAttribute {
+pub struct OtelObserverBuilderWithSampleAttribute {
     backend: Box<dyn ErasedTraceBackend>,
     correlation_id: String,
     sample_attribute: String,
 }
 
-impl ObserveBuilderWithSampleAttribute {
-    pub fn timeout(self, timeout: Duration) -> ObserveBuilderReady {
-        ObserveBuilderReady {
+impl OtelObserverBuilderWithSampleAttribute {
+    pub fn timeout(self, timeout: Duration) -> OtelObserverBuilderReady {
+        OtelObserverBuilderReady {
             backend: self.backend,
             correlation_id: self.correlation_id,
             sample_attribute: self.sample_attribute,
@@ -228,14 +235,14 @@ impl ObserveBuilderWithSampleAttribute {
     }
 }
 
-pub struct ObserveBuilderReady {
+pub struct OtelObserverBuilderReady {
     backend: Box<dyn ErasedTraceBackend>,
     correlation_id: String,
     sample_attribute: String,
     timeout: Duration,
 }
 
-impl ObserveBuilderReady {
+impl OtelObserverBuilderReady {
     pub fn build(self) -> OtelObserver {
         OtelObserver {
             backend: self.backend,
