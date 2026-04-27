@@ -105,6 +105,7 @@ mod scorer_error;
 mod scorer_ext;
 mod scorer_set;
 mod stats;
+mod task;
 
 pub use source::{
     OutputSource, OutputSourceError, OutputSnapshot, SourceMetadata, SourceOutput,
@@ -134,6 +135,7 @@ pub use scorer_ext::{
 };
 pub use scorer_set::ScorerSet;
 pub use stats::{RunStats, ScorerStats};
+pub use task::Task;
 
 pub mod prelude {
     pub use crate::{
@@ -144,7 +146,7 @@ pub mod prelude {
         Sample, SampleBuildError, SampleBuilder, SampleComparison,
         Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerComparison,
         ScorerContext, ScorerError, ScorerExt, ScorerMetadata, ScorerResources, ScorerSet,
-        ScorerStats, ThenScorer, TimeoutScorer, TokenUsage,
+        ScorerStats, Task, ThenScorer, TimeoutScorer, TokenUsage,
         ToolCall, ToolResult, TrajectorySample, TrajectoryStep, WeightedScorer, compare,
         ignore_reference, read_jsonl, write_jsonl,
     };
