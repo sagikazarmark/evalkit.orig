@@ -123,25 +123,35 @@ where
 
 ### Layer 4 — Concrete adapters
 
-**Active (`evalkit` core):**
+**No shared umbrella type for either side.** The trait is the umbrella; concrete sources are first-class types in their natural crates.
+
+**Active:**
 
 ```rust
+// evalkit core — for naming an async closure as a source value
 pub struct Task<I, O>(/* boxed source */);
 
 impl<I, O> Task<I, O> {
     pub fn from_fn<F, Fut>(f: F) -> Self where /* ... */;
-    pub fn http(plugin: HttpTask) -> Self;
-    pub fn subprocess(spec: SubprocessSpec) -> Self;
 }
 
 impl<I, O> OutputSource<I, O> for Task<I, O> { /* ... */ }
+
+// evalkit-providers — first-class active sources for HTTP and subprocess plugins
+pub struct HttpSource { /* ... */ }
+impl OutputSource<String, String> for HttpSource { /* ... */ }
+
+pub struct SubprocessSource { /* ... */ }
+impl OutputSource<String, String> for SubprocessSource { /* ... */ }
 ```
 
-`Task` is the active umbrella because closures, HTTP plugins, and subprocess plugins all share the same essential shape ("drive something, capture its return").
+`Task` is intentionally narrow — it exists only to *name* a closure-based source for config/reuse/builder use. Closures continue to flow through the trait's blanket impl when no naming is needed. HTTP and subprocess plugins are named first-class types in `evalkit-providers`; they implement `OutputSource` directly and users pass them to `.source(...)` without a wrapper.
 
-**Passive (per-crate, no shared umbrella type):**
+This shape was forced by workspace topology — `evalkit-providers` depends on `evalkit`, so `Task::http(plugin)` style constructors (which would require `evalkit` to depend on `evalkit-providers`) are not possible without a cyclic dependency. The result is consistent with the passive side: every concrete source is a first-class type in its natural crate.
 
-Each passive implementation is a first-class type that impls `OutputSource` directly. The trait is the umbrella; nothing forces these into a shared concrete supertype.
+**Passive:**
+
+Same pattern — each implementation is a first-class type that impls `OutputSource` directly.
 
 The current `evalkit-otel::Observe` is renamed to `evalkit-otel::OtelObserver` — noun form, indicates the source crate, neutral on live-vs-replay (the user's `(D)` answer in brainstorming: temporal mode is an implementation detail). Future passive sources (`evalkit-fixtures`, log/metric backends, etc.) follow the same pattern: each is a noun-named type in its own crate that impls `OutputSource`.
 
@@ -172,6 +182,13 @@ Pre-1.0 run logs and pre-1.0 plugins are not supported by 1.0+. No migration too
 | `Run::builder().acquisition(...)` | `Run::builder().source(...)` |
 | `acquisition_mode` (metadata field) | `source_mode` |
 | `evalkit-otel::Observe` | `evalkit-otel::OtelObserver` |
+| `evalkit-providers::HttpAcquisition` | `evalkit-providers::HttpSource` |
+| `evalkit-providers::SubprocessAcquisition` | `evalkit-providers::SubprocessSource` |
+| `evalkit-providers::AcquisitionPluginRequest` | `evalkit-providers::SourcePluginRequest` |
+| `evalkit-providers::AcquisitionPluginResponse` | `evalkit-providers::SourcePluginResponse` |
+| `evalkit-providers::AcquisitionPluginConformance` | `evalkit-providers::SourcePluginConformance` |
+| `conformance_check_acquisition_plugin` | `conformance_check_source_plugin` |
+| `PluginKind::Acquisition` | `PluginKind::Source` |
 
 The `acquisition` *module* in `evalkit/src/` becomes `source.rs`. `current_sample_id` and the task-local plumbing migrate unchanged.
 
@@ -187,7 +204,8 @@ The `acquisition` *module* in `evalkit/src/` becomes `source.rs`. `current_sampl
 The facade's single `.source(...)` method does not advertise active/passive at the call site. To compensate, a short "Choosing a Source" section in the docs presents the canonical patterns:
 
 > Most evals start with a closure or `Task::from_fn(...)`.
-> To evaluate an already-instrumented system, construct a passive source (e.g., from `evalkit-otel`) and pass it to `.source(...)`.
+> To evaluate via HTTP or subprocess plugins, construct an `HttpSource` or `SubprocessSource` from `evalkit-providers` and pass it to `.source(...)`.
+> To evaluate an already-instrumented system, construct a passive source (e.g., `OtelObserver` from `evalkit-otel`) and pass it to `.source(...)`.
 
 Crate-level rustdoc on `evalkit-otel` (and any future `evalkit-fixtures`, etc.) lists the passive types it exports.
 

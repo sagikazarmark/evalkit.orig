@@ -1,10 +1,9 @@
-//! Named active-source adapter for evaluation tasks.
+//! Named adapter for closure-based active output sources.
 //!
-//! [`Task<I, O>`] wraps an async function (or any `OutputSource<I, O>`) behind a
-//! concrete, named type that implements [`OutputSource`].  Closures already work
-//! through the blanket impl on the trait; `Task` is for cases where you want to
-//! *name* the source value — at config time, for reuse, or as part of a builder
-//! chain:
+//! [`Task<I, O>`] wraps an async function behind a concrete, named type that
+//! implements [`OutputSource`]. Closures already work through the blanket impl
+//! on the trait; `Task` is for cases where you want to *name* the source value
+//! — at config time, for reuse, or as part of a builder chain:
 //!
 //! ```rust,ignore
 //! Eval::new(samples)
@@ -12,13 +11,11 @@
 //!     .scorer(exact_match)
 //! ```
 //!
-//! # Provider constructors
-//!
-//! `Task::http` and `Task::subprocess` wrap the corresponding types from
-//! `evalkit-providers`.  Because `evalkit-providers` depends on `evalkit`, those
-//! constructors **cannot** live here (that would create a cyclic dependency).
-//! They are expected to be provided as associated functions in `evalkit-providers`
-//! itself or in a dedicated bridge crate.
+//! HTTP and subprocess plugins (`evalkit_providers::HttpSource`,
+//! `evalkit_providers::SubprocessSource`) are first-class [`OutputSource`]
+//! types in their own right — pass them directly to `.source(...)` rather than
+//! wrapping them in `Task`. This crate intentionally has no dependency on
+//! `evalkit-providers`.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -42,12 +39,9 @@ type ProduceFn<I, O> = Arc<
 ///     .scorer(exact_match)
 /// ```
 ///
-/// # Provider constructors
-///
-/// `Task::http` and `Task::subprocess` wrap provider plugin types from
-/// `evalkit-providers`.  Because that crate depends on `evalkit`, those
-/// constructors cannot live here — they must be provided outside this crate
-/// to avoid a cyclic dependency.
+/// For HTTP and subprocess plugins, use `evalkit_providers::HttpSource` and
+/// `evalkit_providers::SubprocessSource` directly — they implement
+/// [`OutputSource`] and need no wrapper.
 pub struct Task<I, O> {
     produce: ProduceFn<I, O>,
     mode: &'static str,

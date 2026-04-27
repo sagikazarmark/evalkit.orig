@@ -287,12 +287,13 @@ commits in this series."
 
 ## Task 3: Add `Task<I, O>` adapter type
 
-The active umbrella. Wraps closures, HTTP plugins, and subprocess plugins behind one named type so users can pass `Task::http(...)` or `Task::subprocess(...)` to `.source(...)` instead of constructing the underlying type directly.
+A narrow named-closure adapter. Originally scoped to also include `Task::http(plugin)` and `Task::subprocess(spec)` constructors, but the workspace topology forbids that: `evalkit-providers` already depends on `evalkit`, so `evalkit` cannot depend on `evalkit-providers` to host those constructors. Instead, `HttpAcquisition` and `SubprocessAcquisition` (renamed `HttpSource` / `SubprocessSource` in Task 4) remain first-class `OutputSource` types in `evalkit-providers` and users pass them directly to `.source(...)`.
+
+`Task::from_fn(...)` is the only constructor in this task. It exists for users who want to *name* a closure-based source (config-time, reuse, builder use).
 
 **Files:**
 - Create: `evalkit/src/task.rs`
 - Modify: `evalkit/src/lib.rs`
-- Modify: `evalkit-providers/src/lib.rs` (expose constructors used by `Task::http` and `Task::subprocess`)
 - Test: `evalkit/src/task.rs` (inline `#[cfg(test)] mod tests`)
 
 - [ ] **Step 1: Write the failing test for `Task::from_fn`.**
@@ -404,110 +405,26 @@ In `evalkit/src/lib.rs`:
 Run: `cargo test -p evalkit task_from_fn_implements_output_source task_from_fn_metadata_reports_inline_mode`
 Expected: PASS.
 
-- [ ] **Step 6: Write failing test for `Task::http`.**
-
-First, look at `evalkit-providers/src/lib.rs` to find the public constructor for the HTTP plugin type. Look for something like `HttpAcquisition::new(...)` or `HttpAcquisition::with_url(...)`. Use the simplest constructor that takes a URL or config struct; no live HTTP call happens in this test because `metadata()` does not invoke `produce`.
-
-```rust
-#[tokio::test(flavor = "current_thread")]
-async fn task_http_metadata_reports_http_mode() {
-    // Concrete constructor — adapt to whatever signature evalkit-providers exposes.
-    // Example: HttpAcquisition::new("http://localhost:0".parse().unwrap())
-    let plugin = evalkit_providers::HttpAcquisition::new(
-        "http://localhost:0".parse().expect("valid url"),
-    );
-    let task = Task::<serde_json::Value, serde_json::Value>::http(plugin);
-    assert_eq!(task.metadata().mode, "http");
-}
-```
-
-If `HttpAcquisition::new` has a different signature in the actual crate, adapt the constructor call. The point of the test is the metadata mode tag, not the HTTP behavior.
-
-- [ ] **Step 7: Run; verify fails.**
-
-Run: `cargo test -p evalkit task_http_metadata_reports_http_mode`
-Expected: FAIL (`Task::http` not defined).
-
-- [ ] **Step 8: Implement `Task::http` and `Task::subprocess` constructors.**
-
-In `evalkit/src/task.rs`, add:
-
-```rust
-impl Task<serde_json::Value, serde_json::Value> {
-    pub fn http(plugin: evalkit_providers::HttpAcquisition) -> Self {
-        // Wrap the plugin's OutputSource impl in a Task with mode = "http".
-        Self::from_output_source_with_mode(plugin, "http")
-    }
-
-    pub fn subprocess(spec: evalkit_providers::SubprocessAcquisition) -> Self {
-        Self::from_output_source_with_mode(spec, "subprocess")
-    }
-}
-
-impl<I, O> Task<I, O>
-where
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
-{
-    fn from_output_source_with_mode<S>(source: S, mode: &'static str) -> Self
-    where
-        S: OutputSource<I, O> + 'static,
-    {
-        let source = Arc::new(source);
-        Self {
-            produce: Arc::new(move |input: &I| {
-                let source = Arc::clone(&source);
-                let input_owned: *const I = input as *const I;
-                Box::pin(async move {
-                    // SAFETY: source.produce borrows input for the duration of
-                    // the await; the caller guarantees input outlives this call.
-                    unsafe { (*input_owned).pipe(|i| source.produce(i)) }.await
-                })
-            }),
-            mode,
-        }
-    }
-}
-```
-
-The `unsafe` lifetime workaround above is intentional: `OutputSource::produce` borrows `&I` and returns a future, but the boxed-future signature has to be `'static`. The simpler alternative is to require `I: Clone` and clone before await — preferred if the providers' public types allow it. **Check the `HttpAcquisition` and `SubprocessAcquisition` input types in `evalkit-providers/src/lib.rs` first.** If `I = serde_json::Value` (cloneable) is the common case, switch to:
-
-```rust
-async move {
-    let owned = input.clone();
-    source.produce(&owned).await
-}
-```
-
-and remove the unsafe block.
-
-(Implementer note: prefer the `Clone` path. Only fall back to unsafe lifetime extension if the providers' input types are not `Clone`. If neither works cleanly, surface the issue back and the design can be revisited — `Task` may need to consume types that already carry a `'static` produce signature, in which case the `from_fn` lifetime model is the right primitive and `from_output_source_with_mode` becomes a different shape.)
-
-- [ ] **Step 9: Run; verify pass.**
-
-Run: `cargo test -p evalkit task_http_metadata_reports_http_mode`
-Expected: PASS.
-
-- [ ] **Step 10: Add a positive-path `Task::subprocess` test (mirroring `http`).**
-
-Same shape as Step 6, but for `subprocess`. Run, verify fails (it shouldn't if the constructor is in place; if it passes immediately because the implementation is symmetric, that's fine — note in commit message that the test is a regression guard).
-
-- [ ] **Step 11: Run full workspace tests.**
+- [ ] **Step 6: Run full workspace tests.**
 
 Run: `cargo test --workspace`
 Expected: all tests pass, including new ones.
 
-- [ ] **Step 12: Commit.**
+- [ ] **Step 7: Commit.**
 
 ```bash
 git add evalkit/src/task.rs evalkit/src/lib.rs
-git commit -m "feat: add Task<I, O> adapter for active output sources
+git commit -m "feat: add Task<I, O> adapter for named active output sources
 
-Task wraps closures (Task::from_fn), HTTP plugins (Task::http), and
-subprocess plugins (Task::subprocess) behind one named type that
-implements OutputSource. Lets users construct a typed active source
-and pass it to .source(...) without reaching into the providers
-crate directly."
+Task wraps async closures (Task::from_fn) behind a concrete named
+type that implements OutputSource. Closures still flow through the
+blanket impl; Task is for cases where users want to name the source
+value — config, reuse, or builder pattern.
+
+HTTP and subprocess plugin types in evalkit-providers remain
+first-class OutputSource impls; users pass them directly to
+.source(...). No Task::http or Task::subprocess wrapper exists
+because evalkit-providers depends on evalkit (cycle)."
 ```
 
 ---
@@ -527,23 +444,54 @@ This task updates the wire formats that travel between processes (plugin handsha
 - `typescript/evalkit_plugin/src/index.ts`
 
 **Files (rename via `git mv`):**
-- `docs/schema/run-log-v1.schema.json` → `docs/schema/run-log-v2.schema.json`
+- ~~`docs/schema/run-log-v1.schema.json` → `docs/schema/run-log-v2.schema.json`~~ (already done as cleanup of Task 2; v2 exists with v1 content, v1 file removed)
 - `python/evalkit_plugin/examples/echo_acquisition.py` → `python/evalkit_plugin/examples/echo_source.py`
 - `typescript/evalkit_plugin/examples/echo_acquisition.ts` → `typescript/evalkit_plugin/examples/echo_source.ts`
 
-- [ ] **Step 1: Rename JSONL schema file.**
+**Symbol renames added in this task** (pivot from original Task 2 plan — these are wire-format-adjacent so they belong here, not in the kernel rename):
 
-```bash
-git mv docs/schema/run-log-v1.schema.json docs/schema/run-log-v2.schema.json
-```
+| Old | New |
+|---|---|
+| `evalkit_providers::HttpAcquisition` | `evalkit_providers::HttpSource` |
+| `evalkit_providers::SubprocessAcquisition` | `evalkit_providers::SubprocessSource` |
+| `evalkit_providers::AcquisitionPluginRequest` | `evalkit_providers::SourcePluginRequest` |
+| `evalkit_providers::AcquisitionPluginResponse` | `evalkit_providers::SourcePluginResponse` |
+| `evalkit_providers::AcquisitionPluginConformance` | `evalkit_providers::SourcePluginConformance` |
+| `conformance_check_acquisition_plugin` | `conformance_check_source_plugin` |
+| `PluginKind::Acquisition` | `PluginKind::Source` |
 
-- [ ] **Step 2: Update schema JSON content.**
+The `SubprocessScorer` type is **not** renamed — it's already correctly named.
+
+- [ ] **Step 1: Update schema JSON content.**
+
+(File rename already done in Task 2 cleanup commit `4b5a2d0`.)
 
 In `docs/schema/run-log-v2.schema.json`:
 - Update top-level `$id`, `title`, or `description` field if it includes "v1" — change to "v2".
 - Update the property name `acquisition_mode` to `source_mode` in the `properties` block (search for `"acquisition_mode"`; replace with `"source_mode"`).
 - If the schema declares `"required": [..., "acquisition_mode", ...]`, update the entry there too.
 - If there's a `"version": "1"` field at the top level, change to `"2"`.
+
+- [ ] **Step 2: Rename `HttpAcquisition`/`SubprocessAcquisition` and wire-format-adjacent types in `evalkit-providers`.**
+
+In `evalkit-providers/src/lib.rs`:
+- `pub struct HttpAcquisition` → `pub struct HttpSource`. Update its `impl HttpSource` block. Update `impl OutputSource<String, String> for HttpAcquisition` → `for HttpSource`.
+- `pub struct SubprocessAcquisition` → `pub struct SubprocessSource`. Same impl updates.
+- `pub struct AcquisitionPluginRequest` → `pub struct SourcePluginRequest`.
+- `pub struct AcquisitionPluginResponse` → `pub struct SourcePluginResponse`.
+- `pub struct AcquisitionPluginConformance` → `pub struct SourcePluginConformance`.
+- `pub async fn conformance_check_acquisition_plugin(...)` → `pub async fn conformance_check_source_plugin(...)`.
+- `pub enum PluginKind { Acquisition, Scorer }` → `pub enum PluginKind { Source, Scorer }`. The `#[serde(rename_all = "snake_case")]` on the enum makes the wire serialization automatically `"source"` after the rename.
+- All internal references `PluginKind::Acquisition` → `PluginKind::Source`.
+- Error message strings: `"acquisition plugin did not emit a handshake line"` → `"source plugin did not emit a handshake line"`. Same for the response-line variant.
+- Test names with `subprocess_acquisition_*` or `http_acquisition_*` patterns → `subprocess_source_*` / `http_source_*`.
+
+Update consumers:
+- `evalkit-cli/src/main.rs`: `use evalkit_providers::{HttpAcquisition, SubprocessAcquisition, ...}` → `HttpSource, SubprocessSource`. `Http(HttpAcquisition)` and `Subprocess(SubprocessAcquisition)` enum variants → renamed. Constructor calls renamed.
+- `evalkit-providers/tests/python_shims.rs`: `conformance_check_acquisition_plugin` → renamed; `PluginKind::Acquisition` → `PluginKind::Source`. The string literal `"echo-acquisition"` (plugin's self-reported name) is wire-format and tied to the example file's name — Step 5 below renames the Python example file and updates the plugin's emitted name.
+
+Run: `cargo check --workspace --all-targets`
+Expected: clean compile after fixing any remaining import or type-name mismatches.
 
 - [ ] **Step 3: Update `docs/plugin-protocol.md`.**
 
