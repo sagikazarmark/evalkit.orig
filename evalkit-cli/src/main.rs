@@ -109,7 +109,7 @@ struct WatchArgs {
 
 #[derive(Deserialize)]
 struct Config {
-    acquisition: AcquisitionConfig,
+    source: SourceConfig,
     #[serde(default)]
     dataset: DatasetSelectionConfig,
     #[serde(default)]
@@ -131,7 +131,7 @@ struct DatasetSelectionConfig {
 
 /// Flat struct — either `url` (HTTP) or `command` (subprocess plugin) must be set, not both.
 #[derive(Deserialize)]
-struct AcquisitionConfig {
+struct SourceConfig {
     /// HTTP endpoint URL. Mutually exclusive with `command`.
     url: Option<String>,
     /// Subprocess command. Mutually exclusive with `url`.
@@ -346,7 +346,7 @@ async fn run_command(args: RunArgs) -> Result<bool, CliError> {
     let dataset = load_dataset(&args.dataset, &config.dataset)?;
 
     // Build output source
-    let source = build_source(config.acquisition)?;
+    let source = build_source(config.source)?;
 
     // Build scorers and scorer set
     let cli_scorers = build_cli_scorers(&config.scorers)?;
@@ -516,7 +516,7 @@ async fn watch_command(args: WatchArgs) -> Result<bool, CliError> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn build_source(cfg: AcquisitionConfig) -> Result<CliOutputSource, CliError> {
+fn build_source(cfg: SourceConfig) -> Result<CliOutputSource, CliError> {
     match (cfg.url, cfg.command) {
         (Some(url), None) => Ok(CliOutputSource::Http(
             HttpSource::new(
@@ -531,14 +531,14 @@ fn build_source(cfg: AcquisitionConfig) -> Result<CliOutputSource, CliError> {
             let parts = cmd.into_parts();
             if parts.is_empty() {
                 return Err(CliError::Config(
-                    "[acquisition] command must not be empty".into(),
+                    "[source] command must not be empty".into(),
                 ));
             }
             if cfg.input_field != default_input_field()
                 || cfg.output_field != default_output_field()
             {
                 return Err(CliError::Config(
-                    "[acquisition] subprocess plugins always use the canonical `input`/`output` protocol fields".into(),
+                    "[source] subprocess plugins always use the canonical `input`/`output` protocol fields".into(),
                 ));
             }
             let (program, args) = (parts[0].clone(), parts[1..].to_vec());
@@ -549,10 +549,10 @@ fn build_source(cfg: AcquisitionConfig) -> Result<CliOutputSource, CliError> {
             )))
         }
         (Some(_), Some(_)) => Err(CliError::Config(
-            "[acquisition] specifies both `url` and `command`; choose one".into(),
+            "[source] specifies both `url` and `command`; choose one".into(),
         )),
         (None, None) => Err(CliError::Config(
-            "[acquisition] requires either `url` (HTTP) or `command` (subprocess)".into(),
+            "[source] requires either `url` (HTTP) or `command` (subprocess)".into(),
         )),
     }
 }
@@ -885,7 +885,7 @@ mod tests {
 
     #[test]
     fn subprocess_source_rejects_custom_protocol_field_names() {
-        let err = match build_source(AcquisitionConfig {
+        let err = match build_source(SourceConfig {
             url: None,
             command: Some(CommandSpec::Vec(vec![
                 String::from("python3"),
@@ -895,13 +895,13 @@ mod tests {
             output_field: String::from("answer"),
             timeout_secs: 30,
         }) {
-            Ok(_) => panic!("expected subprocess acquisition config to fail"),
+            Ok(_) => panic!("expected subprocess source config to fail"),
             Err(err) => err,
         };
 
         assert_eq!(
             err.to_string(),
-            "config error: [acquisition] subprocess plugins always use the canonical `input`/`output` protocol fields"
+            "config error: [source] subprocess plugins always use the canonical `input`/`output` protocol fields"
         );
     }
 

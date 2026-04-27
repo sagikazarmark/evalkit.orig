@@ -14,7 +14,7 @@ The dataset file is separate from the TOML config.
 ## Top-Level Shape
 
 ```toml
-[acquisition]
+[source]
 # ... required
 
 [dataset]
@@ -70,14 +70,14 @@ Notes:
 - rows that pass filtering keep `split`, `tags`, and `metadata` on `Sample.metadata`
 - if filters exclude every row, `evalkit run` fails loudly instead of producing an empty run
 
-## `[acquisition]`
+## `[source]`
 
-Exactly one acquisition mode must be configured.
+Exactly one source mode must be configured.
 
-### HTTP acquisition
+### HTTP source
 
 ```toml
-[acquisition]
+[source]
 url = "https://example.com/generate"
 input_field = "input"
 output_field = "output"
@@ -90,10 +90,10 @@ Fields:
 - `output_field`: optional, default `"output"`
 - `timeout_secs`: optional, default `30`
 
-### Subprocess acquisition plugin
+### Subprocess source plugin
 
 ```toml
-[acquisition]
+[source]
 command = ["python3", "plugin.py"]
 timeout_secs = 30
 ```
@@ -213,7 +213,7 @@ If any configured threshold is not met, `evalkit run` exits with status code `1`
 ## Full Example
 
 ```toml
-[acquisition]
+[source]
 command = ["python3", "model.py"]
 timeout_secs = 30
 

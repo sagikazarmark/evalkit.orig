@@ -113,7 +113,7 @@ fn watch_command_runs_initial_eval_when_max_runs_is_one() {
     std::fs::write(
         &config_path,
         format!(
-            "[acquisition]\ncommand = [\"python3\", \"{}\"]\n\n[[scorer]]\ntype = \"exact_match\"\n",
+            "[source]\ncommand = [\"python3\", \"{}\"]\n\n[[scorer]]\ntype = \"exact_match\"\n",
             plugin_path.display()
         ),
     )
@@ -160,7 +160,7 @@ fn run_command_filters_dataset_by_split_tags_and_metadata() {
         &config_path,
         format!(
             concat!(
-                "[acquisition]\n",
+                "[source]\n",
                 "command = [\"python3\", \"{}\"]\n\n",
                 "[dataset]\n",
                 "split = \"validation\"\n",
