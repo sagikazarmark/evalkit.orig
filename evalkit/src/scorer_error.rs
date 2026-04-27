@@ -3,6 +3,7 @@ use std::fmt::{self, Display, Formatter};
 use std::time::Duration;
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ScorerError {
     Timeout(Duration),
     InvalidInput(Box<dyn Error + Send + Sync>),

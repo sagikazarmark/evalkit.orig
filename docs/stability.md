@@ -11,8 +11,18 @@ See also: `docs/root-crate-boundary-audit.md`
 Stable after Phase 0:
 - Root exports classified as `KEEP` in `docs/root-crate-boundary-audit.md`
 - `RunResult`, `SampleResult`, `TrialResult`, and `RunMetadata` field meanings
-- `OutputSourceError` and `ScorerError` variant names and semantics
+- `OutputSourceError` and `ScorerError` variant names and semantics (both are `#[non_exhaustive]`; new variants are additive)
 - Score names and serialized `Score` variant tags
+
+## Frozen API Decisions
+
+These decisions are recorded so they cannot drift before 1.0:
+
+- **`Scorer<I, O, R>` default reference type.** `R = ()`. Scorers that do not need a reference inherit the default and ignore `ctx.reference`. Scorers that require a reference pattern-match on `Option<&'a R>` and return `ScorerError::InvalidInput` when `None`. We do not promote `Option<R>` into the trait, and we do not use a separate `ReferenceRequired` marker trait — both add type-system noise without solving a problem the current shape doesn't already solve.
+- **`Score::Metric { unit: Option<String> }`.** Free-form unit string, not a structured `Unit` enum. Unit semantics belong to the scorer that emitted the metric; a structured enum would either be incomplete or force every consumer to handle units they don't care about. Convention: SI-style suffixes for units that have them (`"ms"`, `"tokens"`, `"USD"`, `"requests/s"`).
+- **`Score::Structured { score, reasoning, metadata }`.** Fixed shape: a numeric score, a free-text reasoning string, and a JSON metadata bag. LLM-judge scorers populate `reasoning` from the model's explanation; arbitrary scorer state goes in `metadata`. We do not use a heterogeneous variant per scorer family.
+- **`ScorerContext` carries `run_id`, `sample_id`, `trial_index`, `metadata`, plus `input`, `output`, and `Option<&reference>`.** The `with_scope(...)` constructor is the path used by the runtime; `new(...)` exists for tests with empty scope. `metadata` is a `HashMap<String, Value>` for forward-compatible scorer hints — keys here are not part of the stable surface.
+- **`Run` vs `Executor`.** `Run` stays as the batch-evaluation entry point for 1.0. A separate `Executor` trait may appear later for streaming; that decision is deferred to Phase 2. Adding `Executor` does not break the `Run` API.
 
 Unstable before Phase 0 exit:
 - Root exports classified as `MOVE` in `docs/root-crate-boundary-audit.md`
