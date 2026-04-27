@@ -3,10 +3,10 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from evalkit_plugin import acquisition_plugin, run_plugin
+from evalkit_plugin import source_plugin, run_plugin
 
 
-@acquisition_plugin("echo-acquisition", capabilities=["structured-errors"])
+@source_plugin("echo-source", capabilities=["structured-errors"])
 def acquire(input_text: str) -> str:
     return f"echo::{input_text}"
 

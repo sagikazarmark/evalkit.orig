@@ -1,8 +1,8 @@
-export const PLUGIN_PROTOCOL_VERSION = "1";
+export const PLUGIN_PROTOCOL_VERSION = "2";
 
 const pluginSpecSymbol = Symbol.for("evalkit.plugin.spec");
 
-export type PluginKind = "acquisition" | "scorer";
+export type PluginKind = "source" | "scorer";
 export type PluginCapability = string;
 
 export interface PluginSpec {
@@ -20,7 +20,7 @@ type PluginWithSpec<F extends (...args: never[]) => unknown> = F & {
   [pluginSpecSymbol]: PluginSpec;
 };
 
-export type AcquisitionPlugin = PluginWithSpec<
+export type SourcePlugin = PluginWithSpec<
   (input: unknown) => unknown | Promise<unknown>
 >;
 
@@ -48,14 +48,14 @@ export class PluginError extends Error {
   }
 }
 
-export function acquisitionPlugin(
+export function sourcePlugin(
   name: string,
   options: {
     version?: string;
     capabilities?: PluginCapability[];
   } = {},
-): <F extends (input: unknown) => unknown | Promise<unknown>>(plugin: F) => AcquisitionPlugin {
-  return decoratePlugin("acquisition", name, options);
+): <F extends (input: unknown) => unknown | Promise<unknown>>(plugin: F) => SourcePlugin {
+  return decoratePlugin("source", name, options);
 }
 
 export function scorerPlugin(
@@ -80,12 +80,12 @@ export function scorerPlugin(
   return decoratePlugin("scorer", name, options);
 }
 
-export async function runPlugin(plugin: AcquisitionPlugin | ScorerPlugin): Promise<void> {
+export async function runPlugin(plugin: SourcePlugin | ScorerPlugin): Promise<void> {
   const spec = plugin[pluginSpecSymbol];
 
   if (spec === undefined) {
     throw new TypeError(
-      "plugin must be decorated with acquisitionPlugin(...) or scorerPlugin(...)",
+      "plugin must be decorated with sourcePlugin(...) or scorerPlugin(...)",
     );
   }
 
@@ -99,8 +99,8 @@ export async function runPlugin(plugin: AcquisitionPlugin | ScorerPlugin): Promi
   });
 
   try {
-    if (spec.kind === "acquisition") {
-      const output = await (plugin as AcquisitionPlugin)(request.input);
+    if (spec.kind === "source") {
+      const output = await (plugin as SourcePlugin)(request.input);
       writeJson({ output });
       return;
     }

@@ -5,7 +5,7 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Callable
 
-PLUGIN_PROTOCOL_VERSION = "1"
+PLUGIN_PROTOCOL_VERSION = "2"
 
 
 @dataclass(frozen=True)
@@ -23,13 +23,13 @@ class PluginError(Exception):
     details: Any = None
 
 
-def acquisition_plugin(
+def source_plugin(
     name: str,
     *,
     version: str = "0.1.0",
     capabilities: tuple[str, ...] | list[str] = (),
 ) -> Callable[[Callable[[str], str]], Callable[[str], str]]:
-    return _decorate_plugin("acquisition", name, version, capabilities)
+    return _decorate_plugin("source", name, version, capabilities)
 
 
 def scorer_plugin(
@@ -64,7 +64,7 @@ def _decorate_plugin(
 def run_plugin(plugin: Callable[..., Any]) -> None:
     spec = getattr(plugin, "__evalkit_plugin_spec__", None)
     if spec is None:
-        raise TypeError("plugin must be decorated with acquisition_plugin or scorer_plugin")
+        raise TypeError("plugin must be decorated with source_plugin or scorer_plugin")
 
     request = _read_request()
     _write_json(
@@ -78,7 +78,7 @@ def run_plugin(plugin: Callable[..., Any]) -> None:
     )
 
     try:
-        if spec.kind == "acquisition":
+        if spec.kind == "source":
             response = {"output": plugin(request["input"])}
         elif spec.kind == "scorer":
             response = {

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use evalkit_providers::{HttpAcquisition, SubprocessAcquisition, SubprocessScorer};
+use evalkit_providers::{HttpSource, SubprocessSource, SubprocessScorer};
 use evalkit_scorers_text::{contains, exact_match, json_schema};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use regex::Regex;
@@ -222,8 +222,8 @@ struct DatasetRow {
 // ---------------------------------------------------------------------------
 
 enum CliOutputSource {
-    Http(HttpAcquisition),
-    Subprocess(SubprocessAcquisition),
+    Http(HttpSource),
+    Subprocess(SubprocessSource),
 }
 
 impl OutputSource<String, String> for CliOutputSource {
@@ -519,7 +519,7 @@ async fn watch_command(args: WatchArgs) -> Result<bool, CliError> {
 fn build_source(cfg: AcquisitionConfig) -> Result<CliOutputSource, CliError> {
     match (cfg.url, cfg.command) {
         (Some(url), None) => Ok(CliOutputSource::Http(
-            HttpAcquisition::new(
+            HttpSource::new(
                 url,
                 cfg.input_field,
                 cfg.output_field,
@@ -542,7 +542,7 @@ fn build_source(cfg: AcquisitionConfig) -> Result<CliOutputSource, CliError> {
                 ));
             }
             let (program, args) = (parts[0].clone(), parts[1..].to_vec());
-            Ok(CliOutputSource::Subprocess(SubprocessAcquisition::new(
+            Ok(CliOutputSource::Subprocess(SubprocessSource::new(
                 program,
                 args,
                 Duration::from_secs(cfg.timeout_secs),
@@ -884,7 +884,7 @@ mod tests {
     }
 
     #[test]
-    fn subprocess_acquisition_rejects_custom_protocol_field_names() {
+    fn subprocess_source_rejects_custom_protocol_field_names() {
         let err = match build_source(AcquisitionConfig {
             url: None,
             command: Some(CommandSpec::Vec(vec![

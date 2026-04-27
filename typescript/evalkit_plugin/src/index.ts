@@ -1,12 +1,12 @@
 export {
   PLUGIN_PROTOCOL_VERSION,
   PluginError,
-  acquisitionPlugin,
+  sourcePlugin,
   runPlugin,
   scorerPlugin,
 } from "./runtime.ts";
 export type {
-  AcquisitionPlugin,
+  SourcePlugin,
   PluginCapability,
   PluginSpec,
   ScorerPlugin,

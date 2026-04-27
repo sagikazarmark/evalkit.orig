@@ -1,4 +1,5 @@
 use evalkit::{RUN_RESULT_SCHEMA_VERSION, schema};
+use serde_json::json;
 
 #[test]
 fn run_log_schema_matches_the_published_document() {
@@ -11,11 +12,13 @@ fn run_log_schema_matches_the_published_document() {
 
 #[test]
 fn run_log_schema_uses_the_current_schema_version() {
-    // RUN_RESULT_SCHEMA_VERSION was bumped to "2" as part of the
-    // OutputSource rename.  The schema JSON content update (including
-    // bumping the schema_version const and $id inside the file) is
-    // deferred to Task 4 of this release series.
+    let schema = schema::run_log_schema();
+
     assert_eq!(RUN_RESULT_SCHEMA_VERSION, "2");
+    assert_eq!(
+        schema["$defs"]["HeaderRecord"]["properties"]["schema_version"]["const"],
+        json!(RUN_RESULT_SCHEMA_VERSION)
+    );
 }
 
 #[test]

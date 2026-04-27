@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://evalkit.dev/schema/run-log-v1.schema.json",
-  "title": "evalkit Run Log v1",
+  "$id": "https://evalkit.dev/schema/run-log-v2.schema.json",
+  "title": "evalkit Run Log v2",
   "description": "Schema catalog for evalkit JSONL run-log records and the aggregated RunResult structure.",
   "$comment": "Validate individual JSONL lines against the root schema. Validate an aggregated in-memory run result against #/$defs/RunResult.",
   "oneOf": [
@@ -347,7 +347,7 @@
         "duration",
         "trial_count",
         "score_definitions",
-        "acquisition_mode"
+        "source_mode"
       ],
       "properties": {
         "run_id": {
@@ -423,7 +423,7 @@
             "$ref": "#/$defs/ScoreDefinition"
           }
         },
-        "acquisition_mode": {
+        "source_mode": {
           "type": "string",
           "minLength": 1
         }
@@ -460,7 +460,7 @@
           "const": "header"
         },
         "schema_version": {
-          "const": "1"
+          "const": "2"
         }
       }
     },

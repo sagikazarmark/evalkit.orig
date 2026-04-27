@@ -9,12 +9,12 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as TokioBufReader};
 use tokio::process::Command as TokioCommand;
 
-pub const PLUGIN_PROTOCOL_VERSION: &str = "1";
+pub const PLUGIN_PROTOCOL_VERSION: &str = "2";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginKind {
-    Acquisition,
+    Source,
     Scorer,
 }
 
@@ -37,12 +37,12 @@ pub struct PluginErrorPayload {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AcquisitionPluginRequest {
+pub struct SourcePluginRequest {
     pub input: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AcquisitionPluginResponse {
+pub struct SourcePluginResponse {
     #[serde(default)]
     pub output: Option<String>,
     #[serde(default)]
@@ -50,7 +50,7 @@ pub struct AcquisitionPluginResponse {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AcquisitionPluginConformance {
+pub struct SourcePluginConformance {
     pub handshake: PluginHandshake,
     pub output: String,
 }
@@ -136,14 +136,14 @@ impl Error for PluginResponseError {
     }
 }
 
-pub struct HttpAcquisition {
+pub struct HttpSource {
     client: Client,
     url: String,
     input_field: String,
     output_field: String,
 }
 
-impl HttpAcquisition {
+impl HttpSource {
     pub fn new(
         url: impl Into<String>,
         input_field: impl Into<String>,
@@ -161,7 +161,7 @@ impl HttpAcquisition {
     }
 }
 
-impl OutputSource<String, String> for HttpAcquisition {
+impl OutputSource<String, String> for HttpSource {
     async fn produce(&self, input: &String) -> Result<String, OutputSourceError> {
         let body = json!({ &self.input_field: input });
         let response = self
@@ -181,7 +181,7 @@ impl OutputSource<String, String> for HttpAcquisition {
     }
 }
 
-pub struct SubprocessAcquisition {
+pub struct SubprocessSource {
     program: String,
     args: Vec<String>,
     timeout: Duration,
@@ -193,7 +193,7 @@ pub struct SubprocessScorer {
     timeout: Duration,
 }
 
-impl SubprocessAcquisition {
+impl SubprocessSource {
     pub fn new(program: impl Into<String>, args: Vec<String>, timeout: Duration) -> Self {
         Self {
             program: program.into(),
@@ -203,7 +203,7 @@ impl SubprocessAcquisition {
     }
 
     async fn run(&self, input: &String) -> Result<String, OutputSourceError> {
-        let input_json = serde_json::to_string(&AcquisitionPluginRequest {
+        let input_json = serde_json::to_string(&SourcePluginRequest {
             input: input.clone(),
         })
         .map_err(|source| OutputSourceError::ExecutionFailed(Box::new(source)))?;
@@ -245,10 +245,10 @@ impl SubprocessAcquisition {
             .map_err(protocol_failure)?
             .ok_or_else(|| {
                 OutputSourceError::ExecutionFailed(Box::new(PluginProtocolError(String::from(
-                    "acquisition plugin did not emit a handshake line",
+                    "source plugin did not emit a handshake line",
                 ))))
             })?;
-        validate_plugin_handshake(&handshake, PluginKind::Acquisition).map_err(protocol_failure)?;
+        validate_plugin_handshake(&handshake, PluginKind::Source).map_err(protocol_failure)?;
 
         let mut response_line = String::new();
         reader
@@ -269,7 +269,7 @@ impl SubprocessAcquisition {
             .map_err(protocol_failure)?
             .ok_or_else(|| {
                 OutputSourceError::ExecutionFailed(Box::new(PluginProtocolError(String::from(
-                    "acquisition plugin did not emit a response line",
+                    "source plugin did not emit a response line",
                 ))))
             })?;
 
@@ -371,7 +371,7 @@ impl SubprocessScorer {
     }
 }
 
-impl OutputSource<String, String> for SubprocessAcquisition {
+impl OutputSource<String, String> for SubprocessSource {
     async fn produce(&self, input: &String) -> Result<String, OutputSourceError> {
         tokio::time::timeout(self.timeout, self.run(input))
             .await
@@ -394,13 +394,13 @@ impl Scorer<String, String, String> for SubprocessScorer {
     }
 }
 
-pub async fn conformance_check_acquisition_plugin(
+pub async fn conformance_check_source_plugin(
     program: impl Into<String>,
     args: Vec<String>,
     input: impl Into<String>,
     timeout: Duration,
-) -> Result<AcquisitionPluginConformance, PluginProtocolError> {
-    let input = AcquisitionPluginRequest {
+) -> Result<SourcePluginConformance, PluginProtocolError> {
+    let input = SourcePluginRequest {
         input: input.into(),
     };
     let input_json = serde_json::to_string(&input).map_err(protocol_error)?;
@@ -435,7 +435,7 @@ pub async fn conformance_check_acquisition_plugin(
 
     let handshake = parse_plugin_handshake(handshake_line.trim())?
         .ok_or_else(|| PluginProtocolError(String::from("plugin did not emit a handshake line")))?;
-    validate_plugin_handshake(&handshake, PluginKind::Acquisition)?;
+    validate_plugin_handshake(&handshake, PluginKind::Source)?;
 
     let mut response_line = String::new();
     tokio::time::timeout(timeout, reader.read_line(&mut response_line))
@@ -448,7 +448,7 @@ pub async fn conformance_check_acquisition_plugin(
     let response = parse_plugin_response(response_line.trim())?
         .ok_or_else(|| PluginProtocolError(String::from("plugin did not emit a response line")))?;
 
-    Ok(AcquisitionPluginConformance {
+    Ok(SourcePluginConformance {
         handshake,
         output: extract_plugin_response_output(response).map_err(response_failure_to_protocol)?,
     })
@@ -526,7 +526,7 @@ fn parse_plugin_handshake(line: &str) -> Result<Option<PluginHandshake>, PluginP
 
 fn parse_plugin_response(
     line: &str,
-) -> Result<Option<AcquisitionPluginResponse>, PluginProtocolError> {
+) -> Result<Option<SourcePluginResponse>, PluginProtocolError> {
     let value: Value = serde_json::from_str(line).map_err(protocol_error)?;
 
     if !looks_like_plugin_response(&value) {
@@ -601,7 +601,7 @@ fn validate_plugin_handshake(
 }
 
 fn extract_plugin_response_output(
-    response: AcquisitionPluginResponse,
+    response: SourcePluginResponse,
 ) -> Result<String, PluginResponseError> {
     match (response.output, response.error) {
         (Some(output), None) => Ok(output),
@@ -723,12 +723,12 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn conformance_check_accepts_handshake_and_output() {
-        let report = conformance_check_acquisition_plugin(
+        let report = conformance_check_source_plugin(
             "sh",
             vec![
                 String::from("-c"),
                 String::from(
-                    "read line; printf '%s\n' '{\"kind\":\"acquisition\",\"name\":\"demo\",\"version\":\"0.1.0\",\"schema_version\":\"1\",\"capabilities\":[\"structured-errors\"]}' '{\"output\":\"ok\"}'",
+                    "read line; printf '%s\n' '{\"kind\":\"source\",\"name\":\"demo\",\"version\":\"0.1.0\",\"schema_version\":\"2\",\"capabilities\":[\"structured-errors\"]}' '{\"output\":\"ok\"}'",
                 ),
             ],
             "prompt",
@@ -737,19 +737,19 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(report.handshake.kind, PluginKind::Acquisition);
+        assert_eq!(report.handshake.kind, PluginKind::Source);
         assert_eq!(report.handshake.name, "demo");
         assert_eq!(report.output, "ok");
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn subprocess_acquisition_accepts_handshake_preamble() {
-        let source = SubprocessAcquisition::new(
+    async fn subprocess_source_accepts_handshake_preamble() {
+        let source = SubprocessSource::new(
             "sh",
             vec![
                 String::from("-c"),
                 String::from(
-                    "read line; printf '%s\n' '{\"kind\":\"acquisition\",\"name\":\"demo\",\"version\":\"0.1.0\",\"schema_version\":\"1\",\"capabilities\":[]}' '{\"output\":\"four\"}'",
+                    "read line; printf '%s\n' '{\"kind\":\"source\",\"name\":\"demo\",\"version\":\"0.1.0\",\"schema_version\":\"2\",\"capabilities\":[]}' '{\"output\":\"four\"}'",
                 ),
             ],
             Duration::from_secs(1),
@@ -761,13 +761,13 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn subprocess_acquisition_maps_structured_plugin_errors() {
-        let source = SubprocessAcquisition::new(
+    async fn subprocess_source_maps_structured_plugin_errors() {
+        let source = SubprocessSource::new(
             "sh",
             vec![
                 String::from("-c"),
                 String::from(
-                    "read line; printf '%s\n' '{\"kind\":\"acquisition\",\"name\":\"demo\",\"version\":\"0.1.0\",\"schema_version\":\"1\",\"capabilities\":[\"structured-errors\"]}' '{\"error\":{\"code\":\"bad_input\",\"message\":\"oops\",\"details\":{\"field\":\"input\"}}}'",
+                    "read line; printf '%s\n' '{\"kind\":\"source\",\"name\":\"demo\",\"version\":\"0.1.0\",\"schema_version\":\"2\",\"capabilities\":[\"structured-errors\"]}' '{\"error\":{\"code\":\"bad_input\",\"message\":\"oops\",\"details\":{\"field\":\"input\"}}}'",
                 ),
             ],
             Duration::from_secs(1),
@@ -785,7 +785,7 @@ mod tests {
             vec![
                 String::from("-c"),
                 String::from(
-                    "read line; printf '%s\n' '{\"kind\":\"scorer\",\"name\":\"demo\",\"version\":\"0.1.0\",\"schema_version\":\"1\",\"capabilities\":[\"structured-errors\"]}' '{\"score\":{\"type\":\"numeric\",\"value\":0.75}}'",
+                    "read line; printf '%s\n' '{\"kind\":\"scorer\",\"name\":\"demo\",\"version\":\"0.1.0\",\"schema_version\":\"2\",\"capabilities\":[\"structured-errors\"]}' '{\"score\":{\"type\":\"numeric\",\"value\":0.75}}'",
                 ),
             ],
             ScorerPluginRequest {
@@ -808,8 +808,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn subprocess_acquisition_rejects_missing_handshake() {
-        let source = SubprocessAcquisition::new(
+    async fn subprocess_source_rejects_missing_handshake() {
+        let source = SubprocessSource::new(
             "sh",
             vec![
                 String::from("-c"),
@@ -822,7 +822,7 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("acquisition plugin did not emit a handshake line")
+                .contains("source plugin did not emit a handshake line")
         );
     }
 
@@ -833,7 +833,7 @@ mod tests {
             vec![
                 String::from("-c"),
                 String::from(
-                    "read line; case \"$line\" in *'\"input\":\"prompt\"'*'\"output\":\"answer\"'*'\"reference\":\"gold\"'*'\"run_id\":\"run-1\"'*'\"sample_id\":\"sample-1\"'*'\"trial_index\":2'*'\"topic\":\"math\"'*) printf '%s\n' '{\"kind\":\"scorer\",\"name\":\"demo\",\"version\":\"0.1.0\",\"schema_version\":\"1\",\"capabilities\":[]}' '{\"score\":{\"type\":\"binary\",\"value\":true}}' ;; *) printf '%s\n' '{\"kind\":\"scorer\",\"name\":\"demo\",\"version\":\"0.1.0\",\"schema_version\":\"1\",\"capabilities\":[]}' '{\"error\":{\"code\":\"bad_request\",\"message\":\"unexpected request\",\"details\":{}}}' ;; esac",
+                    "read line; case \"$line\" in *'\"input\":\"prompt\"'*'\"output\":\"answer\"'*'\"reference\":\"gold\"'*'\"run_id\":\"run-1\"'*'\"sample_id\":\"sample-1\"'*'\"trial_index\":2'*'\"topic\":\"math\"'*) printf '%s\n' '{\"kind\":\"scorer\",\"name\":\"demo\",\"version\":\"0.1.0\",\"schema_version\":\"2\",\"capabilities\":[]}' '{\"score\":{\"type\":\"binary\",\"value\":true}}' ;; *) printf '%s\n' '{\"kind\":\"scorer\",\"name\":\"demo\",\"version\":\"0.1.0\",\"schema_version\":\"2\",\"capabilities\":[]}' '{\"error\":{\"code\":\"bad_request\",\"message\":\"unexpected request\",\"details\":{}}}' ;; esac",
                 ),
             ],
             Duration::from_secs(1),
@@ -864,7 +864,7 @@ mod tests {
             vec![
                 String::from("-c"),
                 String::from(
-                    "read line; printf '%s\n' '{\"kind\":\"scorer\",\"name\":\"demo\",\"version\":\"0.1.0\",\"schema_version\":\"1\",\"capabilities\":[\"structured-errors\"]}' '{\"error\":{\"code\":\"invalid_output\",\"message\":\"oops\",\"details\":{\"field\":\"output\"}}}'",
+                    "read line; printf '%s\n' '{\"kind\":\"scorer\",\"name\":\"demo\",\"version\":\"0.1.0\",\"schema_version\":\"2\",\"capabilities\":[\"structured-errors\"]}' '{\"error\":{\"code\":\"invalid_output\",\"message\":\"oops\",\"details\":{\"field\":\"output\"}}}'",
                 ),
             ],
             Duration::from_secs(1),

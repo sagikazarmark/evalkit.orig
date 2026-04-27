@@ -3,24 +3,24 @@ use std::time::Duration;
 
 use evalkit::Score;
 use evalkit_providers::{
-    PluginKind, ScorerPluginRequest, conformance_check_acquisition_plugin,
+    PluginKind, ScorerPluginRequest, conformance_check_source_plugin,
     conformance_check_scorer_plugin,
 };
 use serde_json::json;
 
 #[tokio::test(flavor = "current_thread")]
-async fn python_acquisition_shim_passes_conformance() {
-    let report = conformance_check_acquisition_plugin(
+async fn python_source_shim_passes_conformance() {
+    let report = conformance_check_source_plugin(
         "python3",
-        vec![python_example("echo_acquisition.py")],
+        vec![python_example("echo_source.py")],
         "prompt",
         Duration::from_secs(5),
     )
     .await
     .unwrap();
 
-    assert_eq!(report.handshake.kind, PluginKind::Acquisition);
-    assert_eq!(report.handshake.name, "echo-acquisition");
+    assert_eq!(report.handshake.kind, PluginKind::Source);
+    assert_eq!(report.handshake.name, "echo-source");
     assert_eq!(report.output, "echo::prompt");
 }
 

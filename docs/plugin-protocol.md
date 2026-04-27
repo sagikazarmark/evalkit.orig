@@ -1,23 +1,23 @@
 # Subprocess Plugin Protocol
 
-This document describes the versioned subprocess plugin protocol implemented by the acquisition and scorer runtimes today.
+This document describes the versioned subprocess plugin protocol implemented by the source and scorer runtimes today.
 
 Current status:
-- Acquisition plugins support a versioned handshake.
+- Source plugins support a versioned handshake.
 - Scorer plugins support a versioned handshake.
 - Structured plugin error payloads are preserved for both kinds.
-- Both plugin kinds use the canonical v1 request/response envelope.
+- Both plugin kinds use the canonical v2 request/response envelope.
 - A reference Python shim now lives under `python/evalkit_plugin/`.
 - A reference TypeScript shim now lives under `typescript/evalkit_plugin/`.
 
 ## Scope
 
-The CLI can execute an external command as the acquisition step for a run and as a scorer step for a run. `evalkit-providers` exposes typed protocol structs plus acquisition/scorer conformance checks.
+The CLI can execute an external command as the output source step for a run and as a scorer step for a run. `evalkit-providers` exposes typed protocol structs plus source/scorer conformance checks.
 
 Configured in TOML as:
 
 ```toml
-[acquisition]
+[source]
 command = ["python3", "model.py"]
 timeout_secs = 30
 ```
@@ -38,24 +38,24 @@ Handshake line:
 
 ```json
 {
-  "kind": "acquisition",
+  "kind": "source",
   "name": "demo-plugin",
   "version": "0.1.0",
-  "schema_version": "1",
+  "schema_version": "2",
   "capabilities": ["structured-errors"]
 }
 ```
 
 Fields:
-- `kind`: `"acquisition"` or `"scorer"`
+- `kind`: `"source"` or `"scorer"`
 - `name`: stable plugin name
 - `version`: plugin implementation version
-- `schema_version`: plugin protocol version, currently `"1"`
+- `schema_version`: plugin protocol version, currently `"2"`
 - `capabilities`: optional string list
 
-## Acquisition Request Format
+## Source Request Format
 
-Canonical v1 request:
+Canonical v2 request:
 
 ```json
 {"input":"<input text>"}
@@ -69,7 +69,7 @@ Example:
 
 After the JSON line is written, the CLI closes `stdin` so the child sees EOF.
 
-## Acquisition Response Format
+## Source Response Format
 
 Success response:
 
@@ -97,20 +97,20 @@ Example:
 
 ## Semantics
 
-- An acquisition plugin must emit a valid handshake before its response line.
-- Handshake `kind` must be `"acquisition"`.
-- Handshake `schema_version` must be `"1"`.
+- A source plugin must emit a valid handshake before its response line.
+- Handshake `kind` must be `"source"`.
+- Handshake `schema_version` must be `"2"`.
 - Successful plugin responses must include `output` and must not include `error`.
 - Failed plugin responses must include `error` and must not include `output`.
-- Empty stdout is treated as an acquisition failure.
-- Invalid JSON is treated as an acquisition failure.
+- Empty stdout is treated as a source failure.
+- Invalid JSON is treated as a source failure.
 - A timeout is enforced by the CLI using `timeout_secs`.
 
 ## Scorer Plugin Shape
 
 The protocol reserves `kind: "scorer"` for scorer plugins.
 
-Canonical v1 request shape:
+Canonical v2 request shape:
 
 ```json
 {
@@ -124,7 +124,7 @@ Canonical v1 request shape:
 }
 ```
 
-Canonical v1 response shape:
+Canonical v2 response shape:
 
 ```json
 {"score": {"type":"binary","value":true}}
@@ -145,7 +145,7 @@ or:
 Semantics:
 - Scorer plugins must emit a handshake before the score response line.
 - Handshake `kind` must be `"scorer"`.
-- Handshake `schema_version` must be `"1"`.
+- Handshake `schema_version` must be `"2"`.
 - Successful scorer responses must include `score` and must not include `error`.
 - Failed scorer responses must include `error` and must not include `score`.
 - Empty stdout is treated as a scorer failure.
@@ -157,12 +157,12 @@ The CLI waits for the child process to exit, but a non-zero exit status does not
 
 ## Error Mapping
 
-The CLI maps subprocess failures into `AcquisitionError` for acquisition plugins:
+The CLI maps subprocess failures into `OutputSourceError` for source plugins:
 
-- spawn / IO / JSON parse / missing field -> `AcquisitionError::ExecutionFailed`
-- plugin handshake / protocol violations -> `AcquisitionError::ExecutionFailed`
-- structured plugin error payloads -> `AcquisitionError::ExecutionFailed` with the plugin payload preserved in the boxed source error
-- timeout -> `AcquisitionError::Timeout`
+- spawn / IO / JSON parse / missing field -> `OutputSourceError::ExecutionFailed`
+- plugin handshake / protocol violations -> `OutputSourceError::ExecutionFailed`
+- structured plugin error payloads -> `OutputSourceError::ExecutionFailed` with the plugin payload preserved in the boxed source error
+- timeout -> `OutputSourceError::Timeout`
 
 For scorer plugins:
 - spawn / IO / JSON parse / missing field -> `ScorerError::ProviderError`
@@ -188,7 +188,7 @@ The array form is preferred when arguments contain spaces.
 
 ## Conformance
 
-`evalkit-providers` exposes acquisition/scorer conformance checks that validate:
+`evalkit-providers` exposes source/scorer conformance checks that validate:
 - the handshake line
 - plugin kind
 - protocol schema version
@@ -198,4 +198,4 @@ Reference implementations:
 - Python: `python/evalkit_plugin/`
 - TypeScript: `typescript/evalkit_plugin/` (typechecked with Bun via `devenv shell`)
 
-This document is the source of truth for the protocol implemented by the acquisition path today.
+This document is the source of truth for the protocol implemented by the output source path today.

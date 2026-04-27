@@ -103,7 +103,7 @@ fn watch_command_runs_initial_eval_when_max_runs_is_one() {
         .parent()
         .unwrap()
         .to_path_buf();
-    let plugin_path = repo_root.join("python/evalkit_plugin/examples/echo_acquisition.py");
+    let plugin_path = repo_root.join("python/evalkit_plugin/examples/echo_source.py");
 
     std::fs::write(
         &dataset_path,
@@ -146,7 +146,7 @@ fn run_command_filters_dataset_by_split_tags_and_metadata() {
         .parent()
         .unwrap()
         .to_path_buf();
-    let plugin_path = repo_root.join("python/evalkit_plugin/examples/echo_acquisition.py");
+    let plugin_path = repo_root.join("python/evalkit_plugin/examples/echo_source.py");
 
     std::fs::write(
         &dataset_path,
