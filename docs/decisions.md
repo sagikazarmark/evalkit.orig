@@ -240,3 +240,17 @@ Introduce a new kernel-level streaming drift protocol immediately. That may stil
 ## 2026-04-26 - `Acquisition` renamed to `OutputSource` for 1.0
 
 **`Acquisition` renamed to `OutputSource` for 1.0.** See `docs/superpowers/specs/2026-04-26-output-source-naming-design.md`. Clean break, no compat shim.
+
+## 2026-04-27 - Keep `OutputSource::produce` (verified against alternatives)
+
+Decision:
+Keep the trait method `OutputSource::produce` as named. Considered `call`, `generate`, `invoke`, and `output_for` across three rounds of structured review (ten agent perspectives total).
+
+Why:
+- `produce` is mode-neutral. Active sources (closures, `HttpSource`, `SubprocessSource`) and passive sources (`OtelObserver`, future `FixtureSource`) read equally well under it. The trait was specifically designed to put both modes on equal footing.
+- No alternative landed a strictly-better case across all dimensions. Each finalist won one axis and lost another: `call` won Rust-idiom precedent (Tower / `Fn` / axum / wasmtime) but introduced a permanent micro-tax for readers who recognize `Fn::call`. `generate` won eval-domain familiarity (DeepEval / Ragas) but failed non-LLM scorer cases visibly. `invoke` had no native Rust precedent outside AWS Lambda RPC and Python LangChain ports — foreign-idiom baggage. `output_for` was the most descriptive but a stylistic outlier among the codebase's existing method-naming conventions.
+- The kernel just shipped a major rename. Re-renaming the trait method one week later — even pre-1.0 — telegraphs indecision without a concrete defect to justify it. The triggering complaint ("feels weird, out of domain") is real but vibes-level; first-week-with-new-API discomfort is not the same as wrongness.
+- `produce` survives the planned roadmap source types (fixture loaders, retry/timeout middleware, judge tiering, multimodal, streaming-output via a future `produce_stream`). Only minor friction is with Kafka source (where `produce` overloads with the queue-write sense), addressable via doc comments.
+
+Rejected alternative (`call`):
+The strongest contender if a future rename ever happens. Wins on Rust-ecosystem precedent — every async input-to-output trait converges on `call`. Loses on mode-neutrality (passive sources don't get "called," they get queried) and on the closure blanket impl shadow with `Fn::call`. Compiles cleanly on stable, but every Rust reader who recognizes `Fn::call` will pause when they see `OutputSource::call`. That's a permanent, small tax that `produce` doesn't impose. If the rename revisits in the future, `call` is the candidate to reconsider — `invoke` and `generate` were eliminated for concrete reasons.
