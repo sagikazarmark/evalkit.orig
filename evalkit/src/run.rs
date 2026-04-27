@@ -37,9 +37,6 @@ struct FlattenedTrial {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum RunBuildError {
-    NoDataset,
-    NoSource,
-    NoScorer,
     EmptyDataset,
     DuplicateSampleIds(Vec<String>),
     DuplicateScorerNames(String),
@@ -49,9 +46,6 @@ pub enum RunBuildError {
 impl Display for RunBuildError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NoDataset => f.write_str("run is missing a dataset"),
-            Self::NoSource => f.write_str("run is missing an output source"),
-            Self::NoScorer => f.write_str("run is missing a scorer or scorer set"),
             Self::EmptyDataset => f.write_str("run dataset must contain at least one sample"),
             Self::DuplicateSampleIds(ids) => {
                 write!(
