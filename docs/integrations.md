@@ -6,31 +6,31 @@
 
 ---
 
-## Acquisitions (`impl Acquisition<I, O>`)
+## Output Sources (`impl OutputSource<I, O>`)
 
 ### Direct model providers (built on **anyllm**)
 
 > Exact wrapper shape depends on anyllm's actual provider trait — to be confirmed during ROADMAP Phase 0(a). Names below are illustrative.
 
-- [ ] `AnyLlmAcquisition` — wrap an anyllm provider handle as an `Acquisition`
-- [ ] `AnyLlmChatAcquisition` — single-turn chat, string in / string out
-- [ ] `AnyLlmStructuredAcquisition<T>` — structured output via JSON schema, deserializes to `T`
-- [ ] `AnyLlmToolAcquisition` — tool-calling loop; returns final assistant message + tool trace
+- [ ] `AnyLlmSource` — wrap an anyllm provider handle as an `OutputSource`
+- [ ] `AnyLlmChatSource` — single-turn chat, string in / string out
+- [ ] `AnyLlmStructuredSource<T>` — structured output via JSON schema, deserializes to `T`
+- [ ] `AnyLlmToolSource` — tool-calling loop; returns final assistant message + tool trace
 
 Via anyllm this gives first-class OpenAI / Anthropic / Gemini / OpenAI-compatible / Cloudflare support for free. Other providers worth surfacing even though they likely route through anyllm's compat layer:
 
-- [ ] `LiteLLMAcquisition`     — LiteLLM proxy target (huge in polyglot shops)
-- [ ] `OllamaAcquisition`      — confirm whether anyllm's OpenAI-compat covers this cleanly; if not, ship native
-- [ ] `VllmAcquisition`        — vLLM native endpoint
-- [ ] `SglangAcquisition`      — SGLang endpoint
+- [ ] `LiteLLMSource`     — LiteLLM proxy target (huge in polyglot shops)
+- [ ] `OllamaSource`      — confirm whether anyllm's OpenAI-compat covers this cleanly; if not, ship native
+- [ ] `VllmSource`        — vLLM native endpoint
+- [ ] `SglangSource`      — SGLang endpoint
 
 ### Transport-level
-- [x] `HttpAcquisition`       — extracted into `evalkit-providers`
-- [x] `SubprocessAcquisition` — extracted into `evalkit-providers`; protocol documented in `docs/plugin-protocol.md`
-- [ ] `WebSocketAcquisition`
-- [ ] `GrpcAcquisition`
+- [x] `HttpSource`       — extracted into `evalkit-providers`
+- [x] `SubprocessSource` — extracted into `evalkit-providers`; protocol documented in `docs/plugin-protocol.md`
+- [ ] `WebSocketSource`
+- [ ] `GrpcSource`
 
-### Trace-based (acquire output by fetching spans)
+### Trace-based (produce output by fetching spans)
 - [x] `OtlpReceiver` (ingest side, shipped in `evalkit-otel`)
 - [x] `JaegerBackend` (shipped in `evalkit-otel`)
 - [ ] `TempoBackend`
@@ -38,9 +38,9 @@ Via anyllm this gives first-class OpenAI / Anthropic / Gemini / OpenAI-compatibl
 - [ ] `OtelCollectorBackend`  — generic OTLP-endpoint puller
 
 ### Sandboxed / containerized
-- [ ] `DockerAcquisition`     — spin up a container per sample
-- [ ] `WasmAcquisition`       — call a WASM module
-- [ ] `McpAcquisition`        — invoke an MCP server tool
+- [ ] `DockerSource`     — spin up a container per sample
+- [ ] `WasmSource`       — call a WASM module
+- [ ] `McpSource`        — invoke an MCP server tool
 
 ### Streaming sources (for Phase 2 `Executor`)
 - [ ] `KafkaSource`           — consume traces/events from a Kafka topic
@@ -49,16 +49,16 @@ Via anyllm this gives first-class OpenAI / Anthropic / Gemini / OpenAI-compatibl
 - [x] `OtlpReceiverSource`    — adapt the existing OTLP receiver as a pull-based executor source over grouped sample spans
 
 ### Replay / fixtures
-- [ ] `FixtureAcquisition`    — serve pre-recorded outputs from a JSONL
-- [ ] `CachedAcquisition`     — content-addressed cache wrapper (for fast reruns & deterministic CI)
-- [ ] `MockAcquisition`       — configurable scripted responses (for library tests)
+- [ ] `FixtureSource`    — serve pre-recorded outputs from a JSONL
+- [ ] `CachedSource`     — content-addressed cache wrapper (for fast reruns & deterministic CI)
+- [ ] `MockSource`       — configurable scripted responses (for library tests)
 
 ### Composition
-- [ ] `RetryingAcquisition`   — N retries with backoff
-- [ ] `TimeoutAcquisition`    — bound latency
-- [ ] `RateLimitedAcquisition`
-- [ ] `FallbackAcquisition`   — primary + fallback chain
-- [ ] `MultiplexAcquisition`  — fan out to N providers, return first / all
+- [ ] `RetryingSource`   — N retries with backoff
+- [ ] `TimeoutSource`    — bound latency
+- [ ] `RateLimitedSource`
+- [ ] `FallbackSource`   — primary + fallback chain
+- [ ] `MultiplexSource`  — fan out to N providers, return first / all
 
 ---
 
@@ -133,7 +133,7 @@ Add lazily as demand appears — most users bring their own data.
 
 ---
 
-## Trace backends (for `OtlpReceiver` consumers & trace-based acquisition)
+## Trace backends (for `OtlpReceiver` consumers & trace-based sources)
 
 - [x] `OtlpReceiver`  — OTLP/HTTP ingest in `evalkit-otel`
 - [ ] `OtlpGrpcReceiver`
@@ -148,11 +148,11 @@ Add lazily as demand appears — most users bring their own data.
 
 Once the plugin spec lands:
 
-- [x] `PluginAcquisition`       — invoke a subprocess plugin as `Acquisition` via `SubprocessAcquisition`
+- [x] `PluginSource`       — invoke a subprocess plugin as `OutputSource` via `SubprocessSource`
 - [x] `PluginScorer`             — invoke a subprocess plugin as `Scorer` via `SubprocessScorer`
 - [ ] Reference Python shim (`evalkit-plugin` on pypi)
 - [x] Reference TypeScript shim (`@evalkit/plugin` source under `typescript/evalkit_plugin/`; typechecked with Bun via `devenv shell`)
-- [ ] Conformance test harness  — fixture-driven golden harness beyond the current acquisition/scorer checks
+- [ ] Conformance test harness  — fixture-driven golden harness beyond the current source/scorer checks
 
 ---
 
@@ -179,5 +179,5 @@ Once the plugin spec lands:
 
 - Every integration lives in its own crate (`evalkit-<name>`) to keep dependency graphs tight.
 - Feature-flagged `reqwest` / `hyper` / `tonic` etc. where optional.
-- Integration tests use `MockAcquisition` or `InMemoryTraceStore`; no live network unless marked `#[ignore]`.
+- Integration tests use `MockSource` or `InMemoryTraceStore`; no live network unless marked `#[ignore]`.
 - Exporters serialize through the frozen `evalkit-schema` types — never their own ad-hoc shape.

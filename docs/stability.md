@@ -11,7 +11,7 @@ See also: `docs/root-crate-boundary-audit.md`
 Stable after Phase 0:
 - Root exports classified as `KEEP` in `docs/root-crate-boundary-audit.md`
 - `RunResult`, `SampleResult`, `TrialResult`, and `RunMetadata` field meanings
-- `AcquisitionError` and `ScorerError` variant names and semantics
+- `OutputSourceError` and `ScorerError` variant names and semantics
 - Score names and serialized `Score` variant tags
 
 Unstable before Phase 0 exit:

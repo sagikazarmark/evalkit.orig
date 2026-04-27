@@ -36,7 +36,7 @@ The category claim is still:
 
 - small Rust-native eval kernel
 - optional runtime and platform surfaces
-- provider-neutral scoring and acquisition seams
+- provider-neutral scoring and output source seams
 - portable enough to be credible for constrained runtimes
 
 The repo can keep server, CLI, exporter, provider, and OTel crates. Those are useful. They just cannot define what the root crate is.
@@ -113,7 +113,7 @@ Do not inherit these into the kernel by accident. Decide them on purpose.
      | evalkit-runtime  |   | evalkit-providers |   |  evalkit-scorers-*   |
      |------------------|   |-------------------|   |----------------------|
      | Executor         |   | HTTP/subprocess   |   | text / llm / rag /   |
-     | PullExecutor     |   | acquisition impls |   | embed / redteam      |
+     | PullExecutor     |   | output source impls |   | embed / redteam      |
      | Samplers         |   | plugin protocol   |   | optional scorer packs|
      | Sources / Sinks  |   +-------------------+   +----------------------+
      | Sharding         |

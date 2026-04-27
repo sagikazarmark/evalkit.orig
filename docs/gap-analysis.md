@@ -19,7 +19,7 @@ Recommended build order:
 
 The workspace is now split for Phase 0:
 - Workspace members include `evalkit`, `evalkit-cli`, `evalkit-providers`, `evalkit-exporters-langfuse`, `evalkit-scorers-text`, `evalkit-otel`, `evalkit-scorers-llm`, `evalkit-scorers-rag`, `evalkit-scorers-embed`, `evalkit-scorers-redteam`, and `evalkit-server`
-- OTel support now lives in `evalkit-otel`, including the `Observe` acquisition path
+- OTel support now lives in `evalkit-otel`, including the `OtelObserver` source path
 - Langfuse export now lives in `evalkit-exporters-langfuse`
 - Deterministic text scorers now live in `evalkit-scorers-text`
 - There is no tracked `README`, but there is now a roadmap plus scorer/integration backlog docs under `docs/`
@@ -32,7 +32,7 @@ Status: complete
 
 Completed:
 - Core kernel types are exported from `src/lib.rs`
-- `AcquisitionError` is an enum with specific variants
+- `OutputSourceError` is an enum with specific variants
 - `ScorerError` is structured
 - `ScorerContext` carries run and sample metadata
 - `Score::Structured` is in the kernel
@@ -53,7 +53,7 @@ Status: complete
 
 Current state:
 - Deterministic scorers now also exist in the standalone `evalkit-scorers-text` crate
-- HTTP and subprocess acquisitions now live in `evalkit-providers`
+- HTTP and subprocess sources now live in `evalkit-providers`
 - `evalkit-exporters-langfuse` now exists as a standalone crate
 - `evalkit-otel` now owns Jaeger, OTLP, and `Observe`
 
@@ -66,7 +66,7 @@ Status: complete
 
 Already present:
 - `TrialResult` records per-trial duration
-- `RunMetadata` records timing, acquisition mode, trial count, score definitions, seed, fingerprints, and explicit reproducibility metadata fields
+- `RunMetadata` records timing, source mode, trial count, score definitions, seed, fingerprints, and explicit reproducibility metadata fields
 - `stats.rs` already computes Wilson confidence intervals for binary scores
 - `comparison.rs` already runs a paired t-test-style significance check for aggregate deltas
 - `scorer_ext.rs` already ships `.and()`, `.or()`, `.not()`, `.map_score()`, `.timeout()`, `.weighted()`, `.then()`, and `ignore_reference`
@@ -83,8 +83,8 @@ Status: exit criteria met, with follow-on scorer depth still open
 
 Already present:
 - JSONL read/write helpers exist
-- `evalkit-cli` already contains subprocess acquisition support
-- `evalkit-otel` already contains the OTLP receiver and the `Observe` acquisition path
+- `evalkit-cli` already contains subprocess source support
+- `evalkit-otel` already contains the OTLP receiver and the `OtelObserver` source path
 - `evalkit-scorers-llm` now ships a provider-neutral `LlmJudge` built on `anyllm::ChatProvider` plus structured extraction via `ExtractExt`
 - The new judge implementation includes stable prompt hashing, retries, timeout support, judge model pins, and reasoning capture for numeric/binary outputs
 - First-pass `llm_classifier` and `g_eval` wrappers now build on top of the shared judge primitive
@@ -112,18 +112,18 @@ Already present:
 - `JsonlFileTailSource` now provides a second source adapter by tailing appended JSONL `Sample` rows from disk
 - `PullExecutor` now supports an optional judge-model tier that can re-score flagged samples with a secondary scorer set
 - `PullExecutor` now supports checkpoint-based partial scoring for string outputs via `partial_string_scoring(...)`
-- `Acquisition::acquire_with_snapshots(...)` plus `AcquiredOutput` / `AcquisitionSnapshot` now let acquisitions surface real intermediate outputs to the executor
-- `PullExecutor::streaming_string_scoring(...)` now scores configured intermediate string stages from acquisition-provided snapshots
+- `OutputSource::produce_with_snapshots(...)` plus `SourceOutput` / `OutputSnapshot` now let output sources surface real intermediate outputs to the executor
+- `PullExecutor::streaming_string_scoring(...)` now scores configured intermediate string stages from source-provided snapshots
 - `ExecutionSink` and `NoopSink` provide the first sink abstraction, with per-sample notifications plus a final run completion hook
 - `evalkit-otel` now provides `OtelResultSink`, so executor-based runs can emit OTel spans through the sink interface without an extra post-processing step
 - `evalkit-otel` now provides `OtlpReceiverSource`, which adapts the in-repo OTLP receiver into a pull-based executor source over grouped sample spans
 - `AlwaysSampler`, `PercentSampler`, and `TargetedSampler` now exist in the kernel
 - `PullExecutor` now has explicit queueing and stop controls via `queue_capacity`, `max_samples`, `shutdown_when`, `ShutdownMode`, and configurable `worker_count`
-- The executor path reuses existing acquisition timeout handling, scorer execution, score validation, judge model pin collection, and run metadata fingerprinting from the batch runner
+- The executor path reuses existing output source timeout handling, scorer execution, score validation, judge model pin collection, and run metadata fingerprinting from the batch runner
 - `examples/prod_eval_daemon.rs` now shows a small daemon-style binary composed from library primitives and emits OTel spans through `OtelResultSink`
 
 Gaps:
-- Streaming partial scoring now supports acquisition-provided intermediate snapshots, but there is still no token-by-token or chunk-stream protocol shared across providers
+- Streaming partial scoring now supports source-provided intermediate snapshots, but there is still no token-by-token or chunk-stream protocol shared across providers
 - Deferred networked source adapters such as Kafka or NATS are still absent by user request
 - The executor now has a bounded worker pool plus deterministic sharding, but there is still no remote coordinator or cross-process backpressure protocol
 

@@ -32,7 +32,7 @@ That is how a root crate quietly becomes a junk drawer.
 
 ```text
 KEEP IN evalkit (kernel)
-  Acquisition / Dataset / Mapper / Run / RunResult / Sample /
+  OutputSource / Dataset / Mapper / Run / RunResult / Sample /
   Score / ScoreDefinition / Scorer / ScorerSet / Comparison /
   schema version / stats / scorer composition
 
@@ -50,7 +50,7 @@ These are kernel surface and should remain re-exported from the root crate.
 
 | Export(s) | Decision | Why |
 |---|---|---|
-| `AcquiredOutput`, `Acquisition`, `AcquisitionError`, `AcquisitionMetadata`, `AcquisitionSnapshot` | KEEP | Acquisition is part of the core Dataset -> Acquisition -> Scorer pipeline. |
+| `SourceOutput`, `OutputSource`, `OutputSourceError`, `SourceMetadata`, `OutputSnapshot` | KEEP | OutputSource is part of the core Dataset -> OutputSource -> Scorer pipeline. |
 | `Change`, `CompareConfig`, `Comparison`, `SampleComparison`, `ScorerComparison`, `compare` | KEEP | Run-to-run comparison is a core kernel capability, not an optional runtime concern. |
 | `Dataset` | KEEP | Core data model. |
 | `MapError`, `Mapper` | KEEP | Shared transforms are part of the core scorer pipeline. |
@@ -137,7 +137,7 @@ evalkit                                         evalkit
 ├── Dataset / Sample / Score                    ├── Dataset / Sample / Score
 ├── Scorer / ScorerSet / Mapper                 ├── Scorer / ScorerSet / Mapper
 ├── Run / RunResult / Comparison / Stats        ├── Run / RunResult / Comparison / Stats
-├── Acquisition                                 ├── Acquisition
+├── OutputSource                                ├── OutputSource
 ├── JSONL IO helpers                 X          ├── schema version only
 ├── conversation / trajectory shapes X          └── no runtime orchestration exports
 └── runtime executor surface         X

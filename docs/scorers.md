@@ -93,7 +93,7 @@ For RAG pipelines scored against a ground-truth relevant-doc set.
 - [ ] `instruction_following`  — IFEval-style verifiable instructions (regex + length + format checks)
 
 ### Heuristic / infra
-- [ ] `latency_under`          — checks acquisition latency
+- [ ] `latency_under`          — checks output source latency
 - [ ] `cost_under`             — checks cost
 - [ ] `token_count`            — returns `Score::Metric`
 - [ ] `length_ratio`           — output len / reference len

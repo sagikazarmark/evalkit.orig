@@ -58,7 +58,7 @@ No API signatures changed. Only the path to reach them did.
 
 ## Kernel-side changes
 
-- `pub mod acquisition` is now exposed on the root crate so that
+- `pub mod source` is now exposed on the root crate so that
   `evalkit-runtime` can reach `current_sample_id` and `with_current_sample_id`.
   Their semantics are unchanged.
 - `ScorerSet::score`, `ScorerSet::definitions`, and `ScorerSet::judge_model_pins`

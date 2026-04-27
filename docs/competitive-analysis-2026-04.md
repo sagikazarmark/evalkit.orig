@@ -390,7 +390,7 @@ Source: [Ragas README](https://github.com/explodinggradients/ragas) (accessed 20
 
 **Relevance to evalkit.**
 - Steal the `DiscreteMetric` / `NumericMetric` / `RankingMetric` taxonomy — maps cleanly onto evalkit's `Score::Categorical` / `Score::Metric` / a future `Score::Ranking`.
-- Steal the `llm_factory` indirection — the Rust analogue is the `evalkit-providers` `Acquisition` trait. Ragas validates the pattern.
+- Steal the `llm_factory` indirection — the Rust analogue is the `evalkit-providers` `OutputSource` trait. Ragas validates the pattern.
 - Adopt Ragas's RAG metric names verbatim in `evalkit-scorers-rag` (which the roadmap already commits to).
 
 ### TruLens (discovered, briefly)
@@ -444,7 +444,7 @@ Source: [evalite quickstart](https://www.evalite.dev/quickstart) (accessed 2026-
 | OpenAI Evals | Benchmark harness | YAML registry + `Eval` class | YAML + Python | OpenAI client baked in | Registry on disk | Model-graded YAML, custom Python | YAML + JSONL | Owns the process | Python, FS, OpenAI key | ⚠️ Maintenance-only ([last meaningful commit Nov 2025](https://github.com/openai/evals/commits/main), accessed 2026-04-23; 2026 commits are CI/pre-commit pins) |
 | evalite | Library | `evalite(name, { data, task, scorers })` | Vitest-shaped | Caller's choice in `task` | Vitest + local UI | `autoevals` import | Inline array | Owns the process via Vitest | Node | ⚠️ v0.19 single-maintainer |
 | lm-evaluation-harness | Benchmark harness | Tasks registry | YAML + CLI | HF, vLLM, OpenAI, etc. | FS results | Standardized benchmark scorers | Standard benchmarks (MMLU, etc.) | Owns the process | Python, FS | ✅ Stable but academic-scope |
-| **evalkit** | **Library + optional CLI** | **`Eval`, `Scorer`, `Dataset`, `Sample`, `Run`, `Score`** | **Imperative, async** | **`Acquisition` trait + `evalkit-providers`** | **In-memory; sinks pluggable** | **`Score` enum (value/categorical/metric); LLM-judge in `evalkit-scorers-llm`** | **In-process iterator-shaped** | **Embeddable, no `main()` ownership** | **No tokio lock-in goal; getrandom/js feature for wasm32** | **Pre-1.0 (0.3.0); kernel-boundary plan in flight** |
+| **evalkit** | **Library + optional CLI** | **`Eval`, `Scorer`, `Dataset`, `Sample`, `Run`, `Score`** | **Imperative, async** | **`OutputSource` trait + `evalkit-providers`** | **In-memory; sinks pluggable** | **`Score` enum (value/categorical/metric); LLM-judge in `evalkit-scorers-llm`** | **In-process iterator-shaped** | **Embeddable, no `main()` ownership** | **No tokio lock-in goal; getrandom/js feature for wasm32** | **Pre-1.0 (0.3.0); kernel-boundary plan in flight** |
 
 ## 4. Gap analysis for evalkit
 
@@ -471,7 +471,7 @@ Source: [evalite quickstart](https://www.evalite.dev/quickstart) (accessed 2026-
 ### Deliberate differentiators evalkit has that the landscape validates
 
 - **Library-first, doesn't own `main()`.** Inspect, Promptfoo, evalite, and DeepEval all own the process. Phoenix/Langfuse/Braintrust SDKs are embeddable but optimized for their backend. None are designed to drop into a long-running Rust service handling requests. evalkit has the field to itself. Goal #5.
-- **Provider isolation via `Acquisition` trait + `evalkit-providers`.** Ragas's `llm_factory` and DeepEval's `DeepEvalBaseLLM` validate the pattern; Inspect's bundled model layer is the cautionary tale. Goal #4.
+- **Provider isolation via `OutputSource` trait + `evalkit-providers`.** Ragas's `llm_factory` and DeepEval's `DeepEvalBaseLLM` validate the pattern; Inspect's bundled model layer is the cautionary tale. Goal #4.
 - **Workspace split with no kernel deps on tokio runtime.** No competitor has even tried WASM. Validated by absence — it's a real gap. Goal #3.
 - **Open `Score` taxonomy** (Categorical / Metric / Pass-Fail / Structured) over the autoevals `0..1` float convention. Ragas's `DiscreteMetric` / `NumericMetric` / `RankingMetric` proves the field is moving toward this. Goal #1.
 
@@ -484,10 +484,10 @@ Source: [evalite quickstart](https://www.evalite.dev/quickstart) (accessed 2026-
   - *Counter.* Subprocess IPC kills the streaming/online use case (latency); every competitor that tried plugin protocols has had them wither (OpenAI Evals' custom-code submissions are now closed). Most users will adopt the language they already use; polyglot becomes a feature nobody asks for at runtime.
   - *Verdict.* Keep the protocol but downgrade its priority. Ship native scorers in `evalkit-scorers-*` first; polyglot is Phase 1, not Phase 0. The roadmap order is right.
 
-- **No bundled provider client; everything via `Acquisition`.**
-  - *Steelman.* Inspect bundles its own client because it lets the framework guarantee retries, timeouts, log capture, and concurrency limits — things every eval needs. Composing those across an external `Acquisition` trait is harder.
-  - *Counter.* Bundling a client is exactly what locks Inspect's models layer into Python and prevents WASM. evalkit's `Acquisition` trait can require the implementer to handle retries/timeouts; evalkit can publish a default `RetryAcquisition<A>` decorator.
-  - *Verdict.* Keep the trait. Ship `RetryAcquisition` and `TimeoutAcquisition` decorators in `evalkit-providers` so the ergonomic gap closes.
+- **No bundled provider client; everything via `OutputSource`.**
+  - *Steelman.* Inspect bundles its own client because it lets the framework guarantee retries, timeouts, log capture, and concurrency limits — things every eval needs. Composing those across an external `OutputSource` trait is harder.
+  - *Counter.* Bundling a client is exactly what locks Inspect's models layer into Python and prevents WASM. evalkit's `OutputSource` trait can require the implementer to handle retries/timeouts; evalkit can publish a default `RetrySource<S>` decorator.
+  - *Verdict.* Keep the trait. Ship `RetrySource` and `TimeoutSource` decorators in `evalkit-providers` so the ergonomic gap closes.
 
 - **Library-first with optional CLI.**
   - *Steelman.* Most users start by running `inspect eval`, `promptfoo eval`, `pytest`, or `vitest` — a CLI is the discovery surface. Library-first means a slower hello-world.
@@ -532,9 +532,9 @@ The cost of holding this line is paid once. The cost of breaking it after 1.0 is
 - **Ragas v0.4.x** — `llm_factory` indirection; metric definition has no provider knowledge.
 - **evalite** — `task` is a callback; provider is user's problem. Same as Braintrust.
 
-**Pattern that wins.** Two-layer isolation. The kernel never names a provider; user code calls the model inside `task`/`Acquisition`. Where the kernel needs a model (LLM-as-judge scorers), inject via a trait at construction (`Phoenix LLM`, `Ragas llm_factory`, evalkit's `Acquisition`).
+**Pattern that wins.** Two-layer isolation. The kernel never names a provider; user code calls the model inside `task`/`OutputSource`. Where the kernel needs a model (LLM-as-judge scorers), inject via a trait at construction (`Phoenix LLM`, `Ragas llm_factory`, evalkit's `OutputSource`).
 
-evalkit's current design — `Acquisition` trait in `evalkit-providers`, scorers parameterized over it — is correct. Don't relax it. The temptation will be to add a "convenience" `evalkit::default_openai_judge()` at some point; reject it. That's how Inspect ended up with `inspect_ai.model`.
+evalkit's current design — `OutputSource` trait in `evalkit-providers`, scorers parameterized over it — is correct. Don't relax it. The temptation will be to add a "convenience" `evalkit::default_openai_judge()` at some point; reject it. That's how Inspect ended up with `inspect_ai.model`.
 
 ## 5. High-level feature recommendations
 
@@ -546,7 +546,7 @@ evalkit's current design — `Acquisition` trait in `evalkit-providers`, scorers
 
 4. **Publish OpenInference-conformant spans from `evalkit-otel`.** Why: Goal #5 — Phoenix, TruLens, and Envoy AI Gateway already emit OpenInference; conforming makes evalkit immediately usable inside any of those backends. Scope: medium. Prior art: OpenInference spec at [arize-ai.github.io/openinference/spec](https://arize-ai.github.io/openinference/spec/) (accessed 2026-04-23). Don't invent a competing schema.
 
-5. **Add `RetryAcquisition<A>` and `TimeoutAcquisition<A>` decorators in `evalkit-providers`.** Why: Goal #4 — closes the ergonomic gap that motivates competitors to bundle their own clients. Scope: small. Prior art: Inspect's bundled model layer (the failure mode); the Tower middleware pattern (the right shape).
+5. **Add `RetrySource<S>` and `TimeoutSource<S>` decorators in `evalkit-providers`.** Why: Goal #4 — closes the ergonomic gap that motivates competitors to bundle their own clients. Scope: small. Prior art: Inspect's bundled model layer (the failure mode); the Tower middleware pattern (the right shape).
 
 6. **`bridge`-style adapter solver for embedding existing apps.** Why: Goal #5 — the use case is "I have a Rust web service, score its responses inline" without rewriting. Scope: small. Prior art: Inspect AI's `bridge()`. Make the Rust version explicit: `Task::from_fn(|sample| async { ... })`.
 

@@ -661,7 +661,7 @@ The examples are straightforward and already fairly close to the Braintrust/Insp
 ```rust
 let run = Run::builder()
     .dataset(dataset)
-    .acquisition(acquisition)
+    .source(my_source)
     .scorer(ExactMatchScorer)
     .scorer(ContainsReferenceScorer)
     .trials(3)

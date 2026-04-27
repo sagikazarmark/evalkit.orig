@@ -10,7 +10,7 @@
 
 > **Two backlogs live off the critical path:**
 > - [Scorer implementations](./scorers.md) — trait implementations per category.
-> - [Integrations](./integrations.md) — `Acquisition`, dataset loader, and exporter implementations.
+> - [Integrations](./integrations.md) — `OutputSource`, dataset loader, and exporter implementations.
 >
 > Work from these backlogs can happen any time an API milestone has unblocked the relevant surface. This roadmap drives *when* an API is ready to absorb them.
 
@@ -35,7 +35,7 @@ Small kernel + focused extension crates. Crate names are provisional; final name
 
 | Crate | Purpose | Status |
 |---|---|---|
-| `evalkit` | Kernel: `Sample`, `Dataset`, `Run`, `Acquisition`, `Scorer`, `Score`, `ScorerSet`, `Comparison`, `stats`. Also hosts the run-log schema types and agent/conversation sample shapes until external consumers justify a split. | exists (monolithic) |
+| `evalkit` | Kernel: `Sample`, `Dataset`, `Run`, `OutputSource`, `Scorer`, `Score`, `ScorerSet`, `Comparison`, `stats`. Also hosts the run-log schema types and agent/conversation sample shapes until external consumers justify a split. | exists (monolithic) |
 | `evalkit-scorers-text` | Deterministic + classical-NLP scorers (Levenshtein, BLEU, ROUGE, retrieval metrics, …) | extract in Phase 0(c) |
 | `evalkit-scorers-embed` | Embedding-based scorers. Depends on an embedding provider abstraction. | new |
 | `evalkit-scorers-llm` | LLM-as-judge scorers built on **[anyllm](https://github.com/sagikazarmark/anyllm)**. **Does not** re-export the RAG crate; callers import both if needed. | new |
@@ -43,7 +43,7 @@ Small kernel + focused extension crates. Crate names are provisional; final name
 | `evalkit-scorers-agent` | Trajectory + tool-call scorers. Gated on agent sample shapes landing in the kernel. | new |
 | `evalkit-scorers-code` | Sandboxed code execution + AST/type-check scorers. | new, later |
 | `evalkit-scorers-multimodal` | Scorers over `evalkit-multimodal` types. | new, later |
-| `evalkit-providers` | `Acquisition` impls over anyllm, HTTP, subprocess, trace replay. Absorbs current `evalkit-cli` transport code. | extract + extend |
+| `evalkit-providers` | `OutputSource` impls over anyllm, HTTP, subprocess, trace replay. Absorbs current `evalkit-cli` transport code. | extract + extend |
 | `evalkit-multimodal` | Opt-in `Modal { Text, Json, Image, Audio, Bytes }` type + serializers. Not required by the kernel. | new, Phase 1 |
 | `evalkit-otel` | OTLP receiver (exists, move) + OTel eval-result span emitter (new, unstable upstream conventions — see Phase 1). | extract + extend |
 | `evalkit-exporters-langfuse` | Existing Langfuse exporter. | extract |
@@ -79,7 +79,7 @@ Concrete items known to need decisions:
   - `Structured { score: f64, reasoning: String, metadata: Value }` — explicit slots for the LLM-judge case.
   - `Reasoned(Box<Score>, String)` — wrap any existing variant with reasoning.
   Pick one; hold the others as rejected alternatives in the decisions log.
-- **`AcquisitionError` variants.** Freeze them now. They propagate through every pipeline.
+- **`OutputSourceError` variants.** Freeze them now. They propagate through every pipeline.
 - **`ScorerError`.** Currently a newtype around `Box<dyn Error>`. Consider richer variants (`Timeout`, `ProviderError`, `InvalidInput`, `Internal`).
 - **`Run` vs `Executor`.** Does `Run` stay as-is for batch, and a separate `Executor` trait appear later for streaming? Or does `Run` grow? Decision-deferred items noted here so Phase 2 can act.
 - **`Score::Metric`** — does `unit: Option<String>` carry enough for cost-tracking, or do we need a structured `Unit` enum?
@@ -97,7 +97,7 @@ Deliverable: `docs/decisions.md` capturing each decision + one rejected alternat
 Execute the split. Each move is one PR, API-compatible where possible.
 
 1. Extract `evalkit-scorers-text` (current deterministic scorers in `src/scorers/`).
-2. Extract `evalkit-providers` (HTTP + subprocess acquisitions currently inside `evalkit-cli`).
+2. Extract `evalkit-providers` (HTTP + subprocess sources currently inside `evalkit-cli`).
 3. Extract `evalkit-otel` (`src/otel.rs` + `OtlpReceiver` + `JaegerBackend`).
 4. Extract `evalkit-exporters-langfuse` (`src/langfuse.rs`).
 5. Create empty skeletons: `evalkit-scorers-llm`, `evalkit-scorers-rag`, `evalkit-scorers-embed`. Leave agent/code/multimodal crates uncreated until their sample shapes exist.
@@ -110,7 +110,7 @@ These require the API to be frozen; hence they come after (a)–(c).
 
 - **`RunMetadata`.** Populate with dataset hash, code/commit, judge model pins, timestamp, seed, scorer config fingerprint. Goal: two runs with identical metadata produce identical results.
 - **Deterministic seeding.** `Run::builder()` accepts an optional RNG seed; threaded through trial ordering and any scorer randomness.
-- **Cost / token tracking.** Add `TokenUsage { input: u64, output: u64, cache_read: u64, cache_write: u64 }` and `cost_usd: Option<f64>` to `SampleResult`. Populate from acquisition + scorer spans.
+- **Cost / token tracking.** Add `TokenUsage { input: u64, output: u64, cache_read: u64, cache_write: u64 }` and `cost_usd: Option<f64>` to `SampleResult`. Populate from source + scorer spans.
 - **Per-sample, per-scorer timing.** `Duration` fields on `TrialResult`.
 - **Statistical rigor in `stats.rs` / `Comparison`.**
   - Wilson confidence intervals for binary scores.
@@ -147,9 +147,9 @@ These require the API to be frozen; hence they come after (a)–(c).
 Promote the current `evalkit-cli` stdin/stdout JSON-line convention into a stable spec.
 
 - Document: `docs/plugin-protocol.md`.
-- Two plugin kinds: **`Acquisition` plugin** and **`Scorer` plugin**.
+- Two plugin kinds: **`OutputSource` plugin** and **`Scorer` plugin**.
 - Versioned handshake: plugin declares `{ kind, name, version, schema_version, capabilities }`.
-- Error model: plugin errors map to `AcquisitionError::ExecutionFailed` / `ScorerError` with the plugin's error payload preserved.
+- Error model: plugin errors map to `OutputSourceError::ExecutionFailed` / `ScorerError` with the plugin's error payload preserved.
 - Reference shims (thin wrappers — a decorator plus a stdio loop):
   - `evalkit-plugin` on pypi.
   - `@evalkit/plugin` on npm.
@@ -218,7 +218,7 @@ At this point the scorer backlog in `docs/scorers.md` can be mass-executed — t
 
 **Goal.** Rust's natural advantage — the production worker tier.
 
-- `Executor` trait (decision from Phase 0 determines exact shape): pull samples from a source, acquire async, score async, push results. Backpressure, bounded queues, graceful shutdown.
+- `Executor` trait (decision from Phase 0 determines exact shape): pull samples from a source, produce output async, score async, push results. Backpressure, bounded queues, graceful shutdown.
 - Sampling strategies: `PercentSampler`, `TargetedSampler` (predicate-based), `AlwaysSampler`.
 - **Judge-model tiering**: pipeline where a cheap scorer flags, then an expensive scorer re-scores the flagged subset.
 - Partial / streaming scoring: call a scorer on an incomplete output (token-by-token streaming cases).

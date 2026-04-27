@@ -52,7 +52,7 @@ dependency baggage moved to `evalkit-runtime` along with the code.
 
 The root crate is now closer to a batch-kernel posture: no regex, no file
 tailing, no sharding. The `tokio` feature set is still `macros + rt + time`
-because `Run` still uses `tokio::time::timeout` and `acquisition` uses
+because `Run` still uses `tokio::time::timeout` and the source module uses
 `task_local`. That is intentional — timeout handling on `Run` is explicitly
 flagged as a follow-up in `docs/root-crate-boundary-audit.md`.
 

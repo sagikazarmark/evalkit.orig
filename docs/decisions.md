@@ -81,10 +81,10 @@ Why:
 Rejected alternative:
 Use `Score::Structured(serde_json::Value)`. It is more flexible, but it gives up a stable kernel-level place for the representative score and reasoning that downstream tools will want to display and compare.
 
-## 2026-04-22 - Freeze `AcquisitionError` variants as the kernel baseline
+## 2026-04-22 - Freeze `OutputSourceError` variants as the kernel baseline
 
 Decision:
-Treat the current `AcquisitionError` variants as the stable Phase 0 baseline:
+Treat the current `OutputSourceError` variants as the stable Phase 0 baseline:
 - `ExecutionFailed`
 - `TraceNotFound`
 - `BackendUnavailable`
@@ -92,7 +92,7 @@ Treat the current `AcquisitionError` variants as the stable Phase 0 baseline:
 - `Panicked`
 
 Why:
-- The set already covers the acquisition failure modes present in the kernel and OTLP-backed paths.
+- The set already covers the output source failure modes present in the kernel and OTLP-backed paths.
 - Freezing this shape now lets provider crates target a single error vocabulary.
 
 Rejected alternative:
@@ -145,7 +145,7 @@ Introduce a separate `Executor` trait for online execution and start with a mini
 
 Why:
 - This keeps the existing `Run` type batch-focused while proving the Phase 2 execution seams against real code.
-- A pull-based executor is the smallest production-usable shape that can reuse the kernel's existing acquisition, scoring, timeout, metadata, and fingerprinting logic.
+- A pull-based executor is the smallest production-usable shape that can reuse the kernel's existing output source, scoring, timeout, metadata, and fingerprinting logic.
 - Separating source, sampler, and sink gives later source adapters, targeted rescoring, and streaming emitters stable insertion points without prematurely freezing queueing or concurrency policy.
 
 Rejected alternative:
@@ -176,11 +176,11 @@ Start partial scoring in `PullExecutor` with fixed checkpoints over partial stri
 
 Why:
 - This is the smallest concrete API that proves incomplete-output scoring without forcing provider-stream abstractions into the kernel yet.
-- It works with existing acquisitions that only return a final string, which keeps the first implementation testable with current fixtures and examples.
+- It works with existing output sources that only return a final string, which keeps the first implementation testable with current fixtures and examples.
 - Stage-suffixed score names keep partial and final results comparable without changing the score enum.
 
 Rejected alternative:
-Add a general token-stream protocol immediately. That would be more expressive, but it would force acquisition, source, and scorer APIs to all grow around streaming semantics before the simpler checkpoint model has been exercised.
+Add a general token-stream protocol immediately. That would be more expressive, but it would force output source, source, and scorer APIs to all grow around streaming semantics before the simpler checkpoint model has been exercised.
 
 ## 2026-04-23 - Keep executor queueing and shutdown as local pull controls for now
 
@@ -198,18 +198,18 @@ Why:
 Rejected alternative:
 Introduce a multi-stage internal scheduler first and expose queue internals publicly. That would add substantial surface area before there is evidence that the current pull executor needs a full worker runtime.
 
-## 2026-04-23 - Carry real acquisition snapshots into partial scoring
+## 2026-04-23 - Carry real output snapshots into partial scoring
 
 Decision:
-Add optional intermediate outputs to the acquisition surface via `AcquiredOutput` and `AcquisitionSnapshot`, then let the executor's partial scoring plans evaluate those snapshots.
+Add optional intermediate outputs to the output source surface via `SourceOutput` and `OutputSnapshot`, then let the executor's partial scoring plans evaluate those snapshots.
 
 Why:
 - This makes partial scoring depend on real provider or adapter progress instead of only synthetic prefixes derived after the fact.
-- The default `Acquisition::acquire_with_snapshots(...)` implementation keeps existing acquisitions source-compatible.
-- Snapshot labels give the executor a stable bridge between acquisition stages and scorer definitions without forcing a token-stream trait into every acquisition immediately.
+- The default `OutputSource::produce_with_snapshots(...)` implementation keeps existing output sources source-compatible.
+- Snapshot labels give the executor a stable bridge between output source stages and scorer definitions without forcing a token-stream trait into every output source immediately.
 
 Rejected alternative:
-Teach partial scoring only from the final output by slicing prefixes or chunks after acquisition completes. That was useful as a first proof of concept, but it cannot represent true provider stages or adapter-emitted intermediate results.
+Teach partial scoring only from the final output by slicing prefixes or chunks after the output source completes. That was useful as a first proof of concept, but it cannot represent true provider stages or adapter-emitted intermediate results.
 
 ## 2026-04-23 - Use a bounded in-runtime worker pool without requiring `Send` scorers
 
@@ -217,12 +217,12 @@ Decision:
 Add configurable parallelism to `PullExecutor` with `worker_count`, but implement it with an in-runtime `FuturesUnordered` pool instead of spawned Tokio tasks.
 
 Why:
-- This gives the executor a real bounded in-flight model while preserving compatibility with the kernel's existing non-`Send` scorer and acquisition futures.
+- This gives the executor a real bounded in-flight model while preserving compatibility with the kernel's existing non-`Send` scorer and output source futures.
 - Result ordering can still be made stable by indexing scheduled samples and sorting completed results before building the final `RunResult`.
 - `ShutdownMode::DiscardQueue` can stop quickly by dropping queued and in-flight futures, while `DrainQueue` continues through already-prefetched work.
 
 Rejected alternative:
-Require all acquisitions and scorers to produce `Send` futures so the executor can spawn every sample onto Tokio tasks. That would ripple a stricter async contract through the whole kernel before there is evidence that cross-thread task spawning is required.
+Require all output sources and scorers to produce `Send` futures so the executor can spawn every sample onto Tokio tasks. That would ripple a stricter async contract through the whole kernel before there is evidence that cross-thread task spawning is required.
 
 ## 2026-04-23 - Put first drift detection in `evalkit-server` over stored run history
 
@@ -236,3 +236,7 @@ Why:
 
 Rejected alternative:
 Introduce a new kernel-level streaming drift protocol immediately. That may still be useful later, but it would force new event and sink abstractions through the executor path before the stored-run dashboard workflow had been exercised.
+
+## 2026-04-26 - `Acquisition` renamed to `OutputSource` for 1.0
+
+**`Acquisition` renamed to `OutputSource` for 1.0.** See `docs/superpowers/specs/2026-04-26-output-source-naming-design.md`. Clean break, no compat shim.

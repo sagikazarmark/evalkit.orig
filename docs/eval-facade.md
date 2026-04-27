@@ -8,9 +8,9 @@ definitions, result shape, and `RunMetadata` semantics are identical.
 ## Use `Eval` when
 
 - You are writing your first eval and want the shortest working chain.
-- The eval is a single acquisition paired with one or more scorers.
+- The eval is a single output source paired with one or more scorers.
 - You don't need output or reference mappers.
-- You want `samples → acquire → score → run` to be one expression.
+- You want `samples → source → score → run` to be one expression.
 
 ## Use `Run::builder()` when
 
@@ -29,13 +29,13 @@ express, the facade can opt out of via `EvalRun::into_run()`.
 ## Equivalence
 
 See `src/eval.rs::tests::facade_produces_same_shape_as_kernel_path`. For a
-fixed dataset, acquisition, trial count, and seed, the facade and the raw
+fixed dataset, output source, trial count, and seed, the facade and the raw
 `Run::builder()` path produce:
 
 - identical `score_definitions` in `RunMetadata`
 - identical per-sample / per-trial score outcomes
 - identical trial counts and seed
-- identical `acquisition_mode`
+- identical `source_mode`
 
 The facade is not a new execution engine — it's a different shape for the
 same one.
@@ -46,7 +46,7 @@ same one.
 use evalkit::prelude::*;
 
 let result = Eval::new(samples)
-    .acquire(acquisition)
+    .source(my_source)
     .scorer(MyScorer)
     .trials(3)
     .run()

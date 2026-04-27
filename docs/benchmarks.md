@@ -6,12 +6,12 @@ Closes issue `05-benchmark-runtime-extraction.md`.
 
 - 5_000 `Sample<String, String>` rows with ids `s-0` through `s-4999`, input and
   reference both set to `input-<i>`.
-- Inline `Fn(&String) -> Future<Output=Result<String, _>>` acquisition that
+- Inline `Fn(&String) -> Future<Output=Result<String, _>>` output source that
   clones its input. No IO, no sleeps.
 - Single `ExactMatch` scorer over a `ScorerSet`.
 - `PullExecutor` with `AlwaysSampler`, `NoopSink`, `trials(1)`.
 
-The intent is not to measure scorer CPU or acquisition IO — it is to
+The intent is not to measure scorer CPU or output source IO — it is to
 measure the *plumbing*: source → sampler → executor → scorer → sink. That
 is exactly the code that moved from `evalkit` to `evalkit-runtime`.
 
