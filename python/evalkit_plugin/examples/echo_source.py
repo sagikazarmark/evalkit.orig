@@ -7,9 +7,9 @@ from evalkit_plugin import source_plugin, run_plugin
 
 
 @source_plugin("echo-source", capabilities=["structured-errors"])
-def acquire(input_text: str) -> str:
+def produce(input_text: str) -> str:
     return f"echo::{input_text}"
 
 
 if __name__ == "__main__":
-    run_plugin(acquire)
+    run_plugin(produce)
