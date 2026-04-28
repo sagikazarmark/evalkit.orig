@@ -60,7 +60,7 @@ These are kernel surface and should remain re-exported from the root crate.
 | `RUN_RESULT_SCHEMA_VERSION` and `pub mod schema` | KEEP | Schema versioning is kernel-level contract surface. |
 | `Score` | KEEP | Core scoring model. |
 | `Direction`, `ScoreDefinition` | KEEP | Core scoring model. |
-| `ScoreOutcome`, `Scorer`, `ScorerMetadata`, `ScorerResources` | KEEP | Core scoring traits and scorer-side resource accounting. |
+| `ScoreOutcome`, `Scorer`, `ScorerMetadata`, `ResourceUsage` | KEEP | Core scoring traits and resource accounting (renamed from `ScorerResources` in 2.0). |
 | `ScorerContext` | KEEP | Core scorer execution context. |
 | `ScorerError` | KEEP | Core scorer error taxonomy. |
 | `AndScorer`, `IgnoreReferenceScorer`, `MapScoreScorer`, `NotScorer`, `OrScorer`, `ScorerExt`, `ThenScorer`, `TimeoutScorer`, `WeightedScorer`, `ignore_reference` | KEEP | Scorer composition is part of the kernel API, not a plugin layer. |

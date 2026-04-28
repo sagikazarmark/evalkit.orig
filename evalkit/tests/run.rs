@@ -275,7 +275,7 @@ async fn run_accepts_multiple_scorers_and_scorer_sets() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn run_aggregates_scorer_resources_into_sample_results() {
+async fn run_aggregates_resource_usage_into_sample_results() {
     let sample = Sample::new(String::from("prompt"), String::from("reference"));
     let scorer_set = ScorerSet::<String, String, String>::builder()
         .scorer(ResourceReportingScorer {

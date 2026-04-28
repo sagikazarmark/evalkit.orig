@@ -17,7 +17,7 @@ definitions, result shape, and `RunMetadata` semantics are identical.
 - You need `map_output` or `map_reference` to transform into a different
   type before scoring.
 - You want to attach a `ScorerSet` rather than individual scorers.
-- You need custom `ScorerResources` accounting or judge-model pinning
+- You need custom `ResourceUsage` accounting or judge-model pinning
   paths beyond `judge_model_pin`.
 - You want to inspect build errors separately from execution errors.
 - You want to construct the `Run` now and execute it later.
