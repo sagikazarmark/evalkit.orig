@@ -265,3 +265,24 @@ Picked: Option A (unsafe casts). Rationale: The four executor structs were genui
 Rejected:
 - Option B (Clone-bounded identity mapper): would require `O: Clone` and `R: Clone` on the kernel's main execution path. Non-Clone outputs are unusual but legitimate (e.g., a large opaque byte buffer, an OS file handle); adding a blanket bound there is an API-breaking restriction the plan explicitly flags as a con. The type-state invariant is already proved at compile time — paying a runtime clone to avoid a two-line `unsafe` block is the wrong trade.
 - Option C (keep four executors): the plan goal was to remove ~100 lines of near-duplicate code. The executors really are structurally identical; there was no hidden divergence in lifetimes, error handling, or field logic that would justify keeping them. Option C is the correct fallback when the executors turn out to be non-trivially different — they were not.
+
+## 2026-04-28 — Task 4: kernel task-local stays (deviation from spec)
+
+The plan's section 1.2 said to move the `current_sample_id` task-local from
+`evalkit/src/source.rs` to `evalkit-otel`. We could not do this cleanly:
+`evalkit-runtime/src/lib.rs:15` re-exports the kernel's `current_sample_id`
+and `evalkit-runtime/src/lib.rs:1323` calls `evalkit::source::with_current_sample_id`.
+Moving the task-local to evalkit-otel would require evalkit-runtime to depend
+on evalkit-otel, which inverts the layering.
+
+The structurally correct fix is one of:
+- Make `OtelObserver` read the sample id from its input `I` (requires a
+  trait bound on `I`).
+- Move the task-local to evalkit-runtime (where it's actually shared between
+  the kernel runner and OtelObserver).
+
+Both are out of scope for the 2.0 cleanup. Tracked for follow-up.
+
+What we did ship: dropped `OutputSourceError::TraceNotFound` variant and
+moved that error shape to evalkit-otel as `OtelTraceNotFound`, wrapped in
+`OutputSourceError::ExecutionFailed`. The task-local stays in the kernel for now.

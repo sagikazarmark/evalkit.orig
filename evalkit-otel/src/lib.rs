@@ -29,7 +29,6 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
-use tokio::task_local;
 use tokio::time::sleep;
 
 #[derive(Debug, Clone)]
@@ -49,21 +48,6 @@ impl Display for OtelTraceNotFound {
 }
 
 impl Error for OtelTraceNotFound {}
-
-task_local! {
-    static CURRENT_SAMPLE_ID: String;
-}
-
-pub fn current_sample_id() -> Option<String> {
-    CURRENT_SAMPLE_ID.try_with(Clone::clone).ok()
-}
-
-pub async fn with_current_sample_id<Fut>(sample_id: &str, future: Fut) -> Fut::Output
-where
-    Fut: Future,
-{
-    CURRENT_SAMPLE_ID.scope(sample_id.to_string(), future).await
-}
 
 type FetchSpansFuture<'a> =
     Pin<Box<dyn Future<Output = Result<HashMap<String, Vec<Span>>, TraceBackendError>> + 'a>>;
@@ -1218,19 +1202,6 @@ mod tests {
             err.to_string(),
             "no spans found for correlation_id `run-1` and sample_id `s-1`"
         );
-    }
-
-    #[test]
-    fn current_sample_id_returns_none_outside_scope() {
-        assert!(current_sample_id().is_none());
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn current_sample_id_returns_value_inside_scope() {
-        let result = with_current_sample_id("s-42", async {
-            current_sample_id()
-        }).await;
-        assert_eq!(result.as_deref(), Some("s-42"));
     }
 
     struct StaticBackend;
