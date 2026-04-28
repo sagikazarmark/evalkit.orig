@@ -602,6 +602,13 @@ struct JudgeModelTier<I, O, R> {
 trait PartialScoringPlan<I, O, R>: Send + Sync {
     fn definitions(&self) -> Vec<ScoreDefinition>;
     fn judge_model_pins(&self) -> Vec<String>;
+    /// Returns `true` if this plan requires a `snapshot_source` to be configured.
+    /// Plans that need snapshots (e.g. streaming scoring) will silently produce no
+    /// scores when `snapshot_source` is absent; surfacing the misconfiguration
+    /// loudly at execution time prevents that silent no-op footgun.
+    fn requires_snapshot_source(&self) -> bool {
+        false
+    }
     fn score<'a>(
         &'a self,
         ctx: &'a ScorerContext<'a, I, O, R>,
@@ -732,6 +739,10 @@ impl<I, R> PartialScoringPlan<I, String, R> for StringStreamingPartialScoring<I,
 
     fn judge_model_pins(&self) -> Vec<String> {
         self.scorer_set.judge_model_pins().to_vec()
+    }
+
+    fn requires_snapshot_source(&self) -> bool {
+        true
     }
 
     fn score<'a>(
@@ -994,6 +1005,20 @@ where
             self.partial_scoring.as_deref(),
         )
         .map_err(ExecutorError::Configuration)?;
+
+        if self
+            .partial_scoring
+            .as_deref()
+            .is_some_and(|plan| plan.requires_snapshot_source())
+            && self.snapshot_source.is_none()
+        {
+            return Err(ExecutorError::Configuration(
+                "streaming_string_scoring requires a streaming_source to be configured; \
+                 call .streaming_source(...) before .streaming_string_scoring(...)"
+                    .to_string(),
+            ));
+        }
+
         let judge_model_pins = merged_judge_model_pins(
             self.scorer_set.as_ref(),
             self.judge_model_tier.as_deref(),
@@ -2007,7 +2032,8 @@ fn git_stdout_bytes(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AlwaysSampler, DatasetSource, ExecutionSink, Executor, JsonlFileTailSource, PercentSampler,
+        AlwaysSampler, DatasetSource, ExecutionSink, Executor, ExecutorError,
+        JsonlFileTailSource, PercentSampler,
         OutputSnapshot, PullExecutor, RegexPiiScrubber, Sampler, SamplerBuildError,
         ShardBuildError, ShardSpec, ShardedSource, ShutdownMode, SnapshotSource, SourceOutput,
         StringPrefixCheckpoint, StringStreamStage, TargetedSampler,
@@ -2594,6 +2620,44 @@ mod tests {
                 .unwrap(),
             &Score::Numeric(11.0)
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pull_executor_streaming_string_scoring_without_streaming_source_errors() {
+        let dataset = Dataset::new(vec![Sample::new(
+            "hello".to_string(),
+            "echo::hello".to_string(),
+        )]);
+        let primary = ScorerSet::<String, String, String>::builder()
+            .scorer(ExactMatchScorer)
+            .build();
+        let partial = ScorerSet::<String, String, String>::builder()
+            .scorer(PrefixLengthScorer)
+            .build();
+
+        // Deliberately omit .streaming_source(...) — this is the misconfiguration.
+        let mut executor = PullExecutor::new(
+            DatasetSource::new(dataset),
+            StreamingEchoSource,
+            primary,
+            AlwaysSampler,
+            super::NoopSink,
+        )
+        .streaming_string_scoring(
+            partial,
+            vec![StringStreamStage::new("prefix"), StringStreamStage::new("mid")],
+        );
+
+        let err = executor.execute().await.unwrap_err();
+        match err {
+            ExecutorError::Configuration(msg) => {
+                assert!(
+                    msg.contains("streaming_source"),
+                    "error message should mention streaming_source; got: {msg}"
+                );
+            }
+            other => panic!("expected ExecutorError::Configuration, got: {other:?}"),
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
