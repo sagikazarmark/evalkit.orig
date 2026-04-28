@@ -797,110 +797,20 @@ fn git_stdout_bytes(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
     }
 }
 
-impl<I: 'static, O: 'static, R: 'static> RunBuilderWithTargets<I, O, R, O, R, Unmapped, Unmapped> {
-    pub fn build(self) -> Result<Run<I, O, R>, RunBuildError> {
-        let this = self.resolved_code_identity().normalized_judge_model_pins();
-        let definitions = this.validate()?;
-
-        Ok(Run {
-            dataset: this.dataset,
-            source: this.source,
-            definitions,
-            executor: Box::new(RawRunExecutor {
-                targets: this.targets,
-            }),
-            trial_count: this.trial_count,
-            concurrency: this.concurrency,
-            sample_timeout: this.sample_timeout,
-            seed: this.seed,
-            code_commit: this.code_commit,
-            code_fingerprint: this.code_fingerprint,
-            judge_model_pins: this.judge_model_pins,
-            source_mode: this.source_mode,
-        })
-    }
-}
-
-impl<I: 'static, O: 'static, R: 'static, O2: 'static>
-    RunBuilderWithTargets<I, O, R, O2, R, Mapped, Unmapped>
+impl<I: 'static, O: 'static, R: 'static, O2: 'static, R2: 'static, OS, RS>
+    RunBuilderWithTargets<I, O, R, O2, R2, OS, RS>
 {
     pub fn build(self) -> Result<Run<I, O, R>, RunBuildError> {
         let this = self.resolved_code_identity().normalized_judge_model_pins();
         let definitions = this.validate()?;
-        let output_mapper = this
-            .output_mapper
-            .expect("global output mapper must exist for mapped runs");
 
         Ok(Run {
             dataset: this.dataset,
             source: this.source,
             definitions,
-            executor: Box::new(OutputMappedRunExecutor {
-                output_mapper,
-                targets: this.targets,
-            }),
-            trial_count: this.trial_count,
-            concurrency: this.concurrency,
-            sample_timeout: this.sample_timeout,
-            seed: this.seed,
-            code_commit: this.code_commit,
-            code_fingerprint: this.code_fingerprint,
-            judge_model_pins: this.judge_model_pins,
-            source_mode: this.source_mode,
-        })
-    }
-}
-
-impl<I: 'static, O: 'static, R: 'static, R2: 'static>
-    RunBuilderWithTargets<I, O, R, O, R2, Unmapped, Mapped>
-{
-    pub fn build(self) -> Result<Run<I, O, R>, RunBuildError> {
-        let this = self.resolved_code_identity().normalized_judge_model_pins();
-        let definitions = this.validate()?;
-        let reference_mapper = this
-            .reference_mapper
-            .expect("global reference mapper must exist for mapped runs");
-
-        Ok(Run {
-            dataset: this.dataset,
-            source: this.source,
-            definitions,
-            executor: Box::new(ReferenceMappedRunExecutor {
-                reference_mapper,
-                targets: this.targets,
-            }),
-            trial_count: this.trial_count,
-            concurrency: this.concurrency,
-            sample_timeout: this.sample_timeout,
-            seed: this.seed,
-            code_commit: this.code_commit,
-            code_fingerprint: this.code_fingerprint,
-            judge_model_pins: this.judge_model_pins,
-            source_mode: this.source_mode,
-        })
-    }
-}
-
-impl<I: 'static, O: 'static, R: 'static, O2: 'static, R2: 'static>
-    RunBuilderWithTargets<I, O, R, O2, R2, Mapped, Mapped>
-{
-    pub fn build(self) -> Result<Run<I, O, R>, RunBuildError> {
-        let this = self.resolved_code_identity().normalized_judge_model_pins();
-        let definitions = this.validate()?;
-        let output_mapper = this
-            .output_mapper
-            .expect("global output mapper must exist for mapped runs");
-        let reference_mapper = this
-            .reference_mapper
-            .expect("global reference mapper must exist for mapped runs");
-
-        Ok(Run {
-            dataset: this.dataset,
-            source: this.source,
-            definitions,
-            executor: Box::new(FullyMappedRunExecutor {
-                output_mapper,
-                reference_mapper,
+            executor: Box::new(MappedRunExecutor {
+                output_mapper: this.output_mapper,
+                reference_mapper: this.reference_mapper,
                 targets: this.targets,
             }),
             trial_count: this.trial_count,
@@ -932,10 +842,91 @@ where
 #[cfg(test)]
 mod tests {
     use super::{detect_code_identity, git_stdout};
+    use crate::{
+        Dataset, OutputSourceError, Run, Sample, Score, ScoreDefinition, Scorer, ScorerContext,
+        ScorerError,
+    };
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct ContainsScorer;
+
+    impl Scorer<String, String> for ContainsScorer {
+        async fn score(
+            &self,
+            ctx: &ScorerContext<'_, String, String>,
+        ) -> Result<Score, ScorerError> {
+            Ok(Score::Binary(ctx.output.contains(ctx.input.as_str())))
+        }
+
+        fn definition(&self) -> ScoreDefinition {
+            ScoreDefinition::maximize("contains")
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mapper_executor_handles_no_mappers() {
+        let dataset = Dataset::new(vec![
+            Sample::builder("x".to_string()).id("s1").build().unwrap(),
+        ]);
+        let run = Run::builder()
+            .dataset(dataset)
+            .source(|input: &String| {
+                let input = input.clone();
+                async move { Ok::<_, OutputSourceError>(input) }
+            })
+            .scorer(ContainsScorer)
+            .build()
+            .unwrap();
+        let result = run.execute().await.unwrap();
+        assert_eq!(result.samples.len(), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mapper_executor_applies_output_mapper() {
+        use crate::Mapper;
+        struct ToLen;
+        impl Mapper<String, usize> for ToLen {
+            fn map(&self, input: &String) -> Result<usize, crate::MapError> {
+                Ok(input.len())
+            }
+        }
+        struct LenScorer;
+        impl Scorer<String, usize, String> for LenScorer {
+            async fn score(
+                &self,
+                ctx: &ScorerContext<'_, String, usize, String>,
+            ) -> Result<Score, ScorerError> {
+                Ok(Score::Numeric(*ctx.output as f64))
+            }
+            fn definition(&self) -> ScoreDefinition {
+                ScoreDefinition::new("len")
+            }
+        }
+
+        let dataset = Dataset::new(vec![
+            Sample::builder("hello".to_string())
+                .id("s1")
+                .reference(String::new())
+                .build()
+                .unwrap(),
+        ]);
+        let run = Run::builder()
+            .dataset(dataset)
+            .source(|input: &String| {
+                let input = input.clone();
+                async move { Ok::<_, OutputSourceError>(input) }
+            })
+            .map_output(ToLen)
+            .scorer(LenScorer)
+            .build()
+            .unwrap();
+        let result = run.execute().await.unwrap();
+        let score = &result.samples[0].trials[0].scores["len"];
+        assert!(matches!(score, Ok(Score::Numeric(v)) if (v - 5.0).abs() < f64::EPSILON));
+    }
 
     #[test]
     fn detect_code_identity_uses_head_and_tree_for_clean_repos() {
@@ -1036,101 +1027,70 @@ trait RunExecutor<I, O, R>: Send + Sync {
     fn execute<'a>(&'a self, ctx: &'a ScorerContext<'a, I, O, R>) -> TrialFuture<'a>;
 }
 
-struct RawRunExecutor<I, O, R> {
-    targets: Vec<ScoringTarget<I, O, R>>,
-}
-
-impl<I, O, R> RunExecutor<I, O, R> for RawRunExecutor<I, O, R> {
-    fn execute<'a>(&'a self, ctx: &'a ScorerContext<'a, I, O, R>) -> TrialFuture<'a> {
-        Box::pin(execute_targets(&self.targets, ctx))
-    }
-}
-
-struct OutputMappedRunExecutor<I, O, R, O2> {
-    output_mapper: Box<dyn Mapper<O, O2>>,
-    targets: Vec<ScoringTarget<I, O2, R>>,
-}
-
-impl<I, O, R, O2> RunExecutor<I, O, R> for OutputMappedRunExecutor<I, O, R, O2> {
-    fn execute<'a>(&'a self, ctx: &'a ScorerContext<'a, I, O, R>) -> TrialFuture<'a> {
-        Box::pin(async move {
-            let mapped_output = match self.output_mapper.map(ctx.output) {
-                Ok(mapped_output) => mapped_output,
-                Err(err) => return map_failure_results(&self.targets, err),
-            };
-            let mapped_ctx = ScorerContext {
-                run_id: ctx.run_id,
-                sample_id: ctx.sample_id,
-                trial_index: ctx.trial_index,
-                metadata: ctx.metadata,
-                input: ctx.input,
-                output: &mapped_output,
-                reference: ctx.reference,
-            };
-
-            execute_targets(&self.targets, &mapped_ctx).await
-        })
-    }
-}
-
-struct ReferenceMappedRunExecutor<I, O, R, R2> {
-    reference_mapper: Box<dyn Mapper<R, R2>>,
-    targets: Vec<ScoringTarget<I, O, R2>>,
-}
-
-impl<I, O, R, R2> RunExecutor<I, O, R> for ReferenceMappedRunExecutor<I, O, R, R2> {
-    fn execute<'a>(&'a self, ctx: &'a ScorerContext<'a, I, O, R>) -> TrialFuture<'a> {
-        Box::pin(async move {
-            let mapped_reference = match ctx.reference {
-                Some(reference) => match self.reference_mapper.map(reference) {
-                    Ok(mapped_reference) => Some(mapped_reference),
-                    Err(err) => return map_failure_results(&self.targets, err),
-                },
-                None => None,
-            };
-            let mapped_ctx = ScorerContext {
-                run_id: ctx.run_id,
-                sample_id: ctx.sample_id,
-                trial_index: ctx.trial_index,
-                metadata: ctx.metadata,
-                input: ctx.input,
-                output: ctx.output,
-                reference: mapped_reference.as_ref(),
-            };
-
-            execute_targets(&self.targets, &mapped_ctx).await
-        })
-    }
-}
-
-struct FullyMappedRunExecutor<I, O, R, O2, R2> {
-    output_mapper: Box<dyn Mapper<O, O2>>,
-    reference_mapper: Box<dyn Mapper<R, R2>>,
+struct MappedRunExecutor<I, O, R, O2, R2> {
+    output_mapper: Option<Box<dyn Mapper<O, O2>>>,
+    reference_mapper: Option<Box<dyn Mapper<R, R2>>>,
     targets: Vec<ScoringTarget<I, O2, R2>>,
 }
 
-impl<I, O, R, O2, R2> RunExecutor<I, O, R> for FullyMappedRunExecutor<I, O, R, O2, R2> {
+impl<I, O, R, O2, R2> RunExecutor<I, O, R> for MappedRunExecutor<I, O, R, O2, R2>
+where
+    O: 'static,
+    R: 'static,
+    O2: 'static,
+    R2: 'static,
+{
     fn execute<'a>(&'a self, ctx: &'a ScorerContext<'a, I, O, R>) -> TrialFuture<'a> {
         Box::pin(async move {
-            let mapped_output = match self.output_mapper.map(ctx.output) {
-                Ok(mapped_output) => mapped_output,
-                Err(err) => return map_failure_results(&self.targets, err),
-            };
-            let mapped_reference = match ctx.reference {
-                Some(reference) => match self.reference_mapper.map(reference) {
-                    Ok(mapped_reference) => Some(mapped_reference),
+            // Output mapping: apply the mapper if present, otherwise reinterpret in place.
+            let mapped_output_storage;
+            let mapped_output: &O2 = match &self.output_mapper {
+                Some(mapper) => match mapper.map(ctx.output) {
+                    Ok(value) => {
+                        mapped_output_storage = value;
+                        &mapped_output_storage
+                    }
                     Err(err) => return map_failure_results(&self.targets, err),
                 },
-                None => None,
+                None => {
+                    // SAFETY: When no output mapper is present, `O2 == O` is enforced by the
+                    // `RunBuilder` type-state machine: the `Unmapped` marker on `OutputState`
+                    // causes the builder to fix `O2 = O` (see `RunBuilderWithTargets` default
+                    // type parameter `O2 = O`). The cast is therefore a no-op reinterpretation
+                    // of the same memory layout. The `MappedRunExecutor` is only ever
+                    // constructed from a `build()` call, which preserves this invariant.
+                    unsafe { &*(ctx.output as *const O as *const O2) }
+                }
             };
+
+            // Reference mapping: same pattern.
+            let mapped_reference_storage;
+            let mapped_reference: Option<&R2> = match (&self.reference_mapper, ctx.reference) {
+                (Some(mapper), Some(reference)) => match mapper.map(reference) {
+                    Ok(value) => {
+                        mapped_reference_storage = value;
+                        Some(&mapped_reference_storage)
+                    }
+                    Err(err) => return map_failure_results(&self.targets, err),
+                },
+                (None, Some(reference)) => {
+                    // SAFETY: When no reference mapper is present, `R2 == R` is enforced by the
+                    // `RunBuilder` type-state machine: the `Unmapped` marker on `ReferenceState`
+                    // causes the builder to fix `R2 = R` (see `RunBuilderWithTargets` default
+                    // type parameter `R2 = R`). Same invariant as the output cast above.
+                    Some(unsafe { &*(reference as *const R as *const R2) })
+                }
+                (_, None) => None,
+            };
+
             let mapped_ctx = ScorerContext {
                 run_id: ctx.run_id,
                 sample_id: ctx.sample_id,
                 trial_index: ctx.trial_index,
                 metadata: ctx.metadata,
                 input: ctx.input,
-                output: &mapped_output,
-                reference: mapped_reference.as_ref(),
+                output: mapped_output,
+                reference: mapped_reference,
             };
 
             execute_targets(&self.targets, &mapped_ctx).await

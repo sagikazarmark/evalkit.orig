@@ -254,3 +254,14 @@ Why:
 
 Rejected alternative (`call`):
 The strongest contender if a future rename ever happens. Wins on Rust-ecosystem precedent — every async input-to-output trait converges on `call`. Loses on mode-neutrality (passive sources don't get "called," they get queried) and on the closure blanket impl shadow with `Fn::call`. Compiles cleanly on stable, but every Rust reader who recognizes `Fn::call` will pause when they see `OutputSource::call`. That's a permanent, small tax that `produce` doesn't impose. If the rename revisits in the future, `call` is the candidate to reconsider — `invoke` and `generate` were eliminated for concrete reasons.
+
+## 2026-04-27 — Single mapper executor (Task 3)
+
+Collapsed `RawRunExecutor` / `OutputMappedRunExecutor` / `ReferenceMappedRunExecutor` /
+`FullyMappedRunExecutor` into a single `MappedRunExecutor` with `Option`-typed mappers.
+
+Picked: Option A (unsafe casts). Rationale: The four executor structs were genuinely near-identical — each differed only in which `Option<Box<dyn Mapper>>` slots were present and whether those slots were applied. The `RunBuilder` type-state machine already enforces, at compile time, that `O2 == O` when no output mapper is set and `R2 == R` when no reference mapper is set (via the `Unmapped` marker defaulting both type parameters to their unmapped counterparts). This makes the `*const O as *const O2` cast in the `None` branch a true no-op reinterpretation — the bits are identical because the types are identical. The `unsafe` block is two lines, immediately preceded by a `// SAFETY:` comment naming the invariant and pointing to the builder's type-state. No external invariant, no raw pointer arithmetic, no aliasing risk — just a same-type cast gated on a compile-time proof. The single `build()` impl (collapsing four impls) naturally passes `this.output_mapper` and `this.reference_mapper` as `Option`-typed fields, eliminating all the `expect("...")` unwraps the old code used to prove the same invariant at runtime.
+
+Rejected:
+- Option B (Clone-bounded identity mapper): would require `O: Clone` and `R: Clone` on the kernel's main execution path. Non-Clone outputs are unusual but legitimate (e.g., a large opaque byte buffer, an OS file handle); adding a blanket bound there is an API-breaking restriction the plan explicitly flags as a con. The type-state invariant is already proved at compile time — paying a runtime clone to avoid a two-line `unsafe` block is the wrong trade.
+- Option C (keep four executors): the plan goal was to remove ~100 lines of near-duplicate code. The executors really are structurally identical; there was no hidden divergence in lifetimes, error handling, or field logic that would justify keeping them. Option C is the correct fallback when the executors turn out to be non-trivially different — they were not.
