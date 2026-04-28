@@ -8,13 +8,14 @@
 //! See `docs/root-crate-boundary-audit.md` for the boundary decision.
 
 use evalkit::{
-    SourceOutput, OutputSource, OutputSourceError, OutputSnapshot, Dataset, RunMetadata,
+    OutputSource, OutputSourceError, Dataset, RunMetadata,
     RunResult, Sample, SampleResult, Score, ScoreDefinition, ScoreOutcome, ScorerContext,
     ScorerError, ScorerResources, ScorerSet, TrialResult,
 };
 pub use evalkit::source::current_sample_id;
 use chrono::Utc;
 use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
+use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -31,6 +32,65 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::{sleep, timeout};
 use uuid::Uuid;
+
+/// A labelled intermediate output captured during source execution.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OutputSnapshot<O> {
+    pub label: String,
+    pub output: O,
+    #[serde(default)]
+    pub metadata: HashMap<String, Value>,
+}
+
+impl<O> OutputSnapshot<O> {
+    pub fn new(label: impl Into<String>, output: O) -> Self {
+        Self {
+            label: label.into(),
+            output,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn metadata(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.metadata.insert(key.into(), value);
+        self
+    }
+}
+
+/// The full output of a source call, including any intermediate snapshots.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SourceOutput<O> {
+    pub output: O,
+    #[serde(default)]
+    pub snapshots: Vec<OutputSnapshot<O>>,
+}
+
+impl<O> SourceOutput<O> {
+    pub fn new(output: O) -> Self {
+        Self {
+            output,
+            snapshots: Vec::new(),
+        }
+    }
+
+    pub fn with_snapshot(mut self, snapshot: OutputSnapshot<O>) -> Self {
+        self.snapshots.push(snapshot);
+        self
+    }
+}
+
+/// Extension trait for output sources that can emit intermediate snapshots.
+///
+/// Implement this (in addition to [`evalkit::OutputSource`]) when your source
+/// produces labelled intermediate outputs that streaming-scoring plans should
+/// be able to score at each stage.
+#[allow(async_fn_in_trait)]
+pub trait SnapshotSource<I, O>: OutputSource<I, O> {
+    async fn produce_with_snapshots(
+        &self,
+        input: &I,
+    ) -> Result<SourceOutput<O>, OutputSourceError>;
+}
 
 type TrialScores = Vec<(ScoreDefinition, Result<ScoreOutcome, ScorerError>)>;
 type OutputSourceFuture<'a, O> =
@@ -514,6 +574,7 @@ impl Error for SamplerBuildError {}
 pub struct PullExecutor<I, O, R, Src, Samp, Sink> {
     source: Src,
     output_source: Arc<dyn ErasedOutputSource<I, O>>,
+    snapshot_source: Option<Arc<dyn ErasedSnapshotSource<I, O>>>,
     scorer_set: Arc<ScorerSet<I, O, R>>,
     judge_model_tier: Option<Arc<JudgeModelTier<I, O, R>>>,
     partial_scoring: Option<Arc<dyn PartialScoringPlan<I, O, R>>>,
@@ -727,6 +788,7 @@ struct ShutdownControl {
 
 struct SharedExecutionState<I, O, R> {
     output_source: Arc<dyn ErasedOutputSource<I, O>>,
+    snapshot_source: Option<Arc<dyn ErasedSnapshotSource<I, O>>>,
     scorer_set: Arc<ScorerSet<I, O, R>>,
     judge_model_tier: Option<Arc<JudgeModelTier<I, O, R>>>,
     partial_scoring: Option<Arc<dyn PartialScoringPlan<I, O, R>>>,
@@ -739,6 +801,7 @@ impl<I, O, R> Clone for SharedExecutionState<I, O, R> {
     fn clone(&self) -> Self {
         Self {
             output_source: Arc::clone(&self.output_source),
+            snapshot_source: self.snapshot_source.clone(),
             scorer_set: Arc::clone(&self.scorer_set),
             judge_model_tier: self.judge_model_tier.clone(),
             partial_scoring: self.partial_scoring.clone(),
@@ -777,6 +840,7 @@ where
         Self {
             source,
             output_source: Arc::new(output_source),
+            snapshot_source: None,
             scorer_set: Arc::new(scorer_set),
             judge_model_tier: None,
             partial_scoring: None,
@@ -795,6 +859,22 @@ where
             code_fingerprint: detected.code_fingerprint,
             source_mode,
         }
+    }
+
+    /// Set a dedicated [`SnapshotSource`] used by streaming-scoring plans.
+    ///
+    /// When set, `produce_output_with_state` calls
+    /// [`SnapshotSource::produce_with_snapshots`] instead of wrapping the
+    /// plain `produce` result. This is the only call site for snapshot
+    /// production; the regular `output_source` is always used for the
+    /// primary output path.
+    pub fn streaming_source<Ss>(mut self, source: Ss) -> Self
+    where
+        Ss: SnapshotSource<I, O> + 'static,
+        O: 'static,
+    {
+        self.snapshot_source = Some(Arc::new(source));
+        self
     }
 
     pub fn trials(mut self, trial_count: usize) -> Self {
@@ -1104,6 +1184,7 @@ where
     fn shared_state(&self) -> SharedExecutionState<I, O, R> {
         SharedExecutionState {
             output_source: Arc::clone(&self.output_source),
+            snapshot_source: self.snapshot_source.clone(),
             scorer_set: Arc::clone(&self.scorer_set),
             judge_model_tier: self.judge_model_tier.clone(),
             partial_scoring: self.partial_scoring.clone(),
@@ -1322,11 +1403,24 @@ where
 {
     evalkit::source::with_current_sample_id(&sample.id, async {
         match state.sample_timeout {
-            Some(duration) => match timeout(duration, state.output_source.produce_boxed(&sample.input)).await {
-                Ok(result) => result,
-                Err(_) => Err(OutputSourceError::Timeout(duration)),
-            },
-            None => state.output_source.produce_boxed(&sample.input).await,
+            Some(duration) => {
+                let fut = if let Some(ss) = state.snapshot_source.as_deref() {
+                    ss.produce_with_snapshots_boxed(&sample.input)
+                } else {
+                    state.output_source.produce_boxed(&sample.input)
+                };
+                match timeout(duration, fut).await {
+                    Ok(result) => result,
+                    Err(_) => Err(OutputSourceError::Timeout(duration)),
+                }
+            }
+            None => {
+                if let Some(ss) = state.snapshot_source.as_deref() {
+                    ss.produce_with_snapshots_boxed(&sample.input).await
+                } else {
+                    state.output_source.produce_boxed(&sample.input).await
+                }
+            }
         }
     })
     .await
@@ -1433,6 +1527,20 @@ where
     O: 'static,
 {
     fn produce_boxed<'a>(&'a self, input: &'a I) -> OutputSourceFuture<'a, O> {
+        Box::pin(async move { self.produce(input).await.map(SourceOutput::new) })
+    }
+}
+
+trait ErasedSnapshotSource<I, O>: Send + Sync {
+    fn produce_with_snapshots_boxed<'a>(&'a self, input: &'a I) -> OutputSourceFuture<'a, O>;
+}
+
+impl<I, O, A> ErasedSnapshotSource<I, O> for A
+where
+    A: SnapshotSource<I, O> + Send + Sync,
+    O: 'static,
+{
+    fn produce_with_snapshots_boxed<'a>(&'a self, input: &'a I) -> OutputSourceFuture<'a, O> {
         Box::pin(async move { self.produce_with_snapshots(input).await })
     }
 }
@@ -1900,11 +2008,12 @@ fn git_stdout_bytes(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
 mod tests {
     use super::{
         AlwaysSampler, DatasetSource, ExecutionSink, Executor, JsonlFileTailSource, PercentSampler,
-        PullExecutor, RegexPiiScrubber, Sampler, SamplerBuildError, ShardBuildError, ShardSpec,
-        ShardedSource, ShutdownMode, StringPrefixCheckpoint, StringStreamStage, TargetedSampler,
+        OutputSnapshot, PullExecutor, RegexPiiScrubber, Sampler, SamplerBuildError,
+        ShardBuildError, ShardSpec, ShardedSource, ShutdownMode, SnapshotSource, SourceOutput,
+        StringPrefixCheckpoint, StringStreamStage, TargetedSampler,
     };
     use evalkit::{
-        SourceOutput, OutputSource, OutputSourceError, OutputSnapshot, Dataset, RunResult,
+        OutputSource, OutputSourceError, Dataset, RunResult,
         Sample, SampleResult, Score, ScoreDefinition, Scorer, ScorerContext,
         ScorerError, ScorerMetadata, ScorerSet,
     };
@@ -1991,7 +2100,9 @@ mod tests {
         async fn produce(&self, input: &String) -> Result<String, OutputSourceError> {
             Ok(format!("echo::{input}"))
         }
+    }
 
+    impl SnapshotSource<String, String> for StreamingEchoSource {
         async fn produce_with_snapshots(
             &self,
             input: &String,
@@ -2456,6 +2567,7 @@ mod tests {
             AlwaysSampler,
             super::NoopSink,
         )
+        .streaming_source(StreamingEchoSource)
         .streaming_string_scoring(
             partial,
             vec![StringStreamStage::new("prefix"), StringStreamStage::new("mid")],
@@ -2754,5 +2866,28 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["one", "two", "three"]
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn snapshot_source_default_returns_output_only() {
+        struct Bare;
+        impl evalkit::OutputSource<String, String> for Bare {
+            async fn produce(&self, input: &String) -> Result<String, evalkit::OutputSourceError> {
+                Ok(input.clone())
+            }
+        }
+        impl SnapshotSource<String, String> for Bare {
+            async fn produce_with_snapshots(
+                &self,
+                input: &String,
+            ) -> Result<SourceOutput<String>, evalkit::OutputSourceError> {
+                Ok(SourceOutput::new(input.clone()))
+            }
+        }
+
+        let bare = Bare;
+        let out = bare.produce_with_snapshots(&"hi".to_string()).await.unwrap();
+        assert_eq!(out.output, "hi");
+        assert!(out.snapshots.is_empty());
     }
 }

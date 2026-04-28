@@ -4,13 +4,10 @@
 //! Most evals use `Task::from_fn` or a closure (active). To evaluate an already-instrumented
 //! system, use a passive source from an adapter crate (e.g., `evalkit-otel::OtelObserver`).
 
-use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::future::Future;
 use std::time::Duration;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tokio::task_local;
 
 task_local! {
@@ -30,50 +27,6 @@ where
     Fut: Future,
 {
     CURRENT_SAMPLE_ID.scope(sample_id.to_string(), future).await
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct OutputSnapshot<O> {
-    pub label: String,
-    pub output: O,
-    #[serde(default)]
-    pub metadata: HashMap<String, Value>,
-}
-
-impl<O> OutputSnapshot<O> {
-    pub fn new(label: impl Into<String>, output: O) -> Self {
-        Self {
-            label: label.into(),
-            output,
-            metadata: HashMap::new(),
-        }
-    }
-
-    pub fn metadata(mut self, key: impl Into<String>, value: Value) -> Self {
-        self.metadata.insert(key.into(), value);
-        self
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SourceOutput<O> {
-    pub output: O,
-    #[serde(default)]
-    pub snapshots: Vec<OutputSnapshot<O>>,
-}
-
-impl<O> SourceOutput<O> {
-    pub fn new(output: O) -> Self {
-        Self {
-            output,
-            snapshots: Vec::new(),
-        }
-    }
-
-    pub fn with_snapshot(mut self, snapshot: OutputSnapshot<O>) -> Self {
-        self.snapshots.push(snapshot);
-        self
-    }
 }
 
 #[derive(Debug)]
@@ -114,10 +67,6 @@ impl Error for OutputSourceError {
 #[allow(async_fn_in_trait)]
 pub trait OutputSource<I, O>: Send + Sync {
     async fn produce(&self, input: &I) -> Result<O, OutputSourceError>;
-
-    async fn produce_with_snapshots(&self, input: &I) -> Result<SourceOutput<O>, OutputSourceError> {
-        self.produce(input).await.map(SourceOutput::new)
-    }
 
     fn metadata_mode(&self) -> &'static str { "inline" }
 }
