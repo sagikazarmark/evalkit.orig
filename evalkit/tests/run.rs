@@ -1,6 +1,6 @@
 use evalkit::{
-    OutputSourceError, Direction, MapError, Run, RunBuildError, Sample, Score, ScoreDefinition,
-    ScoreOutcome, Scorer, ScorerContext, ScorerError, ScorerMetadata, ScorerResources, ScorerSet,
+    OutputSourceError, Direction, MapError, ResourceUsage, Run, RunBuildError, Sample, Score,
+    ScoreDefinition, ScoreOutcome, Scorer, ScorerContext, ScorerError, ScorerMetadata, ScorerSet,
     TokenUsage,
 };
 use std::error::Error;
@@ -139,7 +139,7 @@ impl Scorer<String, String, String> for ResourceReportingScorer {
         &self,
         _ctx: &ScorerContext<'_, String, String, String>,
     ) -> Result<ScoreOutcome, ScorerError> {
-        let mut resources = ScorerResources::default().token_usage(self.token_usage.clone());
+        let mut resources = ResourceUsage::default().token_usage(self.token_usage.clone());
         if let Some(cost_usd) = self.cost_usd {
             resources = resources.cost_usd(cost_usd);
         }

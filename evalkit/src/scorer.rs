@@ -1,13 +1,15 @@
+use std::time::Duration;
 use crate::{Score, ScoreDefinition, ScorerContext, ScorerError, TokenUsage};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
-pub struct ScorerResources {
+pub struct ResourceUsage {
     pub token_usage: TokenUsage,
     pub cost_usd: Option<f64>,
+    pub latency: Option<Duration>,
 }
 
-impl ScorerResources {
+impl ResourceUsage {
     pub fn token_usage(mut self, token_usage: TokenUsage) -> Self {
         self.token_usage = token_usage;
         self
@@ -15,6 +17,11 @@ impl ScorerResources {
 
     pub fn cost_usd(mut self, cost_usd: f64) -> Self {
         self.cost_usd = Some(cost_usd);
+        self
+    }
+
+    pub fn latency(mut self, latency: Duration) -> Self {
+        self.latency = Some(latency);
         self
     }
 
@@ -30,6 +37,12 @@ impl ScorerResources {
             (None, Some(right)) => Some(right),
             (None, None) => None,
         };
+
+        self.latency = match (self.latency, other.latency) {
+            (Some(left), Some(right)) => Some(left + right),
+            (Some(only), None) | (None, Some(only)) => Some(only),
+            (None, None) => None,
+        };
     }
 }
 
@@ -37,18 +50,18 @@ impl ScorerResources {
 #[non_exhaustive]
 pub struct ScoreOutcome {
     pub score: Score,
-    pub resources: ScorerResources,
+    pub resources: ResourceUsage,
 }
 
 impl ScoreOutcome {
     pub fn new(score: Score) -> Self {
         Self {
             score,
-            resources: ScorerResources::default(),
+            resources: ResourceUsage::default(),
         }
     }
 
-    pub fn with_resources(mut self, resources: ScorerResources) -> Self {
+    pub fn with_resources(mut self, resources: ResourceUsage) -> Self {
         self.resources = resources;
         self
     }
@@ -103,7 +116,7 @@ pub trait Scorer<I, O, R = ()>: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScoreOutcome, Scorer, ScorerMetadata};
+    use super::{ResourceUsage, ScoreOutcome, Scorer, ScorerMetadata};
     use crate::{Direction, Score, ScoreDefinition, ScorerContext, ScorerError};
     use std::error::Error;
     use std::fmt::{self, Display, Formatter};
@@ -233,5 +246,26 @@ mod tests {
         let scorer = ContainsScorer;
 
         assert_eq!(scorer.metadata(), ScorerMetadata::default());
+    }
+
+    #[test]
+    fn resource_usage_merges_latency() {
+        use std::time::Duration;
+        let mut a = ResourceUsage::default()
+            .latency(Duration::from_millis(100));
+        let b = ResourceUsage::default()
+            .latency(Duration::from_millis(50));
+        a.merge(&b);
+        assert_eq!(a.latency, Some(Duration::from_millis(150)));
+    }
+
+    #[test]
+    fn resource_usage_merges_with_missing_latency() {
+        use std::time::Duration;
+        let mut a = ResourceUsage::default()
+            .latency(Duration::from_millis(100));
+        let b = ResourceUsage::default();
+        a.merge(&b);
+        assert_eq!(a.latency, Some(Duration::from_millis(100)));
     }
 }

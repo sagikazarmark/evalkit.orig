@@ -126,7 +126,7 @@ pub use sample_shapes::{
 pub use schema::RUN_RESULT_SCHEMA_VERSION;
 pub use score::Score;
 pub use score_definition::{Direction, ScoreDefinition};
-pub use scorer::{ScoreOutcome, Scorer, ScorerMetadata, ScorerResources};
+pub use scorer::{ResourceUsage, ScoreOutcome, Scorer, ScorerMetadata};
 pub use scorer_context::ScorerContext;
 pub use scorer_error::ScorerError;
 pub use scorer_ext::{
@@ -144,8 +144,8 @@ pub mod prelude {
         IgnoreReferenceScorer, MapError, MapScoreScorer, Mapper, NotScorer, OrScorer,
         RUN_RESULT_SCHEMA_VERSION, Run, RunBuildError, RunError, RunMetadata, RunResult, RunStats,
         Sample, SampleBuildError, SampleBuilder, SampleComparison,
-        Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerComparison,
-        ScorerContext, ScorerError, ScorerExt, ScorerMetadata, ScorerResources, ScorerSet,
+        ResourceUsage, Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerComparison,
+        ScorerContext, ScorerError, ScorerExt, ScorerMetadata, ScorerSet,
         ScorerStats, Task, ThenScorer, TimeoutScorer, TokenUsage,
         ToolCall, ToolResult, TrajectorySample, TrajectoryStep, WeightedScorer, compare,
         ignore_reference, read_jsonl, write_jsonl,

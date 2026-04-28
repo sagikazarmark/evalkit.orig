@@ -14,7 +14,7 @@ use evalkit::{
     NotScorer, OrScorer, RUN_RESULT_SCHEMA_VERSION, Run, RunBuildError, RunError, RunMetadata,
     RunResult, RunStats, Sample, SampleBuildError, SampleBuilder, SampleComparison, SampleResult,
     Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerComparison, ScorerContext, ScorerError,
-    ScorerExt, ScorerMetadata, ScorerResources, ScorerSet, ScorerStats, ThenScorer, TimeoutScorer,
+    ResourceUsage, ScorerExt, ScorerMetadata, ScorerSet, ScorerStats, ThenScorer, TimeoutScorer,
     TokenUsage, ToolCall, ToolResult, TrajectorySample, TrajectoryStep, TrialResult,
     WeightedScorer, compare, ignore_reference, read_jsonl, write_jsonl,
 };

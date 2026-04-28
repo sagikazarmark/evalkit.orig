@@ -581,8 +581,8 @@ impl Error for ThenGateNotBinaryError {}
 mod tests {
     use super::ScorerExt;
     use crate::{
-        Direction, Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerContext, ScorerError,
-        ScorerResources, TokenUsage,
+        Direction, ResourceUsage, Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerContext,
+        ScorerError, TokenUsage,
     };
     use std::time::Duration;
     use tokio::time::sleep;
@@ -631,7 +631,7 @@ mod tests {
             _ctx: &ScorerContext<'_, (), ()>,
         ) -> Result<ScoreOutcome, ScorerError> {
             Ok(ScoreOutcome::new(self.score.clone()).with_resources(
-                ScorerResources::default()
+                ResourceUsage::default()
                     .token_usage(TokenUsage {
                         input: self.input_tokens,
                         output: self.output_tokens,

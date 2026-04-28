@@ -2,8 +2,8 @@ use anyllm::{
     ChatProvider, ChatRequest, DynChatProvider, ExtractExt, ProviderIdentity, ReasoningConfig,
 };
 use evalkit::{
-    Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerContext, ScorerError, ScorerMetadata,
-    ScorerResources, TokenUsage,
+    ResourceUsage, Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerContext, ScorerError,
+    ScorerMetadata, TokenUsage,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -1061,12 +1061,12 @@ fn numeric_score(
 fn response_resources(
     response: &anyllm::ChatResponse,
     pricing: Option<&ModelPricing>,
-) -> ScorerResources {
+) -> ResourceUsage {
     let Some(usage) = response.usage.as_ref() else {
-        return ScorerResources::default();
+        return ResourceUsage::default();
     };
 
-    let resources = ScorerResources::default().token_usage(TokenUsage {
+    let resources = ResourceUsage::default().token_usage(TokenUsage {
         input: usage.input_tokens.unwrap_or(0),
         output: usage.output_tokens.unwrap_or(0),
         cache_read: usage.cached_input_tokens.unwrap_or(0),

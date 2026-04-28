@@ -8,9 +8,9 @@
 //! See `docs/root-crate-boundary-audit.md` for the boundary decision.
 
 use evalkit::{
-    OutputSource, OutputSourceError, Dataset, RunMetadata,
+    OutputSource, OutputSourceError, Dataset, ResourceUsage, RunMetadata,
     RunResult, Sample, SampleResult, Score, ScoreDefinition, ScoreOutcome, ScorerContext,
-    ScorerError, ScorerResources, ScorerSet, TrialResult,
+    ScorerError, ScorerSet, TrialResult,
 };
 pub use evalkit::source::current_sample_id;
 use chrono::Utc;
@@ -1314,7 +1314,7 @@ where
     R: Clone + Send + Sync + 'static,
 {
     let mut trials = Vec::with_capacity(state.trial_count);
-    let mut resources = ScorerResources::default();
+    let mut resources = ResourceUsage::default();
 
     for trial_index in 0..state.trial_count {
         let trial = execute_trial_with_state(state, run_id, sample, trial_index, definitions).await;
@@ -1390,20 +1390,20 @@ where
                 }
                 Err(_) => FlattenedTrial {
                     scores: scorer_panic_scores(definitions),
-                    resources: ScorerResources::default(),
+                    resources: ResourceUsage::default(),
                 },
             }
         }
         Ok(Err(err)) => FlattenedTrial {
             scores: source_failure_scores(definitions, err),
-            resources: ScorerResources::default(),
+            resources: ResourceUsage::default(),
         },
         Err(payload) => FlattenedTrial {
             scores: source_failure_scores(
                 definitions,
                 OutputSourceError::Panicked(panic_message(payload)),
             ),
-            resources: ScorerResources::default(),
+            resources: ResourceUsage::default(),
         },
     };
 
@@ -1475,7 +1475,7 @@ where
                 primary,
                 FlattenedTrial {
                     scores: tier_predicate_panic_scores(tier.scorer_set.definitions()),
-                    resources: ScorerResources::default(),
+                    resources: ResourceUsage::default(),
                 },
             );
         }
@@ -1494,7 +1494,7 @@ where
             primary,
             FlattenedTrial {
                 scores: scorer_panic_scores(tier.scorer_set.definitions()),
-                resources: ScorerResources::default(),
+                resources: ResourceUsage::default(),
             },
         ),
     }
@@ -1526,7 +1526,7 @@ where
             primary,
             FlattenedTrial {
                 scores: scorer_panic_scores(&definitions),
-                resources: ScorerResources::default(),
+                resources: ResourceUsage::default(),
             },
         ),
     }
@@ -1534,12 +1534,12 @@ where
 
 struct ExecutedTrial {
     result: TrialResult,
-    resources: ScorerResources,
+    resources: ResourceUsage,
 }
 
 struct FlattenedTrial {
     scores: HashMap<String, Result<Score, ScorerError>>,
-    resources: ScorerResources,
+    resources: ResourceUsage,
 }
 
 trait ErasedOutputSource<I, O>: Send + Sync {
@@ -1572,7 +1572,7 @@ where
 
 fn flatten_scores(results: TrialScores) -> FlattenedTrial {
     let mut scores = HashMap::with_capacity(results.len());
-    let mut resources = ScorerResources::default();
+    let mut resources = ResourceUsage::default();
 
     for (definition, result) in results {
         let validated = match result {

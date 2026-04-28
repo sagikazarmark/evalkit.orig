@@ -1,7 +1,7 @@
 use crate::{
-    OutputSource, OutputSourceError, Dataset, MapError, Mapper, RunMetadata, RunResult, Sample,
-    SampleResult, Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerContext, ScorerError,
-    ScorerResources, ScorerSet, TrialResult,
+    OutputSource, OutputSourceError, Dataset, MapError, Mapper, ResourceUsage, RunMetadata,
+    RunResult, Sample, SampleResult, Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerContext,
+    ScorerError, ScorerSet, TrialResult,
 };
 use chrono::Utc;
 use futures::{FutureExt, StreamExt, stream};
@@ -26,12 +26,12 @@ type OutputSourceFuture<'a, O> = Pin<Box<dyn Future<Output = Result<O, OutputSou
 
 struct ExecutedTrial {
     result: TrialResult,
-    resources: ScorerResources,
+    resources: ResourceUsage,
 }
 
 struct FlattenedTrial {
     scores: HashMap<String, Result<Score, ScorerError>>,
-    resources: ScorerResources,
+    resources: ResourceUsage,
 }
 
 #[derive(Debug)]
@@ -147,7 +147,7 @@ impl<I, O, R> Run<I, O, R> {
 
     async fn execute_sample(&self, run_id: &str, sample: &Sample<I, R>) -> SampleResult {
         let mut trials = Vec::with_capacity(self.trial_count);
-        let mut resources = ScorerResources::default();
+        let mut resources = ResourceUsage::default();
 
         for trial_index in 0..self.trial_count {
             let trial = self.execute_trial(run_id, sample, trial_index).await;
@@ -201,20 +201,20 @@ impl<I, O, R> Run<I, O, R> {
                     Ok(scores) => flatten_scores(scores),
                     Err(_) => FlattenedTrial {
                         scores: scorer_panic_scores(&self.definitions),
-                        resources: ScorerResources::default(),
+                        resources: ResourceUsage::default(),
                     },
                 }
             }
             Ok(Err(err)) => FlattenedTrial {
                 scores: source_failure_scores(&self.definitions, err),
-                resources: ScorerResources::default(),
+                resources: ResourceUsage::default(),
             },
             Err(payload) => FlattenedTrial {
                 scores: source_failure_scores(
                     &self.definitions,
                     OutputSourceError::Panicked(panic_message(payload)),
                 ),
-                resources: ScorerResources::default(),
+                resources: ResourceUsage::default(),
             },
         };
 
@@ -1186,7 +1186,7 @@ async fn execute_targets<I, O, R>(
 
 fn flatten_scores(results: TrialScores) -> FlattenedTrial {
     let mut scores = HashMap::with_capacity(results.len());
-    let mut resources = ScorerResources::default();
+    let mut resources = ResourceUsage::default();
 
     for (definition, result) in results {
         let validated = match result {
