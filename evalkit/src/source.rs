@@ -17,6 +17,21 @@ task_local! {
     static CURRENT_SAMPLE_ID: String;
 }
 
+/// Returns the sample id of the sample currently being processed.
+///
+/// Only set when called from within a `Run::execute()` or executor context.
+/// Not part of the public `evalkit` API — access via `evalkit_runtime::current_sample_id`.
+pub fn current_sample_id() -> Option<String> {
+    CURRENT_SAMPLE_ID.try_with(Clone::clone).ok()
+}
+
+pub async fn with_current_sample_id<Fut>(sample_id: &str, future: Fut) -> Fut::Output
+where
+    Fut: Future,
+{
+    CURRENT_SAMPLE_ID.scope(sample_id.to_string(), future).await
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OutputSnapshot<O> {
     pub label: String,
@@ -65,10 +80,6 @@ impl<O> SourceOutput<O> {
 #[non_exhaustive]
 pub enum OutputSourceError {
     ExecutionFailed(Box<dyn Error + Send + Sync>),
-    TraceNotFound {
-        correlation_id: String,
-        sample_id: String,
-    },
     BackendUnavailable(Box<dyn Error + Send + Sync>),
     Timeout(Duration),
     Panicked(String),
@@ -84,13 +95,6 @@ impl Display for OutputSourceError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::ExecutionFailed(err) => write!(f, "output source execution failed: {err}"),
-            Self::TraceNotFound {
-                correlation_id,
-                sample_id,
-            } => write!(
-                f,
-                "no spans found for correlation_id `{correlation_id}` and sample_id `{sample_id}`"
-            ),
             Self::BackendUnavailable(err) => write!(f, "trace backend unavailable: {err}"),
             Self::Timeout(duration) => write!(f, "output source timed out after {duration:?}"),
             Self::Panicked(message) => write!(f, "output source panicked: {message}"),
@@ -102,7 +106,7 @@ impl Error for OutputSourceError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::ExecutionFailed(err) | Self::BackendUnavailable(err) => Some(err.as_ref()),
-            Self::TraceNotFound { .. } | Self::Timeout(_) | Self::Panicked(_) => None,
+            Self::Timeout(_) | Self::Panicked(_) => None,
         }
     }
 }
@@ -126,17 +130,6 @@ where
     async fn produce(&self, input: &I) -> Result<O, OutputSourceError> {
         self(input).await
     }
-}
-
-pub fn current_sample_id() -> Option<String> {
-    CURRENT_SAMPLE_ID.try_with(Clone::clone).ok()
-}
-
-pub async fn with_current_sample_id<Fut>(sample_id: &str, future: Fut) -> Fut::Output
-where
-    Fut: Future,
-{
-    CURRENT_SAMPLE_ID.scope(sample_id.to_string(), future).await
 }
 
 #[cfg(test)]
@@ -224,18 +217,9 @@ mod tests {
 
     #[test]
     fn output_source_error_value_variants_are_distinct_from_wrapped_failures() {
-        let trace_not_found = OutputSourceError::TraceNotFound {
-            correlation_id: String::from("run-123"),
-            sample_id: String::from("sample-7"),
-        };
         let timeout = OutputSourceError::Timeout(Duration::from_secs(3));
 
-        assert_eq!(
-            trace_not_found.to_string(),
-            "no spans found for correlation_id `run-123` and sample_id `sample-7`"
-        );
         assert_eq!(timeout.to_string(), "output source timed out after 3s");
-        assert!(trace_not_found.source().is_none());
         assert!(timeout.source().is_none());
     }
 

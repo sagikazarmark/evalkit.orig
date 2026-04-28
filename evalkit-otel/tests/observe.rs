@@ -156,11 +156,7 @@ async fn observe_mode_maps_missing_sample_spans_to_trace_not_found() {
             .as_ref()
             .unwrap_err()
             .to_string(),
-        OutputSourceError::TraceNotFound {
-            correlation_id: String::from("run-missing"),
-            sample_id: String::from("sample-missing"),
-        }
-        .to_string()
+        "output source execution failed: no spans found for correlation_id `run-missing` and sample_id `sample-missing`"
     );
 }
 

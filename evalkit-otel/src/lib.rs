@@ -10,7 +10,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use evalkit::{
     OutputSource, OutputSourceError, RunResult, Sample, Score,
 };
-use evalkit_runtime::{ExecutionSink, ExecutorBoxError, SampleSource, current_sample_id};
+use evalkit_runtime::{ExecutionSink, ExecutorBoxError, SampleSource};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -29,7 +29,41 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
+use tokio::task_local;
 use tokio::time::sleep;
+
+#[derive(Debug, Clone)]
+pub struct OtelTraceNotFound {
+    pub correlation_id: String,
+    pub sample_id: String,
+}
+
+impl Display for OtelTraceNotFound {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "no spans found for correlation_id `{}` and sample_id `{}`",
+            self.correlation_id, self.sample_id
+        )
+    }
+}
+
+impl Error for OtelTraceNotFound {}
+
+task_local! {
+    static CURRENT_SAMPLE_ID: String;
+}
+
+pub fn current_sample_id() -> Option<String> {
+    CURRENT_SAMPLE_ID.try_with(Clone::clone).ok()
+}
+
+pub async fn with_current_sample_id<Fut>(sample_id: &str, future: Fut) -> Fut::Output
+where
+    Fut: Future,
+{
+    CURRENT_SAMPLE_ID.scope(sample_id.to_string(), future).await
+}
 
 type FetchSpansFuture<'a> =
     Pin<Box<dyn Future<Output = Result<HashMap<String, Vec<Span>>, TraceBackendError>> + 'a>>;
@@ -150,7 +184,7 @@ impl OtelObserver {
 
 impl<I> OutputSource<I, Vec<Span>> for OtelObserver {
     async fn produce(&self, _input: &I) -> Result<Vec<Span>, OutputSourceError> {
-        let sample_id = current_sample_id().ok_or_else(|| {
+        let sample_id = evalkit_runtime::current_sample_id().ok_or_else(|| {
             OutputSourceError::ExecutionFailed(Box::new(ParseTraceError(String::from(
                 "OtelObserver requires Run to provide the current sample id",
             ))))
@@ -160,10 +194,10 @@ impl<I> OutputSource<I, Vec<Span>> for OtelObserver {
         grouped
             .get(&sample_id)
             .cloned()
-            .ok_or_else(|| OutputSourceError::TraceNotFound {
+            .ok_or_else(|| OutputSourceError::ExecutionFailed(Box::new(OtelTraceNotFound {
                 correlation_id: self.correlation_id.clone(),
                 sample_id,
-            })
+            })))
     }
 
     fn metadata_mode(&self) -> &'static str { "observe" }
@@ -1173,6 +1207,31 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::thread;
+
+    #[test]
+    fn otel_trace_not_found_displays_correlation_and_sample() {
+        let err = OtelTraceNotFound {
+            correlation_id: "run-1".to_string(),
+            sample_id: "s-1".to_string(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "no spans found for correlation_id `run-1` and sample_id `s-1`"
+        );
+    }
+
+    #[test]
+    fn current_sample_id_returns_none_outside_scope() {
+        assert!(current_sample_id().is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn current_sample_id_returns_value_inside_scope() {
+        let result = with_current_sample_id("s-42", async {
+            current_sample_id()
+        }).await;
+        assert_eq!(result.as_deref(), Some("s-42"));
+    }
 
     struct StaticBackend;
 
