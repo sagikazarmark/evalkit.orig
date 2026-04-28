@@ -81,6 +81,7 @@ impl SourceMetadata {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum OutputSourceError {
     ExecutionFailed(Box<dyn Error + Send + Sync>),
     TraceNotFound {
@@ -89,7 +90,13 @@ pub enum OutputSourceError {
     },
     BackendUnavailable(Box<dyn Error + Send + Sync>),
     Timeout(Duration),
-    Panicked,
+    Panicked(String),
+}
+
+impl OutputSourceError {
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Self::BackendUnavailable(_) | Self::Timeout(_))
+    }
 }
 
 impl Display for OutputSourceError {
@@ -105,7 +112,7 @@ impl Display for OutputSourceError {
             ),
             Self::BackendUnavailable(err) => write!(f, "trace backend unavailable: {err}"),
             Self::Timeout(duration) => write!(f, "output source timed out after {duration:?}"),
-            Self::Panicked => write!(f, "output source panicked"),
+            Self::Panicked(message) => write!(f, "output source panicked: {message}"),
         }
     }
 }
@@ -114,7 +121,7 @@ impl Error for OutputSourceError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::ExecutionFailed(err) | Self::BackendUnavailable(err) => Some(err.as_ref()),
-            Self::TraceNotFound { .. } | Self::Timeout(_) | Self::Panicked => None,
+            Self::TraceNotFound { .. } | Self::Timeout(_) | Self::Panicked(_) => None,
         }
     }
 }
@@ -251,5 +258,28 @@ mod tests {
         assert_eq!(timeout.to_string(), "output source timed out after 3s");
         assert!(trace_not_found.source().is_none());
         assert!(timeout.source().is_none());
+    }
+
+    #[test]
+    fn is_retryable_classifies_known_variants() {
+        use std::time::Duration;
+        let backend = OutputSourceError::BackendUnavailable(Box::new(TestError("down")));
+        let timeout = OutputSourceError::Timeout(Duration::from_secs(1));
+        let exec = OutputSourceError::ExecutionFailed(Box::new(TestError("bad")));
+        let panicked = OutputSourceError::Panicked("boom".to_string());
+
+        assert!(backend.is_retryable());
+        assert!(timeout.is_retryable());
+        assert!(!exec.is_retryable());
+        assert!(!panicked.is_retryable());
+    }
+
+    #[test]
+    fn panicked_carries_message() {
+        let err = OutputSourceError::Panicked("agent shim crashed".to_string());
+        assert_eq!(
+            err.to_string(),
+            "output source panicked: agent shim crashed"
+        );
     }
 }

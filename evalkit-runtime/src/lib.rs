@@ -1292,8 +1292,11 @@ where
             scores: source_failure_scores(definitions, err),
             resources: ScorerResources::default(),
         },
-        Err(_) => FlattenedTrial {
-            scores: source_failure_scores(definitions, OutputSourceError::Panicked),
+        Err(payload) => FlattenedTrial {
+            scores: source_failure_scores(
+                definitions,
+                OutputSourceError::Panicked(panic_message(payload)),
+            ),
             resources: ScorerResources::default(),
         },
     };
@@ -1460,6 +1463,16 @@ fn merge_flattened_trials(
     primary.resources.merge(&secondary.resources);
     primary.scores.extend(secondary.scores);
     primary
+}
+
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        return (*s).to_string();
+    }
+    if let Some(s) = payload.downcast_ref::<String>() {
+        return s.clone();
+    }
+    "<non-string panic payload>".to_string()
 }
 
 fn scorer_panic_scores(
