@@ -21,7 +21,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::source::{OutputSource, OutputSourceError, SourceMetadata};
+use crate::source::{OutputSource, OutputSourceError};
 
 type ProduceFn<I, O> = Arc<
     dyn Fn(&I) -> Pin<Box<dyn Future<Output = Result<O, OutputSourceError>> + Send>>
@@ -94,8 +94,8 @@ where
         (self.produce)(input).await
     }
 
-    fn metadata(&self) -> SourceMetadata {
-        SourceMetadata { mode: self.mode }
+    fn metadata_mode(&self) -> &'static str {
+        self.mode
     }
 }
 
@@ -121,6 +121,6 @@ mod tests {
         let task: Task<String, String> = Task::from_fn(|_input: &String| async move {
             Ok(String::from("ok"))
         });
-        assert_eq!(task.metadata().mode, "inline");
+        assert_eq!(task.metadata_mode(), "inline");
     }
 }

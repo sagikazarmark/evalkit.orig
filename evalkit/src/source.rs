@@ -17,18 +17,6 @@ task_local! {
     static CURRENT_SAMPLE_ID: String;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct SourceMetadata {
-    pub mode: &'static str,
-}
-
-impl Default for SourceMetadata {
-    fn default() -> Self {
-        Self { mode: "inline" }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OutputSnapshot<O> {
     pub label: String,
@@ -69,13 +57,6 @@ impl<O> SourceOutput<O> {
 
     pub fn with_snapshot(mut self, snapshot: OutputSnapshot<O>) -> Self {
         self.snapshots.push(snapshot);
-        self
-    }
-}
-
-impl SourceMetadata {
-    pub fn mode(mut self, mode: &'static str) -> Self {
-        self.mode = mode;
         self
     }
 }
@@ -134,9 +115,7 @@ pub trait OutputSource<I, O>: Send + Sync {
         self.produce(input).await.map(SourceOutput::new)
     }
 
-    fn metadata(&self) -> SourceMetadata {
-        SourceMetadata::default()
-    }
+    fn metadata_mode(&self) -> &'static str { "inline" }
 }
 
 impl<I, O, F, Fut> OutputSource<I, O> for F
@@ -281,5 +260,17 @@ mod tests {
             err.to_string(),
             "output source panicked: agent shim crashed"
         );
+    }
+
+    #[test]
+    fn metadata_mode_default_is_inline() {
+        struct Bare;
+        impl OutputSource<String, String> for Bare {
+            async fn produce(&self, _input: &String) -> Result<String, OutputSourceError> {
+                Ok(String::new())
+            }
+        }
+        let bare = Bare;
+        assert_eq!(bare.metadata_mode(), "inline");
     }
 }

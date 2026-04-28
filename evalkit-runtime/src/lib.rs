@@ -771,7 +771,7 @@ where
         S: OutputSource<I, O> + 'static,
         O: 'static,
     {
-        let source_mode = output_source.metadata().mode;
+        let source_mode = output_source.metadata_mode();
         let detected = detect_code_identity_from_current_dir();
 
         Self {

@@ -272,7 +272,7 @@ impl<I, R> RunBuilderWithDataset<I, R> {
         S: OutputSource<I, O> + 'static,
         O: 'static,
     {
-        let source_mode = source.metadata().mode;
+        let source_mode = source.metadata_mode();
 
         RunBuilderConfigured::<I, O, R> {
             dataset: self.dataset,

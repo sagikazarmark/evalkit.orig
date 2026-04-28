@@ -8,7 +8,7 @@
 use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use evalkit::{
-    OutputSource, OutputSourceError, SourceMetadata, RunResult, Sample, Score,
+    OutputSource, OutputSourceError, RunResult, Sample, Score,
 };
 use evalkit_runtime::{ExecutionSink, ExecutorBoxError, SampleSource, current_sample_id};
 use http_body_util::{BodyExt, Full};
@@ -166,9 +166,7 @@ impl<I> OutputSource<I, Vec<Span>> for OtelObserver {
             })
     }
 
-    fn metadata(&self) -> SourceMetadata {
-        SourceMetadata::default().mode("observe")
-    }
+    fn metadata_mode(&self) -> &'static str { "observe" }
 }
 
 pub struct OtelObserverBuilder;
