@@ -86,6 +86,7 @@
 //! ```
 
 pub mod source;
+mod budget;
 mod comparison;
 mod dataset;
 mod eval;
@@ -110,6 +111,7 @@ mod task;
 pub use source::{
     OutputSource, OutputSourceError, ProductionOutput,
 };
+pub use budget::Budget;
 pub use comparison::{
     Change, CompareConfig, Comparison, SampleComparison, ScorerComparison, compare,
 };
@@ -140,7 +142,7 @@ pub use task::Task;
 pub mod prelude {
     pub use crate::{
         OutputSource, OutputSourceError, ProductionOutput,
-        AndScorer, Change, CompareConfig, Comparison, Dataset, Direction, Eval, EvalRun, EvalTask,
+        AndScorer, Budget, Change, CompareConfig, Comparison, Dataset, Direction, Eval, EvalRun, EvalTask,
         IgnoreReferenceScorer, MapError, MapScoreScorer, Mapper, NotScorer, OrScorer,
         RUN_RESULT_SCHEMA_VERSION, Run, RunBuildError, RunError, RunMetadata, RunResult, RunStats,
         Sample, SampleBuildError, SampleBuilder, SampleComparison,
