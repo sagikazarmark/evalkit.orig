@@ -843,10 +843,12 @@ mod tests {
         let output = String::from("answer");
         let reference = String::from("gold");
         let metadata = std::collections::HashMap::from([(String::from("topic"), json!("math"))]);
+        let cancel = tokio_util::sync::CancellationToken::new();
         let ctx = ScorerContext::with_scope(
             "run-1",
             "sample-1",
             2,
+            &cancel,
             &metadata,
             &input,
             &output,

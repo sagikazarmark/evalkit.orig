@@ -31,6 +31,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::{sleep, timeout};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 /// A labelled intermediate output captured during source execution.
@@ -701,6 +702,7 @@ impl<I, R> PartialScoringPlan<I, String, R> for StringPrefixPartialScoring<I, R>
                     ctx.run_id,
                     ctx.sample_id,
                     ctx.trial_index,
+                    ctx.cancel,
                     ctx.metadata,
                     ctx.input,
                     &output,
@@ -762,6 +764,7 @@ impl<I, R> PartialScoringPlan<I, String, R> for StringStreamingPartialScoring<I,
                     ctx.run_id,
                     ctx.sample_id,
                     ctx.trial_index,
+                    ctx.cancel,
                     ctx.metadata,
                     ctx.input,
                     &snapshot.output,
@@ -1358,10 +1361,12 @@ where
     {
         Ok(Ok(mut produced)) => {
             scrub_produced_output(state, &mut produced);
+            let trial_cancel = CancellationToken::new();
             let ctx = ScorerContext::with_scope(
                 run_id,
                 &sample.id,
                 trial_index,
+                &trial_cancel,
                 &sample.metadata,
                 &sample.input,
                 &produced.output,

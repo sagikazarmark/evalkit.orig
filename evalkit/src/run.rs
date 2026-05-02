@@ -3,6 +3,7 @@ use crate::{
     RunMetadata, RunResult, Sample, SampleResult, Score, ScoreDefinition, ScoreOutcome, Scorer,
     ScorerContext, ScorerError, ScorerSet, TrialResult,
 };
+use tokio_util::sync::CancellationToken;
 use chrono::Utc;
 use futures::{FutureExt, StreamExt, stream};
 use serde_json::{Map, Value};
@@ -103,6 +104,7 @@ pub struct Run<I, O, R = ()> {
     code_fingerprint: Option<String>,
     judge_model_pins: Vec<String>,
     source_mode: &'static str,
+    cancel: CancellationToken,
 }
 
 impl Run<(), (), ()> {
@@ -208,6 +210,7 @@ impl<I, O, R> Run<I, O, R> {
                     run_id,
                     sample_id: &sample.id,
                     trial_index,
+                    cancel: &self.cancel,
                     metadata: &sample.metadata,
                     input: &sample.input,
                     output: &output,
@@ -855,6 +858,7 @@ impl<I: 'static, O: 'static, R: 'static, O2: 'static, R2: 'static, OS, RS>
             code_fingerprint: this.code_fingerprint,
             judge_model_pins: this.judge_model_pins,
             source_mode: this.source_mode,
+            cancel: CancellationToken::new(),
         })
     }
 }
@@ -1121,6 +1125,7 @@ where
                 run_id: ctx.run_id,
                 sample_id: ctx.sample_id,
                 trial_index: ctx.trial_index,
+                cancel: ctx.cancel,
                 metadata: ctx.metadata,
                 input: ctx.input,
                 output: mapped_output,

@@ -461,6 +461,7 @@ where
             run_id: ctx.run_id,
             sample_id: ctx.sample_id,
             trial_index: ctx.trial_index,
+            cancel: ctx.cancel,
             metadata: ctx.metadata,
             input: ctx.input,
             output: ctx.output,
