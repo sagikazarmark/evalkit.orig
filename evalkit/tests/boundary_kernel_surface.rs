@@ -8,7 +8,7 @@
 #![allow(unused_imports, dead_code)]
 
 use evalkit::{
-    OutputSource, OutputSourceError,
+    OutputSource, OutputSourceError, ProductionOutput,
     AndScorer, Change, CompareConfig, Comparison, ConversationSample, ConversationTurn, Dataset,
     Direction, Eval, EvalRun, EvalTask, IgnoreReferenceScorer, MapError, MapScoreScorer, Mapper,
     NotScorer, OrScorer, RUN_RESULT_SCHEMA_VERSION, Run, RunBuildError, RunError, RunMetadata,

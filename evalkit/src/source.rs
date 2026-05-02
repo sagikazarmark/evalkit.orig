@@ -4,11 +4,15 @@
 //! Most evals use `Task::from_fn` or a closure (active). To evaluate an already-instrumented
 //! system, use a passive source from an adapter crate (e.g., `evalkit-otel::OtelObserver`).
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::future::Future;
 use std::time::Duration;
 use tokio::task_local;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use crate::TokenUsage;
 
 task_local! {
     static CURRENT_SAMPLE_ID: String;
@@ -81,9 +85,62 @@ where
     }
 }
 
+/// Envelope for output with optional resource tracking.
+///
+/// The richer return shape for `OutputSource::produce`. Carries output plus
+/// optional usage, cost, latency, and a freeform metadata bag.
+/// Chat-completion-shaped fields (cache_hit, stop_reason, model_id) are
+/// intentionally excluded — users put them in metadata; a domain crate
+/// can ship a typed extension later.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ProductionOutput<O> {
+    pub output: O,
+    #[serde(default)]
+    pub usage: Option<TokenUsage>,
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
+    #[serde(default)]
+    pub latency: Option<Duration>,
+    #[serde(default)]
+    pub metadata: HashMap<String, Value>,
+}
+
+impl<O> ProductionOutput<O> {
+    pub fn new(output: O) -> Self {
+        Self {
+            output,
+            usage: None,
+            cost_usd: None,
+            latency: None,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn with_usage(mut self, usage: TokenUsage) -> Self {
+        self.usage = Some(usage);
+        self
+    }
+
+    pub fn with_cost_usd(mut self, cost_usd: f64) -> Self {
+        self.cost_usd = Some(cost_usd);
+        self
+    }
+
+    pub fn with_latency(mut self, latency: Duration) -> Self {
+        self.latency = Some(latency);
+        self
+    }
+
+    pub fn with_metadata(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.metadata.insert(key.into(), value);
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{OutputSource, OutputSourceError};
+    use super::{OutputSource, OutputSourceError, ProductionOutput};
     use std::error::Error;
     use std::fmt::{self, Display, Formatter};
     use std::time::Duration;
@@ -205,5 +262,31 @@ mod tests {
         }
         let bare = Bare;
         assert_eq!(bare.metadata_mode(), "inline");
+    }
+
+    #[test]
+    fn production_output_new_has_no_resources() {
+        let p = ProductionOutput::new("answer".to_string());
+        assert_eq!(p.output, "answer");
+        assert!(p.usage.is_none());
+        assert!(p.cost_usd.is_none());
+        assert!(p.latency.is_none());
+        assert!(p.metadata.is_empty());
+    }
+
+    #[test]
+    fn production_output_builder_sets_fields() {
+        use std::time::Duration;
+        use crate::TokenUsage;
+        let usage = TokenUsage { input: 10, output: 20, cache_read: 0, cache_write: 0 };
+        let p = ProductionOutput::new("x".to_string())
+            .with_usage(usage.clone())
+            .with_cost_usd(0.0125)
+            .with_latency(Duration::from_millis(420))
+            .with_metadata("model_id", serde_json::json!("claude-opus-4-7"));
+        assert_eq!(p.usage, Some(usage));
+        assert_eq!(p.cost_usd, Some(0.0125));
+        assert_eq!(p.latency, Some(Duration::from_millis(420)));
+        assert_eq!(p.metadata.get("model_id"), Some(&serde_json::json!("claude-opus-4-7")));
     }
 }
