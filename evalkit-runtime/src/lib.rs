@@ -1552,7 +1552,7 @@ where
     O: 'static,
 {
     fn produce_boxed<'a>(&'a self, input: &'a I) -> OutputSourceFuture<'a, O> {
-        Box::pin(async move { self.produce(input).await.map(SourceOutput::new) })
+        Box::pin(async move { self.produce(input).await.map(|envelope| SourceOutput::new(envelope.output)) })
     }
 }
 
@@ -2123,8 +2123,8 @@ mod tests {
     struct StreamingEchoSource;
 
     impl OutputSource<String, String> for StreamingEchoSource {
-        async fn produce(&self, input: &String) -> Result<String, OutputSourceError> {
-            Ok(format!("echo::{input}"))
+        async fn produce(&self, input: &String) -> Result<evalkit::ProductionOutput<String>, OutputSourceError> {
+            Ok(evalkit::ProductionOutput::new(format!("echo::{input}")))
         }
     }
 
@@ -2180,7 +2180,7 @@ mod tests {
     }
 
     impl OutputSource<String, String> for DelayedTrackingSource {
-        async fn produce(&self, input: &String) -> Result<String, OutputSourceError> {
+        async fn produce(&self, input: &String) -> Result<evalkit::ProductionOutput<String>, OutputSourceError> {
             let current = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
 
             loop {
@@ -2206,7 +2206,7 @@ mod tests {
             tokio::time::sleep(delay).await;
             self.in_flight.fetch_sub(1, Ordering::SeqCst);
 
-            Ok(format!("echo::{input}"))
+            Ok(evalkit::ProductionOutput::new(format!("echo::{input}")))
         }
     }
 
@@ -2936,8 +2936,8 @@ mod tests {
     async fn snapshot_source_default_returns_output_only() {
         struct Bare;
         impl evalkit::OutputSource<String, String> for Bare {
-            async fn produce(&self, input: &String) -> Result<String, evalkit::OutputSourceError> {
-                Ok(input.clone())
+            async fn produce(&self, input: &String) -> Result<evalkit::ProductionOutput<String>, evalkit::OutputSourceError> {
+                Ok(evalkit::ProductionOutput::new(input.clone()))
             }
         }
         impl SnapshotSource<String, String> for Bare {

@@ -15,9 +15,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use evalkit::{
-    OutputSource, OutputSourceError, Change, CompareConfig, Comparison, Dataset, Run, RunResult,
-    RunStats, Sample, Score, ScoreDefinition, Scorer, ScorerContext, ScorerError, ScorerSet,
-    ScorerStats, compare, read_jsonl, write_jsonl,
+    OutputSource, OutputSourceError, ProductionOutput, Change, CompareConfig, Comparison, Dataset,
+    Run, RunResult, RunStats, Sample, Score, ScoreDefinition, Scorer, ScorerContext, ScorerError,
+    ScorerSet, ScorerStats, compare, read_jsonl, write_jsonl,
 };
 
 // ---------------------------------------------------------------------------
@@ -227,7 +227,7 @@ enum CliOutputSource {
 }
 
 impl OutputSource<String, String> for CliOutputSource {
-    async fn produce(&self, input: &String) -> Result<String, OutputSourceError> {
+    async fn produce(&self, input: &String) -> Result<ProductionOutput<String>, OutputSourceError> {
         match self {
             Self::Http(a) => a.produce(input).await,
             Self::Subprocess(a) => a.produce(input).await,

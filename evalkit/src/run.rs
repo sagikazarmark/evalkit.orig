@@ -1,7 +1,7 @@
 use crate::{
-    OutputSource, OutputSourceError, Dataset, MapError, Mapper, ResourceUsage, RunMetadata,
-    RunResult, Sample, SampleResult, Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerContext,
-    ScorerError, ScorerSet, TrialResult,
+    OutputSource, OutputSourceError, Dataset, MapError, Mapper, ProductionOutput, ResourceUsage,
+    RunMetadata, RunResult, Sample, SampleResult, Score, ScoreDefinition, ScoreOutcome, Scorer,
+    ScorerContext, ScorerError, ScorerSet, TrialResult,
 };
 use chrono::Utc;
 use futures::{FutureExt, StreamExt, stream};
@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 type TrialScores = Vec<(ScoreDefinition, Result<ScoreOutcome, ScorerError>)>;
 type TrialFuture<'a> = Pin<Box<dyn Future<Output = TrialScores> + 'a>>;
-type OutputSourceFuture<'a, O> = Pin<Box<dyn Future<Output = Result<O, OutputSourceError>> + 'a>>;
+type OutputSourceFuture<'a, O> = Pin<Box<dyn Future<Output = Result<ProductionOutput<O>, OutputSourceError>> + 'a>>;
 
 struct ExecutedTrial {
     result: TrialResult,
@@ -237,15 +237,16 @@ impl<I, O, R> Run<I, O, R> {
     }
 
     async fn produce_output_inner(&self, input: &I) -> Result<O, OutputSourceError> {
-        match self.sample_timeout {
+        let envelope = match self.sample_timeout {
             Some(duration) => {
                 match timeout(duration, self.source.produce_boxed(input)).await {
-                    Ok(result) => result,
-                    Err(_) => Err(OutputSourceError::Timeout(duration)),
+                    Ok(result) => result?,
+                    Err(_) => return Err(OutputSourceError::Timeout(duration)),
                 }
             }
-            None => self.source.produce_boxed(input).await,
-        }
+            None => self.source.produce_boxed(input).await?,
+        };
+        Ok(envelope.output)
     }
 }
 

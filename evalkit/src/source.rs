@@ -70,7 +70,7 @@ impl Error for OutputSourceError {
 
 #[allow(async_fn_in_trait)]
 pub trait OutputSource<I, O>: Send + Sync {
-    async fn produce(&self, input: &I) -> Result<O, OutputSourceError>;
+    async fn produce(&self, input: &I) -> Result<ProductionOutput<O>, OutputSourceError>;
 
     fn metadata_mode(&self) -> &'static str { "inline" }
 }
@@ -80,8 +80,8 @@ where
     F: Fn(&I) -> Fut + Send + Sync,
     Fut: Future<Output = Result<O, OutputSourceError>> + Send,
 {
-    async fn produce(&self, input: &I) -> Result<O, OutputSourceError> {
-        self(input).await
+    async fn produce(&self, input: &I) -> Result<ProductionOutput<O>, OutputSourceError> {
+        self(input).await.map(ProductionOutput::new)
     }
 }
 
@@ -159,8 +159,8 @@ mod tests {
     struct PrefixSource;
 
     impl OutputSource<String, String> for PrefixSource {
-        async fn produce(&self, input: &String) -> Result<String, OutputSourceError> {
-            Ok(format!("agent::{input}"))
+        async fn produce(&self, input: &String) -> Result<ProductionOutput<String>, OutputSourceError> {
+            Ok(ProductionOutput::new(format!("agent::{input}")))
         }
     }
 
@@ -173,9 +173,9 @@ mod tests {
         let source = PrefixSource;
         let input = String::from("prompt");
 
-        let output = source.produce(&input).await.unwrap();
+        let result = source.produce(&input).await.unwrap();
 
-        assert_eq!(output, "agent::prompt");
+        assert_eq!(result.output, "agent::prompt");
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -186,9 +186,9 @@ mod tests {
         };
         let input = String::from("question");
 
-        let output = source.produce(&input).await.unwrap();
+        let result = source.produce(&input).await.unwrap();
 
-        assert_eq!(output, "question -> completion");
+        assert_eq!(result.output, "question -> completion");
     }
 
     #[test]
@@ -256,8 +256,8 @@ mod tests {
     fn metadata_mode_default_is_inline() {
         struct Bare;
         impl OutputSource<String, String> for Bare {
-            async fn produce(&self, _input: &String) -> Result<String, OutputSourceError> {
-                Ok(String::new())
+            async fn produce(&self, _input: &String) -> Result<ProductionOutput<String>, OutputSourceError> {
+                Ok(ProductionOutput::new(String::new()))
             }
         }
         let bare = Bare;
@@ -288,5 +288,30 @@ mod tests {
         assert_eq!(p.cost_usd, Some(0.0125));
         assert_eq!(p.latency, Some(Duration::from_millis(420)));
         assert_eq!(p.metadata.get("model_id"), Some(&serde_json::json!("claude-opus-4-7")));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn output_source_returns_production_output() {
+        struct EchoSource;
+        impl OutputSource<String, String> for EchoSource {
+            async fn produce(&self, input: &String) -> Result<ProductionOutput<String>, OutputSourceError> {
+                Ok(ProductionOutput::new(input.clone()).with_cost_usd(0.001))
+            }
+        }
+        let source = EchoSource;
+        let result = source.produce(&"hi".to_string()).await.unwrap();
+        assert_eq!(result.output, "hi");
+        assert_eq!(result.cost_usd, Some(0.001));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn closure_blanket_impl_wraps_bare_output() {
+        let source = |input: &String| {
+            let input = input.clone();
+            async move { Ok::<_, OutputSourceError>(input) }
+        };
+        let result = source.produce(&"hi".to_string()).await.unwrap();
+        assert_eq!(result.output, "hi");
+        assert!(result.usage.is_none());
     }
 }

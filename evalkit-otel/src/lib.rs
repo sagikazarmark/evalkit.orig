@@ -8,7 +8,7 @@
 use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use evalkit::{
-    OutputSource, OutputSourceError, RunResult, Sample, Score,
+    OutputSource, OutputSourceError, ProductionOutput, RunResult, Sample, Score,
 };
 use evalkit_runtime::{ExecutionSink, ExecutorBoxError, SampleSource};
 use http_body_util::{BodyExt, Full};
@@ -167,7 +167,7 @@ impl OtelObserver {
 }
 
 impl<I> OutputSource<I, Vec<Span>> for OtelObserver {
-    async fn produce(&self, _input: &I) -> Result<Vec<Span>, OutputSourceError> {
+    async fn produce(&self, _input: &I) -> Result<ProductionOutput<Vec<Span>>, OutputSourceError> {
         let sample_id = evalkit_runtime::current_sample_id().ok_or_else(|| {
             OutputSourceError::ExecutionFailed(Box::new(ParseTraceError(String::from(
                 "OtelObserver requires Run to provide the current sample id",
@@ -178,6 +178,7 @@ impl<I> OutputSource<I, Vec<Span>> for OtelObserver {
         grouped
             .get(&sample_id)
             .cloned()
+            .map(ProductionOutput::new)
             .ok_or_else(|| OutputSourceError::ExecutionFailed(Box::new(OtelTraceNotFound {
                 correlation_id: self.correlation_id.clone(),
                 sample_id,

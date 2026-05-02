@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::time::Duration;
 
-use evalkit::{OutputSource, OutputSourceError, Score, Scorer, ScorerContext, ScorerError};
+use evalkit::{OutputSource, OutputSourceError, ProductionOutput, Score, Scorer, ScorerContext, ScorerError};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -162,7 +162,7 @@ impl HttpSource {
 }
 
 impl OutputSource<String, String> for HttpSource {
-    async fn produce(&self, input: &String) -> Result<String, OutputSourceError> {
+    async fn produce(&self, input: &String) -> Result<ProductionOutput<String>, OutputSourceError> {
         let body = json!({ &self.input_field: input });
         let response = self
             .client
@@ -177,7 +177,7 @@ impl OutputSource<String, String> for HttpSource {
             .await
             .map_err(|source| OutputSourceError::ExecutionFailed(Box::new(source)))?;
 
-        extract_string_field(&payload, &self.output_field)
+        extract_string_field(&payload, &self.output_field).map(ProductionOutput::new)
     }
 }
 
@@ -372,10 +372,11 @@ impl SubprocessScorer {
 }
 
 impl OutputSource<String, String> for SubprocessSource {
-    async fn produce(&self, input: &String) -> Result<String, OutputSourceError> {
+    async fn produce(&self, input: &String) -> Result<ProductionOutput<String>, OutputSourceError> {
         tokio::time::timeout(self.timeout, self.run(input))
             .await
             .map_err(|_| OutputSourceError::Timeout(self.timeout))?
+            .map(ProductionOutput::new)
     }
 }
 
@@ -755,9 +756,9 @@ mod tests {
             Duration::from_secs(1),
         );
 
-        let output = source.produce(&String::from("2+2")).await.unwrap();
+        let result = source.produce(&String::from("2+2")).await.unwrap();
 
-        assert_eq!(output, "four");
+        assert_eq!(result.output, "four");
     }
 
     #[tokio::test(flavor = "current_thread")]

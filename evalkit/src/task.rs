@@ -21,7 +21,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::source::{OutputSource, OutputSourceError};
+use crate::source::{OutputSource, OutputSourceError, ProductionOutput};
 
 type ProduceFn<I, O> = Arc<
     dyn Fn(&I) -> Pin<Box<dyn Future<Output = Result<O, OutputSourceError>> + Send>>
@@ -90,8 +90,8 @@ where
     I: Send + Sync,
     O: Send + Sync,
 {
-    async fn produce(&self, input: &I) -> Result<O, OutputSourceError> {
-        (self.produce)(input).await
+    async fn produce(&self, input: &I) -> Result<ProductionOutput<O>, OutputSourceError> {
+        (self.produce)(input).await.map(ProductionOutput::new)
     }
 
     fn metadata_mode(&self) -> &'static str {
@@ -112,8 +112,8 @@ mod tests {
         });
 
         let input = String::from("hello");
-        let output = task.produce(&input).await.unwrap();
-        assert_eq!(output, "echo::hello");
+        let result = task.produce(&input).await.unwrap();
+        assert_eq!(result.output, "echo::hello");
     }
 
     #[tokio::test(flavor = "current_thread")]
