@@ -286,3 +286,18 @@ Both are out of scope for the 2.0 cleanup. Tracked for follow-up.
 What we did ship: dropped `OutputSourceError::TraceNotFound` variant and
 moved that error shape to evalkit-otel as `OtelTraceNotFound`, wrapped in
 `OutputSourceError::ExecutionFailed`. The task-local stays in the kernel for now.
+
+## 2026-04-28 — Closure blanket impl: bare output only (Task 9)
+
+For `OutputSource::produce(&self, &I) -> Result<ProductionOutput<O>, _>`,
+we ship one blanket impl on closures: `Fn(&I) -> Future<Output = Result<O, _>>`.
+The runtime wraps the bare result in `ProductionOutput::new`.
+
+Rejected alternatives:
+- A second blanket impl for closures returning `Result<ProductionOutput<O>, _>`
+  conflicts with the bare-output impl by Rust's coherence rules.
+- A marker-trait split adds complexity for a use case that's only marginal —
+  closures wanting full envelope control already have `Task::from_fn` and can
+  promote to a named type (or a future `Task::from_envelope_fn` constructor).
+
+Revisit if a meaningful number of users hit this friction.
