@@ -102,6 +102,7 @@ async fn observe_mode_runs_from_grouped_spans_and_scores_like_inline_mode() {
             .scores
             .get("exact_match")
             .unwrap()
+            .result
             .as_ref()
             .unwrap(),
         &Score::Binary(true)
@@ -153,6 +154,7 @@ async fn observe_mode_maps_missing_sample_spans_to_trace_not_found() {
             .scores
             .get("exact_match")
             .unwrap()
+            .result
             .as_ref()
             .unwrap_err()
             .to_string(),
@@ -192,6 +194,7 @@ async fn observe_mode_uses_collection_timeout_for_backend_fetches() {
             .scores
             .get("exact_match")
             .unwrap()
+            .result
             .as_ref()
             .unwrap_err()
             .to_string(),

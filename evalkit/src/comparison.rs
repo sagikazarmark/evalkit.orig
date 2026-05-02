@@ -231,9 +231,11 @@ fn collect_scores(run: &RunResult, scorer_name: &str) -> CollectedScores {
         let mut sample_bucket = ScoreBucket::default();
 
         for trial in &sample.trials {
-            if let Some(Ok(score)) = trial.scores.get(scorer_name) {
-                collected.aggregate.add_score(score);
-                sample_bucket.add_score(score);
+            if let Some(entry) = trial.scores.get(scorer_name) {
+                if let Ok(score) = &entry.result {
+                    collected.aggregate.add_score(score);
+                    sample_bucket.add_score(score);
+                }
             }
         }
 

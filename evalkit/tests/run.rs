@@ -212,6 +212,7 @@ async fn run_builder_executes_dataset_and_returns_sample_results() {
             .scores
             .get("exact_match")
             .unwrap()
+            .result
             .as_ref()
             .unwrap(),
         &Score::Binary(true)
@@ -221,6 +222,7 @@ async fn run_builder_executes_dataset_and_returns_sample_results() {
             .scores
             .get("exact_match")
             .unwrap()
+            .result
             .as_ref()
             .unwrap(),
         &Score::Binary(true)
@@ -259,6 +261,7 @@ async fn run_accepts_multiple_scorers_and_scorer_sets() {
             .scores
             .get("exact_match")
             .unwrap()
+            .result
             .as_ref()
             .unwrap(),
         &Score::Binary(true)
@@ -268,6 +271,7 @@ async fn run_accepts_multiple_scorers_and_scorer_sets() {
             .scores
             .get("reference_length")
             .unwrap()
+            .result
             .as_ref()
             .unwrap(),
         &Score::Binary(true)
@@ -470,11 +474,11 @@ async fn global_mappers_apply_before_standalone_scorers_and_scorer_sets() {
 
     assert_eq!(scores.len(), 2);
     assert_eq!(
-        scores.get("global_len").unwrap().as_ref().unwrap(),
+        scores.get("global_len").unwrap().result.as_ref().unwrap(),
         &Score::Numeric(4.0)
     );
     assert_eq!(
-        scores.get("reference_length").unwrap().as_ref().unwrap(),
+        scores.get("reference_length").unwrap().result.as_ref().unwrap(),
         &Score::Binary(true)
     );
 }
@@ -542,6 +546,7 @@ async fn build_validates_duplicates_and_execute_validates_scores_and_timeouts() 
             .scores
             .get("nan_score")
             .unwrap()
+            .result
             .as_ref()
             .unwrap_err()
             .to_string(),
@@ -570,6 +575,7 @@ async fn build_validates_duplicates_and_execute_validates_scores_and_timeouts() 
             .scores
             .get("exact_match")
             .unwrap()
+            .result
             .as_ref()
             .unwrap_err()
             .to_string(),
@@ -598,6 +604,7 @@ async fn global_mapper_failures_propagate_to_every_affected_scorer() {
         scores
             .get("len_a")
             .unwrap()
+            .result
             .as_ref()
             .unwrap_err()
             .to_string(),
@@ -607,6 +614,7 @@ async fn global_mapper_failures_propagate_to_every_affected_scorer() {
         scores
             .get("len_b")
             .unwrap()
+            .result
             .as_ref()
             .unwrap_err()
             .to_string(),

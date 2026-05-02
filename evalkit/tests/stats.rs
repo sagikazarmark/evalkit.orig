@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
 use evalkit::{
-    RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, ScorerError, ScorerStats,
-    TrialResult,
+    RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, ScoredEntry, ScorerError,
+    ScorerStats, TrialResult,
 };
 
 fn metadata(score_definitions: Vec<ScoreDefinition>, trial_count: usize) -> RunMetadata {
@@ -28,7 +28,7 @@ fn metadata(score_definitions: Vec<ScoreDefinition>, trial_count: usize) -> RunM
 fn sample(sample_id: &str, trials: Vec<TrialResult>) -> SampleResult {
     let scored_count = trials
         .iter()
-        .filter(|trial| trial.scores.values().any(Result::is_ok))
+        .filter(|trial| trial.scores.values().any(|e| e.result.is_ok()))
         .count();
 
     SampleResult {
@@ -44,9 +44,17 @@ fn sample(sample_id: &str, trials: Vec<TrialResult>) -> SampleResult {
 
 fn trial(score_name: &str, result: Result<Score, ScorerError>, trial_index: usize) -> TrialResult {
     TrialResult {
-        scores: HashMap::from([(score_name.to_owned(), result)]),
+        scores: HashMap::from([(
+            score_name.to_owned(),
+            ScoredEntry {
+                result,
+                reasoning: None,
+                metadata: HashMap::new(),
+            },
+        )]),
         duration: Duration::from_millis(10 + trial_index as u64),
         trial_index,
+        source_metadata: HashMap::new(),
     }
 }
 
@@ -74,33 +82,35 @@ fn run_result_stats_compute_numeric_and_metric_aggregates_with_bootstrap_interva
                 vec![
                     TrialResult {
                         scores: HashMap::from([
-                            ("accuracy".to_owned(), Ok(Score::Numeric(1.0))),
+                            ("accuracy".to_owned(), ScoredEntry { result: Ok(Score::Numeric(1.0)), reasoning: None, metadata: HashMap::new() }),
                             (
                                 "latency".to_owned(),
-                                Ok(Score::Metric {
+                                ScoredEntry { result: Ok(Score::Metric {
                                     name: "latency".to_owned(),
                                     value: 100.0,
                                     unit: Some("ms".to_owned()),
-                                }),
+                                }), reasoning: None, metadata: HashMap::new() },
                             ),
                         ]),
                         duration: Duration::from_millis(10),
                         trial_index: 0,
+                        source_metadata: HashMap::new(),
                     },
                     TrialResult {
                         scores: HashMap::from([
-                            ("accuracy".to_owned(), Ok(Score::Numeric(2.0))),
+                            ("accuracy".to_owned(), ScoredEntry { result: Ok(Score::Numeric(2.0)), reasoning: None, metadata: HashMap::new() }),
                             (
                                 "latency".to_owned(),
-                                Ok(Score::Metric {
+                                ScoredEntry { result: Ok(Score::Metric {
                                     name: "latency".to_owned(),
                                     value: 110.0,
                                     unit: Some("ms".to_owned()),
-                                }),
+                                }), reasoning: None, metadata: HashMap::new() },
                             ),
                         ]),
                         duration: Duration::from_millis(11),
                         trial_index: 1,
+                        source_metadata: HashMap::new(),
                     },
                 ],
             ),
@@ -109,33 +119,35 @@ fn run_result_stats_compute_numeric_and_metric_aggregates_with_bootstrap_interva
                 vec![
                     TrialResult {
                         scores: HashMap::from([
-                            ("accuracy".to_owned(), Ok(Score::Numeric(3.0))),
+                            ("accuracy".to_owned(), ScoredEntry { result: Ok(Score::Numeric(3.0)), reasoning: None, metadata: HashMap::new() }),
                             (
                                 "latency".to_owned(),
-                                Ok(Score::Metric {
+                                ScoredEntry { result: Ok(Score::Metric {
                                     name: "latency".to_owned(),
                                     value: 90.0,
                                     unit: Some("ms".to_owned()),
-                                }),
+                                }), reasoning: None, metadata: HashMap::new() },
                             ),
                         ]),
                         duration: Duration::from_millis(12),
                         trial_index: 0,
+                        source_metadata: HashMap::new(),
                     },
                     TrialResult {
                         scores: HashMap::from([
-                            ("accuracy".to_owned(), Ok(Score::Numeric(4.0))),
+                            ("accuracy".to_owned(), ScoredEntry { result: Ok(Score::Numeric(4.0)), reasoning: None, metadata: HashMap::new() }),
                             (
                                 "latency".to_owned(),
-                                Ok(Score::Metric {
+                                ScoredEntry { result: Ok(Score::Metric {
                                     name: "latency".to_owned(),
                                     value: 95.0,
                                     unit: Some("ms".to_owned()),
-                                }),
+                                }), reasoning: None, metadata: HashMap::new() },
                             ),
                         ]),
                         duration: Duration::from_millis(13),
                         trial_index: 1,
+                        source_metadata: HashMap::new(),
                     },
                 ],
             ),

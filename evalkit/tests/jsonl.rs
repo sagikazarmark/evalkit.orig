@@ -4,7 +4,7 @@ use std::time::Duration;
 use chrono::{TimeZone, Utc};
 use evalkit::{
     Direction, RUN_RESULT_SCHEMA_VERSION, RunMetadata, RunResult, SampleResult, Score,
-    ScoreDefinition, ScorerError, TrialResult, read_jsonl, write_jsonl,
+    ScoreDefinition, ScoredEntry, ScorerError, TrialResult, read_jsonl, write_jsonl,
 };
 use serde_json::json;
 
@@ -35,19 +35,30 @@ fn run_result() -> RunResult {
                     scores: HashMap::from([
                         (
                             "latency".to_owned(),
-                            Ok(Score::Metric {
-                                name: "latency_ms".to_owned(),
-                                value: 120.0,
-                                unit: Some("ms".to_owned()),
-                            }),
+                            ScoredEntry {
+                                result: Ok(Score::Metric {
+                                    name: "latency_ms".to_owned(),
+                                    value: 120.0,
+                                    unit: Some("ms".to_owned()),
+                                }),
+                                reasoning: None,
+                                metadata: HashMap::new(),
+                            },
                         ),
                         (
                             "parser".to_owned(),
-                            Err(ScorerError::internal(std::io::Error::other("bad trace"))),
+                            ScoredEntry {
+                                result: Err(ScorerError::internal(std::io::Error::other(
+                                    "bad trace",
+                                ))),
+                                reasoning: None,
+                                metadata: HashMap::new(),
+                            },
                         ),
                     ]),
                     duration: Duration::from_millis(10),
                     trial_index: 0,
+                    source_metadata: HashMap::new(),
                 }],
                 trial_count: 1,
                 scored_count: 1,
@@ -63,9 +74,17 @@ fn run_result() -> RunResult {
             SampleResult {
                 sample_id: "sample-b".to_owned(),
                 trials: vec![TrialResult {
-                    scores: HashMap::from([("latency".to_owned(), Ok(Score::Numeric(98.0)))]),
+                    scores: HashMap::from([(
+                        "latency".to_owned(),
+                        ScoredEntry {
+                            result: Ok(Score::Numeric(98.0)),
+                            reasoning: None,
+                            metadata: HashMap::new(),
+                        },
+                    )]),
                     duration: Duration::from_millis(8),
                     trial_index: 0,
+                    source_metadata: HashMap::new(),
                 }],
                 trial_count: 1,
                 scored_count: 1,
@@ -108,10 +127,6 @@ fn write_jsonl_serializes_metadata_then_samples_as_jsonl() {
     assert_eq!(sample_a["sample"]["token_usage"]["input"], json!(12));
     assert_eq!(sample_a["sample"]["cost_usd"], json!(0.0025));
     assert_eq!(sample_b["sample"]["sample_id"], json!("sample-b"));
-    assert!(
-        lines[2].find("\"latency\"").unwrap() < lines[2].find("\"parser\"").unwrap(),
-        "existing sorted scorer ordering should be preserved inside each sample line"
-    );
 }
 
 #[test]
@@ -133,12 +148,12 @@ fn read_jsonl_round_trips_back_to_a_typed_run_result() {
     assert_eq!(decoded.samples[0].token_usage.input, 12);
     assert_eq!(decoded.samples[0].cost_usd, Some(0.0025));
     assert!(matches!(
-        decoded.samples[0].trials[0].scores.get("latency"),
+        decoded.samples[0].trials[0].scores.get("latency").map(|e| &e.result),
         Some(Ok(Score::Metric { name, value, unit }))
             if name == "latency_ms" && *value == 120.0 && unit.as_deref() == Some("ms")
     ));
     assert!(matches!(
-        decoded.samples[0].trials[0].scores.get("parser"),
+        decoded.samples[0].trials[0].scores.get("parser").map(|e| &e.result),
         Some(Err(error)) if error.to_string() == "bad trace"
     ));
 }

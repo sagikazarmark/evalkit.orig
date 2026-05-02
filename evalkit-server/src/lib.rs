@@ -1564,11 +1564,11 @@ fn render_review_sample_card(
     );
     html.push_str("<div class=\"score-grid\"><section><h4>Scores</h4><ul>");
     for trial in &row.result_sample.trials {
-        for (name, score) in &trial.scores {
+        for (name, entry) in &trial.scores {
             html.push_str(&format!(
                 "<li><strong>{}</strong>: {}</li>",
                 escape_html(name),
-                escape_html(&format_score(score)),
+                escape_html(&format_score(&entry.result)),
             ));
         }
     }
@@ -1758,11 +1758,11 @@ fn render_adjudication_side(
             result.error_count,
         ));
         for trial in &result.trials {
-            for (name, score) in &trial.scores {
+            for (name, entry) in &trial.scores {
                 html.push_str(&format!(
                     "<li><strong>{}</strong>: {}</li>",
                     escape_html(name),
-                    escape_html(&format_score(score)),
+                    escape_html(&format_score(&entry.result)),
                 ));
             }
         }
@@ -1896,7 +1896,7 @@ fn page_shell(title: &str, body: String) -> String {
 
 fn sample_has_failure(sample: &evalkit::SampleResult) -> bool {
     sample.trials.iter().any(|trial| {
-        trial.scores.values().any(|score| match score {
+        trial.scores.values().any(|entry| match &entry.result {
             Ok(evalkit::Score::Binary(value)) => !value,
             Ok(_) => false,
             Err(_) => true,
@@ -1961,10 +1961,10 @@ fn average_score(run: &RunResult, scorer_name: &str) -> Option<f64> {
 
     for sample in &run.samples {
         for trial in &sample.trials {
-            let Some(score) = trial.scores.get(scorer_name) else {
+            let Some(entry) = trial.scores.get(scorer_name) else {
                 continue;
             };
-            if let Some(value) = score_value(score) {
+            if let Some(value) = score_value(&entry.result) {
                 values.push(value);
             }
         }
@@ -2230,7 +2230,7 @@ mod tests {
     use chrono::{Duration, Utc};
     use evalkit::{
         CompareConfig, Direction, RunMetadata, RunResult, Sample, SampleResult, Score,
-        ScoreDefinition, TrialResult, compare,
+        ScoreDefinition, ScoredEntry, TrialResult, compare,
     };
     use serde_json::json;
     use tempfile::tempdir;
@@ -2266,8 +2266,13 @@ mod tests {
                         duration: std::time::Duration::from_millis(10),
                         scores: std::collections::HashMap::from([(
                             String::from("exact_match"),
-                            Ok(Score::Binary(true)),
+                            ScoredEntry {
+                                result: Ok(Score::Binary(true)),
+                                reasoning: None,
+                                metadata: std::collections::HashMap::new(),
+                            },
                         )]),
+                        source_metadata: std::collections::HashMap::new(),
                     }],
                     token_usage: Default::default(),
                     cost_usd: None,
@@ -2294,11 +2299,19 @@ mod tests {
         }
     }
 
+    fn scored(score: Score) -> ScoredEntry {
+        ScoredEntry {
+            result: Ok(score),
+            reasoning: None,
+            metadata: std::collections::HashMap::new(),
+        }
+    }
+
     fn stored_binary_run_fixture(run_id: &str, sample_id: &str, score: bool) -> StoredRun {
         let mut run = stored_run_fixture(run_id, sample_id);
         run.result.samples[0].trials[0]
             .scores
-            .insert(String::from("exact_match"), Ok(Score::Binary(score)));
+            .insert(String::from("exact_match"), scored(Score::Binary(score)));
         run
     }
 
@@ -2306,7 +2319,7 @@ mod tests {
         let mut run = stored_run_fixture(run_id, "sample-a");
         run.result.samples[0].trials[0]
             .scores
-            .insert(String::from("exact_match"), Ok(Score::Binary(true)));
+            .insert(String::from("exact_match"), scored(Score::Binary(true)));
         run.result.samples.push(SampleResult {
             sample_id: String::from("sample-b"),
             trial_count: 1,
@@ -2317,8 +2330,9 @@ mod tests {
                 duration: std::time::Duration::from_millis(10),
                 scores: std::collections::HashMap::from([(
                     String::from("exact_match"),
-                    Ok(Score::Binary(false)),
+                    scored(Score::Binary(false)),
                 )]),
+                source_metadata: std::collections::HashMap::new(),
             }],
             token_usage: Default::default(),
             cost_usd: None,
@@ -2333,8 +2347,9 @@ mod tests {
                 duration: std::time::Duration::from_millis(10),
                 scores: std::collections::HashMap::from([(
                     String::from("exact_match"),
-                    Ok(Score::Binary(true)),
+                    scored(Score::Binary(true)),
                 )]),
+                source_metadata: std::collections::HashMap::new(),
             }],
             token_usage: Default::default(),
             cost_usd: None,
@@ -2381,10 +2396,10 @@ mod tests {
         let mut run = stored_review_run_fixture(run_id);
         run.result.samples[0].trials[0]
             .scores
-            .insert(String::from("exact_match"), Ok(Score::Binary(false)));
+            .insert(String::from("exact_match"), scored(Score::Binary(false)));
         run.result.samples[1].trials[0]
             .scores
-            .insert(String::from("exact_match"), Ok(Score::Binary(true)));
+            .insert(String::from("exact_match"), scored(Score::Binary(true)));
         run.outputs[0].trials[0].output = json!("baseline answer drifted");
         run.outputs[1].trials[0].output = json!("I cannot help draft that risky email.");
         run.outputs[1].trials[0].snapshots = vec![StoredOutputSnapshot {
@@ -2403,7 +2418,7 @@ mod tests {
         let mut second = stored_run_fixture("run-b", "sample-a");
         second.result.samples[0].trials[0]
             .scores
-            .insert(String::from("exact_match"), Ok(Score::Binary(false)));
+            .insert(String::from("exact_match"), scored(Score::Binary(false)));
 
         store.store_run(&first).unwrap();
         store.store_run(&second).unwrap();

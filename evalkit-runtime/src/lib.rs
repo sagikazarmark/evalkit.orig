@@ -9,8 +9,8 @@
 
 use evalkit::{
     OutputSource, OutputSourceError, Dataset, ResourceUsage, RunMetadata,
-    RunResult, Sample, SampleResult, Score, ScoreDefinition, ScoreOutcome, ScorerContext,
-    ScorerError, ScorerSet, TrialResult,
+    RunResult, Sample, SampleResult, Score, ScoreDefinition, ScoreOutcome, ScoredEntry,
+    ScorerContext, ScorerError, ScorerSet, TrialResult,
 };
 pub use evalkit::source::current_sample_id;
 use chrono::Utc;
@@ -97,7 +97,7 @@ type TrialScores = Vec<(ScoreDefinition, Result<ScoreOutcome, ScorerError>)>;
 type OutputSourceFuture<'a, O> =
     Pin<Box<dyn Future<Output = Result<SourceOutput<O>, OutputSourceError>> + 'a>>;
 type JudgeModelTierPredicate<I, R> =
-    dyn Fn(&Sample<I, R>, &HashMap<String, Result<Score, ScorerError>>) -> bool + Send + Sync;
+    dyn Fn(&Sample<I, R>, &HashMap<String, ScoredEntry>) -> bool + Send + Sync;
 type ShutdownPredicate = dyn Fn(&SampleResult) -> bool + Send + Sync;
 type PartialScoringFuture<'a> = Pin<Box<dyn Future<Output = TrialScores> + 'a>>;
 pub type ExecutorBoxError = Box<dyn Error + Send + Sync>;
@@ -952,7 +952,7 @@ where
 
     pub fn judge_model_tier<P>(mut self, scorer_set: ScorerSet<I, O, R>, predicate: P) -> Self
     where
-        P: Fn(&Sample<I, R>, &HashMap<String, Result<Score, ScorerError>>) -> bool
+        P: Fn(&Sample<I, R>, &HashMap<String, ScoredEntry>) -> bool
             + Send
             + Sync
             + 'static,
@@ -1333,7 +1333,7 @@ where
 
     let scored_count = trials
         .iter()
-        .filter(|trial| trial.scores.values().any(Result::is_ok))
+        .filter(|trial| trial.scores.values().any(|e| e.result.is_ok()))
         .count();
 
     SampleResult {
@@ -1427,6 +1427,7 @@ where
             scores: flattened.scores,
             duration: started.elapsed(),
             trial_index,
+            source_metadata: HashMap::new(),
         },
         resources: flattened.resources,
     }
@@ -1553,7 +1554,7 @@ struct ExecutedTrial {
 }
 
 struct FlattenedTrial {
-    scores: HashMap<String, Result<Score, ScorerError>>,
+    scores: HashMap<String, ScoredEntry>,
     resources: ResourceUsage,
 }
 
@@ -1590,15 +1591,23 @@ fn flatten_scores(results: TrialScores) -> FlattenedTrial {
     let mut resources = ResourceUsage::default();
 
     for (definition, result) in results {
-        let validated = match result {
+        let entry = match result {
             Ok(outcome) => {
                 resources.merge(&outcome.resources);
-                validate_score(outcome.score)
+                ScoredEntry {
+                    result: validate_score(outcome.score),
+                    reasoning: outcome.reasoning,
+                    metadata: outcome.metadata,
+                }
             }
-            Err(err) => Err(err),
+            Err(err) => ScoredEntry {
+                result: Err(err),
+                reasoning: None,
+                metadata: HashMap::new(),
+            },
         };
 
-        scores.insert(definition.name, validated);
+        scores.insert(definition.name, entry);
     }
 
     FlattenedTrial { scores, resources }
@@ -1625,13 +1634,17 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 
 fn scorer_panic_scores(
     definitions: &[ScoreDefinition],
-) -> HashMap<String, Result<Score, ScorerError>> {
+) -> HashMap<String, ScoredEntry> {
     definitions
         .iter()
         .map(|definition| {
             (
                 definition.name.clone(),
-                Err(ScorerError::internal(ScorerPanicError)),
+                ScoredEntry {
+                    result: Err(ScorerError::internal(ScorerPanicError)),
+                    reasoning: None,
+                    metadata: HashMap::new(),
+                },
             )
         })
         .collect()
@@ -1639,13 +1652,17 @@ fn scorer_panic_scores(
 
 fn tier_predicate_panic_scores(
     definitions: &[ScoreDefinition],
-) -> HashMap<String, Result<Score, ScorerError>> {
+) -> HashMap<String, ScoredEntry> {
     definitions
         .iter()
         .map(|definition| {
             (
                 definition.name.clone(),
-                Err(ScorerError::internal(JudgeModelTierPredicatePanicError)),
+                ScoredEntry {
+                    result: Err(ScorerError::internal(JudgeModelTierPredicatePanicError)),
+                    reasoning: None,
+                    metadata: HashMap::new(),
+                },
             )
         })
         .collect()
@@ -1654,7 +1671,7 @@ fn tier_predicate_panic_scores(
 fn source_failure_scores(
     definitions: &[ScoreDefinition],
     err: OutputSourceError,
-) -> HashMap<String, Result<Score, ScorerError>> {
+) -> HashMap<String, ScoredEntry> {
     let shared_err = Arc::new(err);
 
     definitions
@@ -1662,9 +1679,13 @@ fn source_failure_scores(
         .map(|definition| {
             (
                 definition.name.clone(),
-                Err(ScorerError::provider(SharedOutputSourceError(Arc::clone(
-                    &shared_err,
-                )))),
+                ScoredEntry {
+                    result: Err(ScorerError::provider(SharedOutputSourceError(Arc::clone(
+                        &shared_err,
+                    )))),
+                    reasoning: None,
+                    metadata: HashMap::new(),
+                },
             )
         })
         .collect()
@@ -2404,7 +2425,10 @@ mod tests {
             super::NoopSink,
         )
         .judge_model_tier(tier, |_, scores| {
-            matches!(scores.get("cheap_match"), Some(Ok(Score::Binary(false))))
+            matches!(
+                scores.get("cheap_match").map(|e| &e.result),
+                Some(Ok(Score::Binary(false)))
+            )
         });
 
         let result = executor.execute().await.unwrap();
@@ -2423,7 +2447,7 @@ mod tests {
                 .contains_key("tier_review")
         );
         assert!(matches!(
-            result.samples[1].trials[0].scores.get("tier_review"),
+            result.samples[1].trials[0].scores.get("tier_review").map(|e| &e.result),
             Some(Ok(Score::Label(label))) if label == "needs_review"
         ));
     }
@@ -2581,6 +2605,7 @@ mod tests {
             .scores
             .get("prefix_length@partial:char-2")
             .unwrap()
+            .result
             .as_ref()
             .unwrap();
 
@@ -2622,6 +2647,7 @@ mod tests {
                 .scores
                 .get("prefix_length@stream:prefix")
                 .unwrap()
+                .result
                 .as_ref()
                 .unwrap(),
             &Score::Numeric(2.0)
@@ -2631,6 +2657,7 @@ mod tests {
                 .scores
                 .get("prefix_length@stream:mid")
                 .unwrap()
+                .result
                 .as_ref()
                 .unwrap(),
             &Score::Numeric(11.0)
@@ -2708,6 +2735,7 @@ mod tests {
                 .scores
                 .get("redaction_applied")
                 .unwrap()
+                .result
                 .as_ref()
                 .unwrap(),
             &Score::Binary(true)

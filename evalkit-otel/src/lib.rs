@@ -645,7 +645,7 @@ impl OtelResultEmitter {
             let mut events = Vec::new();
 
             for trial in &sample.trials {
-                for (scorer_name, score_result) in &trial.scores {
+                for (scorer_name, entry) in &trial.scores {
                     let mut attributes = HashMap::from([
                         (self.key("scorer_name"), Value::String(scorer_name.clone())),
                         (
@@ -658,7 +658,7 @@ impl OtelResultEmitter {
                         ),
                     ]);
 
-                    match score_result {
+                    match &entry.result {
                         Ok(score) => {
                             attributes.insert(self.key("score"), score_json(score));
                         }
@@ -1186,7 +1186,7 @@ enum OtlpAnyValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evalkit::{Direction, RunMetadata, SampleResult, ScoreDefinition, TrialResult};
+    use evalkit::{Direction, RunMetadata, SampleResult, ScoreDefinition, ScoredEntry, TrialResult};
     use evalkit_runtime::SampleSource;
     use serde_json::json;
     use std::io::{Read, Write};
@@ -1685,16 +1685,25 @@ mod tests {
                 sample_id: String::from("sample-1"),
                 trials: vec![TrialResult {
                     scores: HashMap::from([
-                        (String::from("accuracy"), Ok(Score::Binary(true))),
+                        (String::from("accuracy"), ScoredEntry {
+                            result: Ok(Score::Binary(true)),
+                            reasoning: None,
+                            metadata: HashMap::new(),
+                        }),
                         (
                             String::from("parser"),
-                            Err(evalkit::ScorerError::internal(std::io::Error::other(
-                                "bad output",
-                            ))),
+                            ScoredEntry {
+                                result: Err(evalkit::ScorerError::internal(std::io::Error::other(
+                                    "bad output",
+                                ))),
+                                reasoning: None,
+                                metadata: HashMap::new(),
+                            },
                         ),
                     ]),
                     duration: Duration::from_millis(25),
                     trial_index: 0,
+                    source_metadata: HashMap::new(),
                 }],
                 trial_count: 1,
                 scored_count: 1,

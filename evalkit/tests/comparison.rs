@@ -1,9 +1,11 @@
 use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
+use std::collections::HashMap;
+
 use evalkit::{
     Change, CompareConfig, RunMetadata, RunResult, SampleComparison, SampleResult, Score,
-    ScoreDefinition, TrialResult, compare,
+    ScoreDefinition, ScoredEntry, TrialResult, compare,
 };
 
 fn metadata(
@@ -31,7 +33,7 @@ fn metadata(
 fn sample(sample_id: &str, trials: Vec<TrialResult>) -> SampleResult {
     let scored_count = trials
         .iter()
-        .filter(|trial| trial.scores.values().any(Result::is_ok))
+        .filter(|trial| trial.scores.values().any(|e| e.result.is_ok()))
         .count();
 
     SampleResult {
@@ -49,10 +51,20 @@ fn trial(entries: Vec<(&str, Score)>, trial_index: usize) -> TrialResult {
     TrialResult {
         scores: entries
             .into_iter()
-            .map(|(name, score)| (name.to_owned(), Ok(score)))
+            .map(|(name, score)| {
+                (
+                    name.to_owned(),
+                    ScoredEntry {
+                        result: Ok(score),
+                        reasoning: None,
+                        metadata: HashMap::new(),
+                    },
+                )
+            })
             .collect(),
         duration: Duration::from_millis(10 + trial_index as u64),
         trial_index,
+        source_metadata: HashMap::new(),
     }
 }
 

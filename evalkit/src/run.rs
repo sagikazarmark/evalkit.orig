@@ -1,7 +1,7 @@
 use crate::{
     Budget, OutputSource, OutputSourceError, Dataset, MapError, Mapper, ProductionOutput, ResourceUsage,
-    RunMetadata, RunResult, Sample, SampleResult, Score, ScoreDefinition, ScoreOutcome, Scorer,
-    ScorerContext, ScorerError, ScorerSet, TrialResult,
+    RunMetadata, RunResult, Sample, SampleResult, Score, ScoreDefinition, ScoreOutcome, ScoredEntry,
+    Scorer, ScorerContext, ScorerError, ScorerSet, TrialResult,
 };
 use tokio_util::sync::CancellationToken;
 use chrono::Utc;
@@ -31,7 +31,7 @@ struct ExecutedTrial {
 }
 
 struct FlattenedTrial {
-    scores: HashMap<String, Result<Score, ScorerError>>,
+    scores: HashMap<String, ScoredEntry>,
     resources: ResourceUsage,
     source_metadata: HashMap<String, Value>,
 }
@@ -161,7 +161,7 @@ impl<I, O, R> Run<I, O, R> {
 
         let scored_count = trials
             .iter()
-            .filter(|trial| trial.scores.values().any(Result::is_ok))
+            .filter(|trial| trial.scores.values().any(|e| e.result.is_ok()))
             .count();
 
         SampleResult {
@@ -259,6 +259,7 @@ impl<I, O, R> Run<I, O, R> {
                 scores: flattened.scores,
                 duration: started.elapsed(),
                 trial_index,
+                source_metadata: flattened.source_metadata,
             },
             resources: flattened.resources,
         }
@@ -976,8 +977,8 @@ mod tests {
             .build()
             .unwrap();
         let result = run.execute().await.unwrap();
-        let score = &result.samples[0].trials[0].scores["len"];
-        assert!(matches!(score, Ok(Score::Numeric(v)) if (v - 5.0).abs() < f64::EPSILON));
+        let entry = &result.samples[0].trials[0].scores["len"];
+        assert!(matches!(&entry.result, Ok(Score::Numeric(v)) if (v - 5.0).abs() < f64::EPSILON));
     }
 
     #[test]
@@ -1245,15 +1246,23 @@ fn flatten_scores(results: TrialScores) -> FlattenedTrial {
     let mut resources = ResourceUsage::default();
 
     for (definition, result) in results {
-        let validated = match result {
+        let entry = match result {
             Ok(outcome) => {
                 resources.merge(&outcome.resources);
-                validate_score(outcome.score)
+                ScoredEntry {
+                    result: validate_score(outcome.score),
+                    reasoning: outcome.reasoning,
+                    metadata: outcome.metadata,
+                }
             }
-            Err(err) => Err(err),
+            Err(err) => ScoredEntry {
+                result: Err(err),
+                reasoning: None,
+                metadata: HashMap::new(),
+            },
         };
 
-        scores.insert(definition.name, validated);
+        scores.insert(definition.name, entry);
     }
 
     FlattenedTrial {
@@ -1275,13 +1284,17 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 
 fn scorer_panic_scores(
     definitions: &[ScoreDefinition],
-) -> HashMap<String, Result<Score, ScorerError>> {
+) -> HashMap<String, ScoredEntry> {
     definitions
         .iter()
         .map(|definition| {
             (
                 definition.name.clone(),
-                Err(ScorerError::internal(ScorerPanicError)),
+                ScoredEntry {
+                    result: Err(ScorerError::internal(ScorerPanicError)),
+                    reasoning: None,
+                    metadata: HashMap::new(),
+                },
             )
         })
         .collect()
@@ -1290,7 +1303,7 @@ fn scorer_panic_scores(
 fn source_failure_scores(
     definitions: &[ScoreDefinition],
     err: OutputSourceError,
-) -> HashMap<String, Result<Score, ScorerError>> {
+) -> HashMap<String, ScoredEntry> {
     let shared_err = Arc::new(err);
 
     definitions
@@ -1298,9 +1311,13 @@ fn source_failure_scores(
         .map(|definition| {
             (
                 definition.name.clone(),
-                Err(ScorerError::provider(SharedOutputSourceError(Arc::clone(
-                    &shared_err,
-                )))),
+                ScoredEntry {
+                    result: Err(ScorerError::provider(SharedOutputSourceError(Arc::clone(
+                        &shared_err,
+                    )))),
+                    reasoning: None,
+                    metadata: HashMap::new(),
+                },
             )
         })
         .collect()

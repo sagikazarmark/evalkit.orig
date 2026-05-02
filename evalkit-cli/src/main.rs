@@ -16,8 +16,8 @@ use serde_json::Value;
 
 use evalkit::{
     OutputSource, OutputSourceError, ProductionOutput, Change, CompareConfig, Comparison, Dataset,
-    Run, RunResult, RunStats, Sample, Score, ScoreDefinition, Scorer, ScorerContext, ScorerError,
-    ScorerSet, ScorerStats, compare, read_jsonl, write_jsonl,
+    Run, RunResult, RunStats, Sample, Score, ScoreDefinition, Scorer, ScorerContext,
+    ScorerError, ScorerSet, ScorerStats, compare, read_jsonl, write_jsonl,
 };
 
 // ---------------------------------------------------------------------------
@@ -837,7 +837,7 @@ fn change_counts(scorer: &evalkit::ScorerComparison) -> ChangeCounts {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
-    use evalkit::{RunMetadata, RunResult, SampleResult, TrialResult};
+    use evalkit::{RunMetadata, RunResult, SampleResult, ScoredEntry, TrialResult};
     use std::time::Duration;
     use tempfile::tempdir;
 
@@ -1001,11 +1001,16 @@ mod tests {
                 token_usage: Default::default(),
                 cost_usd: None,
                 trials: vec![TrialResult {
-                    scores: [(String::from("accuracy"), Ok(Score::Numeric(0.5)))]
+                    scores: [(String::from("accuracy"), ScoredEntry {
+                        result: Ok(Score::Numeric(0.5)),
+                        reasoning: None,
+                        metadata: HashMap::new(),
+                    })]
                         .into_iter()
                         .collect(),
                     duration: Duration::from_millis(10),
                     trial_index: 0,
+                    source_metadata: HashMap::new(),
                 }],
             }],
         };
@@ -1034,11 +1039,16 @@ mod tests {
                 token_usage: Default::default(),
                 cost_usd: None,
                 trials: vec![TrialResult {
-                    scores: [(String::from("accuracy"), Ok(Score::Numeric(0.8)))]
+                    scores: [(String::from("accuracy"), ScoredEntry {
+                        result: Ok(Score::Numeric(0.8)),
+                        reasoning: None,
+                        metadata: HashMap::new(),
+                    })]
                         .into_iter()
                         .collect(),
                     duration: Duration::from_millis(11),
                     trial_index: 0,
+                    source_metadata: HashMap::new(),
                 }],
             }],
         };

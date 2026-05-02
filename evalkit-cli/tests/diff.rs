@@ -4,9 +4,11 @@ use std::process::Command;
 use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
+use std::collections::HashMap;
+
 use evalkit::{
-    Comparison, RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, TrialResult,
-    read_jsonl, write_jsonl,
+    Comparison, RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, ScoredEntry,
+    TrialResult, read_jsonl, write_jsonl,
 };
 use tempfile::tempdir;
 
@@ -35,11 +37,16 @@ fn fixture_run(run_id: &str, accuracy: f64) -> RunResult {
             token_usage: Default::default(),
             cost_usd: None,
             trials: vec![TrialResult {
-                scores: [(String::from("accuracy"), Ok(Score::Numeric(accuracy)))]
+                scores: [(String::from("accuracy"), ScoredEntry {
+                    result: Ok(Score::Numeric(accuracy)),
+                    reasoning: None,
+                    metadata: HashMap::new(),
+                })]
                     .into_iter()
                     .collect(),
                 duration: Duration::from_millis(10),
                 trial_index: 0,
+                source_metadata: HashMap::new(),
             }],
         }],
     }

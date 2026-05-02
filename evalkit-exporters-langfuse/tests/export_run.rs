@@ -1,5 +1,5 @@
 use chrono::Utc;
-use evalkit::{RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, TrialResult};
+use evalkit::{RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, ScoredEntry, TrialResult};
 use evalkit_exporters_langfuse::{LangfuseConfig, export_run};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -34,9 +34,17 @@ fn make_result() -> RunResult {
             token_usage: Default::default(),
             cost_usd: None,
             trials: vec![TrialResult {
-                scores: HashMap::from([("exact_match".into(), Ok(Score::Binary(true)))]),
+                scores: HashMap::from([(
+                    "exact_match".into(),
+                    ScoredEntry {
+                        result: Ok(Score::Binary(true)),
+                        reasoning: None,
+                        metadata: HashMap::new(),
+                    },
+                )]),
                 duration: Duration::from_millis(5),
                 trial_index: 0,
+                source_metadata: HashMap::new(),
             }],
         }],
     }

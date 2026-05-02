@@ -120,7 +120,7 @@ pub use eval::{Eval, EvalRun, EvalTask};
 pub use jsonl::{read_jsonl, write_jsonl};
 pub use mapper::{MapError, Mapper};
 pub use run::{Run, RunBuildError, RunError};
-pub use run_result::{RunMetadata, RunResult, SampleResult, TokenUsage, TrialResult};
+pub use run_result::{RunMetadata, RunResult, SampleResult, ScoredEntry, TokenUsage, TrialResult};
 pub use sample::{Sample, SampleBuildError, SampleBuilder};
 pub use sample_shapes::{
     ConversationSample, ConversationTurn, ToolCall, ToolResult, TrajectorySample, TrajectoryStep,
@@ -146,7 +146,7 @@ pub mod prelude {
         IgnoreReferenceScorer, MapError, MapScoreScorer, Mapper, NotScorer, OrScorer,
         RUN_RESULT_SCHEMA_VERSION, Run, RunBuildError, RunError, RunMetadata, RunResult, RunStats,
         Sample, SampleBuildError, SampleBuilder, SampleComparison,
-        ResourceUsage, Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerComparison,
+        ResourceUsage, Score, ScoreDefinition, ScoreOutcome, ScoredEntry, Scorer, ScorerComparison,
         ScorerContext, ScorerError, ScorerExt, ScorerMetadata, ScorerSet,
         ScorerStats, Task, ThenScorer, TimeoutScorer, TokenUsage,
         ToolCall, ToolResult, TrajectorySample, TrajectoryStep, WeightedScorer, compare,

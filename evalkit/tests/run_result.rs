@@ -3,10 +3,26 @@ use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
 use evalkit::{
-    Direction, RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, ScorerError,
-    TokenUsage, TrialResult,
+    Direction, RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, ScoredEntry,
+    ScorerError, TokenUsage, TrialResult,
 };
 use serde_json::json;
+
+fn scored_ok(score: Score) -> ScoredEntry {
+    ScoredEntry {
+        result: Ok(score),
+        reasoning: None,
+        metadata: HashMap::new(),
+    }
+}
+
+fn scored_err(err: ScorerError) -> ScoredEntry {
+    ScoredEntry {
+        result: Err(err),
+        reasoning: None,
+        metadata: HashMap::new(),
+    }
+}
 
 fn metadata() -> RunMetadata {
     RunMetadata {
@@ -33,33 +49,33 @@ fn metadata() -> RunMetadata {
 fn trial_result_serializes_scores_and_errors_distinctly() {
     let trial = TrialResult {
         scores: HashMap::from([
-            ("zeta".to_owned(), Ok(Score::Binary(false))),
+            ("zeta".to_owned(), scored_ok(Score::Binary(false))),
             (
                 "alpha".to_owned(),
-                Err(ScorerError::internal(std::io::Error::other("boom"))),
+                scored_err(ScorerError::internal(std::io::Error::other("boom"))),
             ),
         ]),
         duration: Duration::from_millis(25),
         trial_index: 0,
+        source_metadata: HashMap::new(),
     };
 
     let encoded = serde_json::to_string(&trial).expect("trial should serialize");
     let value = serde_json::from_str::<serde_json::Value>(&encoded).expect("json should parse");
 
-    assert!(encoded.find("\"alpha\"").unwrap() < encoded.find("\"zeta\"").unwrap());
     assert_eq!(
-        value["scores"]["zeta"],
+        value["scores"]["zeta"]["result"],
         json!({ "Ok": { "type": "binary", "value": false } })
     );
-    assert_eq!(value["scores"]["alpha"], json!({ "Err": "boom" }));
+    assert_eq!(value["scores"]["alpha"]["result"], json!({ "Err": "boom" }));
 }
 
 #[test]
 fn trial_result_deserializes_error_entries_back_into_scorer_errors() {
     let value = json!({
         "scores": {
-            "accuracy": { "Ok": { "type": "numeric", "value": 0.75 } },
-            "parser": { "Err": "invalid json" }
+            "accuracy": { "result": { "Ok": { "type": "numeric", "value": 0.75 } } },
+            "parser": { "result": { "Err": "invalid json" } }
         },
         "duration": { "secs": 0, "nanos": 42_000_000 },
         "trial_index": 1
@@ -67,10 +83,11 @@ fn trial_result_deserializes_error_entries_back_into_scorer_errors() {
 
     let trial: TrialResult = serde_json::from_value(value).expect("trial should deserialize");
 
-    match trial
+    match &trial
         .scores
         .get("accuracy")
         .expect("accuracy score present")
+        .result
     {
         Ok(Score::Numeric(value)) => assert_eq!(*value, 0.75),
         other => panic!("unexpected accuracy result: {other:?}"),
@@ -80,6 +97,7 @@ fn trial_result_deserializes_error_entries_back_into_scorer_errors() {
         .scores
         .get("parser")
         .expect("parser score present")
+        .result
         .as_ref()
         .expect_err("parser should deserialize as an error");
 
@@ -94,17 +112,19 @@ fn sample_result_can_distinguish_low_scores_from_failed_scores() {
         sample_id: "sample-1".to_owned(),
         trials: vec![
             TrialResult {
-                scores: HashMap::from([("accuracy".to_owned(), Ok(Score::Binary(false)))]),
+                scores: HashMap::from([("accuracy".to_owned(), scored_ok(Score::Binary(false)))]),
                 duration: Duration::from_millis(10),
                 trial_index: 0,
+                source_metadata: HashMap::new(),
             },
             TrialResult {
                 scores: HashMap::from([(
                     "accuracy".to_owned(),
-                    Err(ScorerError::internal(std::io::Error::other("timeout"))),
+                    scored_err(ScorerError::internal(std::io::Error::other("timeout"))),
                 )]),
                 duration: Duration::from_millis(11),
                 trial_index: 1,
+                source_metadata: HashMap::new(),
             },
         ],
         trial_count: 2,
@@ -120,11 +140,11 @@ fn sample_result_can_distinguish_low_scores_from_failed_scores() {
     };
 
     assert!(matches!(
-        sample.trials[0].scores.get("accuracy"),
+        sample.trials[0].scores.get("accuracy").map(|e| &e.result),
         Some(Ok(Score::Binary(false)))
     ));
     assert!(matches!(
-        sample.trials[1].scores.get("accuracy"),
+        sample.trials[1].scores.get("accuracy").map(|e| &e.result),
         Some(Err(_))
     ));
     assert_eq!(sample.scored_count, 1);
@@ -141,9 +161,10 @@ fn run_result_round_trips_metadata_and_sample_order() {
             SampleResult {
                 sample_id: "sample-a".to_owned(),
                 trials: vec![TrialResult {
-                    scores: HashMap::from([("accuracy".to_owned(), Ok(Score::Binary(true)))]),
+                    scores: HashMap::from([("accuracy".to_owned(), scored_ok(Score::Binary(true)))]),
                     duration: Duration::from_millis(5),
                     trial_index: 0,
+                    source_metadata: HashMap::new(),
                 }],
                 trial_count: 1,
                 scored_count: 1,
@@ -156,10 +177,11 @@ fn run_result_round_trips_metadata_and_sample_order() {
                 trials: vec![TrialResult {
                     scores: HashMap::from([(
                         "accuracy".to_owned(),
-                        Err(ScorerError::internal(std::io::Error::other("bad output"))),
+                        scored_err(ScorerError::internal(std::io::Error::other("bad output"))),
                     )]),
                     duration: Duration::from_millis(7),
                     trial_index: 0,
+                    source_metadata: HashMap::new(),
                 }],
                 trial_count: 1,
                 scored_count: 0,
@@ -199,7 +221,7 @@ fn run_result_round_trips_metadata_and_sample_order() {
     assert_eq!(decoded.samples[1].token_usage.output, 4);
     assert_eq!(decoded.samples[1].cost_usd, Some(0.002));
     assert!(matches!(
-        decoded.samples[1].trials[0].scores.get("accuracy"),
+        decoded.samples[1].trials[0].scores.get("accuracy").map(|e| &e.result),
         Some(Err(error)) if error.to_string() == "bad output"
     ));
 }

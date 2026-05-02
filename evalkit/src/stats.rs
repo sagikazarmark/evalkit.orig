@@ -55,8 +55,8 @@ impl RunResult {
 
         for sample in &self.samples {
             for trial in &sample.trials {
-                for (scorer_name, result) in &trial.scores {
-                    match result {
+                for (scorer_name, entry) in &trial.scores {
+                    match &entry.result {
                         Ok(score) => {
                             accumulators
                                 .entry(scorer_name.clone())

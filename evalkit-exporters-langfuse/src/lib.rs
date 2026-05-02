@@ -105,8 +105,8 @@ fn aggregate_scores(sample: &SampleResult) -> HashMap<String, (f64, String)> {
     let mut buckets: HashMap<String, Vec<f64>> = HashMap::new();
 
     for trial in &sample.trials {
-        for (name, result) in &trial.scores {
-            let Some(value) = score_to_f64(result.as_ref().ok()) else {
+        for (name, entry) in &trial.scores {
+            let Some(value) = score_to_f64(entry.result.as_ref().ok()) else {
                 continue;
             };
 
@@ -144,7 +144,7 @@ fn new_event_id() -> String {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use evalkit::{RunMetadata, RunResult, SampleResult, ScoreDefinition, TrialResult};
+    use evalkit::{RunMetadata, RunResult, SampleResult, ScoreDefinition, ScoredEntry, TrialResult};
     use std::time::Duration;
 
     fn make_result(samples: Vec<(&str, Vec<HashMap<&str, Score>>)>) -> RunResult {
@@ -180,10 +180,15 @@ mod tests {
                         .map(|(i, scores)| TrialResult {
                             scores: scores
                                 .into_iter()
-                                .map(|(key, value)| (key.into(), Ok(value)))
+                                .map(|(key, value)| (key.into(), ScoredEntry {
+                                    result: Ok(value),
+                                    reasoning: None,
+                                    metadata: HashMap::new(),
+                                }))
                                 .collect(),
                             duration: Duration::from_millis(10),
                             trial_index: i,
+                            source_metadata: HashMap::new(),
                         })
                         .collect(),
                 })

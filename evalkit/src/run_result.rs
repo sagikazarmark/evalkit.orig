@@ -4,8 +4,8 @@ use std::fmt::{self, Display, Formatter};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
 
 use crate::{Score, ScoreDefinition, ScorerError};
 
@@ -18,11 +18,22 @@ pub struct TokenUsage {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct ScoredEntry {
+    #[serde(with = "score_result_serde")]
+    pub result: Result<Score, ScorerError>,
+    #[serde(default)]
+    pub reasoning: Option<String>,
+    #[serde(default)]
+    pub metadata: HashMap<String, Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TrialResult {
-    #[serde(with = "score_results_serde")]
-    pub scores: HashMap<String, Result<Score, ScorerError>>,
+    pub scores: HashMap<String, ScoredEntry>,
     pub duration: Duration,
     pub trial_index: usize,
+    #[serde(default)]
+    pub source_metadata: HashMap<String, Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -64,13 +75,42 @@ pub struct RunResult {
     pub samples: Vec<SampleResult>,
 }
 
-mod score_results_serde {
+mod score_result_serde {
     use super::*;
 
     #[derive(Serialize, Deserialize)]
     enum ScoreResultOwned {
         Ok(Score),
         Err(String),
+    }
+
+    pub fn serialize<S>(
+        result: &Result<Score, ScorerError>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let value = match result {
+            Ok(score) => ScoreResultOwned::Ok(score.clone()),
+            Err(err) => ScoreResultOwned::Err(err.to_string()),
+        };
+        value.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> Result<Result<Score, ScorerError>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = ScoreResultOwned::deserialize(deserializer)?;
+        Ok(match raw {
+            ScoreResultOwned::Ok(score) => Ok(score),
+            ScoreResultOwned::Err(message) => {
+                Err(ScorerError::internal(SerializedScorerError(message)))
+            }
+        })
     }
 
     #[derive(Debug)]
@@ -83,51 +123,22 @@ mod score_results_serde {
     }
 
     impl Error for SerializedScorerError {}
+}
 
-    pub fn serialize<S>(
-        scores: &HashMap<String, Result<Score, ScorerError>>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut entries: Vec<_> = scores.iter().collect();
-        entries.sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
+#[cfg(test)]
+mod entry_tests {
+    use super::*;
 
-        let mut map = serializer.serialize_map(Some(entries.len()))?;
-
-        for (name, result) in entries {
-            let value = match result {
-                Ok(score) => ScoreResultOwned::Ok(score.clone()),
-                Err(error) => ScoreResultOwned::Err(error.to_string()),
-            };
-
-            map.serialize_entry(name, &value)?;
-        }
-
-        map.end()
-    }
-
-    pub fn deserialize<'de, D>(
-        deserializer: D,
-    ) -> Result<HashMap<String, Result<Score, ScorerError>>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = HashMap::<String, ScoreResultOwned>::deserialize(deserializer)?;
-
-        Ok(raw
-            .into_iter()
-            .map(|(name, result)| {
-                let value = match result {
-                    ScoreResultOwned::Ok(score) => Ok(score),
-                    ScoreResultOwned::Err(message) => {
-                        Err(ScorerError::internal(SerializedScorerError(message)))
-                    }
-                };
-
-                (name, value)
-            })
-            .collect())
+    #[test]
+    fn scored_entry_serializes_and_deserializes() {
+        use serde_json::json;
+        let entry = ScoredEntry {
+            result: Ok(Score::Binary(true)),
+            reasoning: Some("matches".to_string()),
+            metadata: HashMap::from([("k".to_string(), json!("v"))]),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let round_trip: ScoredEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_trip.reasoning.as_deref(), Some("matches"));
     }
 }

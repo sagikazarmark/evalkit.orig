@@ -255,13 +255,13 @@ mod tests {
                 let mut fs: Vec<_> = ft
                     .scores
                     .iter()
-                    .map(|(name, outcome)| (name.clone(), outcome.as_ref().ok().cloned()))
+                    .map(|(name, entry)| (name.clone(), entry.result.as_ref().ok().cloned()))
                     .collect();
                 fs.sort_by(|(a, _), (b, _)| a.cmp(b));
                 let mut ks: Vec<_> = kt
                     .scores
                     .iter()
-                    .map(|(name, outcome)| (name.clone(), outcome.as_ref().ok().cloned()))
+                    .map(|(name, entry)| (name.clone(), entry.result.as_ref().ok().cloned()))
                     .collect();
                 ks.sort_by(|(a, _), (b, _)| a.cmp(b));
                 assert_eq!(fs, ks);
