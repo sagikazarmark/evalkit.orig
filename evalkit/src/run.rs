@@ -32,6 +32,7 @@ struct ExecutedTrial {
 struct FlattenedTrial {
     scores: HashMap<String, Result<Score, ScorerError>>,
     resources: ResourceUsage,
+    source_metadata: HashMap<String, Value>,
 }
 
 #[derive(Debug)]
@@ -183,7 +184,26 @@ impl<I, O, R> Run<I, O, R> {
             .catch_unwind()
             .await
         {
-            Ok(Ok(output)) => {
+            Ok(Ok(production)) => {
+                let ProductionOutput {
+                    output,
+                    usage,
+                    cost_usd,
+                    latency,
+                    metadata: source_metadata,
+                } = production;
+
+                let mut source_resources = ResourceUsage::default();
+                if let Some(usage) = usage {
+                    source_resources.token_usage = usage;
+                }
+                if let Some(cost) = cost_usd {
+                    source_resources.cost_usd = Some(cost);
+                }
+                if let Some(latency) = latency {
+                    source_resources.latency = Some(latency);
+                }
+
                 let ctx = ScorerContext {
                     run_id,
                     sample_id: &sample.id,
@@ -198,16 +218,23 @@ impl<I, O, R> Run<I, O, R> {
                     .catch_unwind()
                     .await
                 {
-                    Ok(scores) => flatten_scores(scores),
+                    Ok(scores) => {
+                        let mut flattened = flatten_scores(scores);
+                        flattened.resources.merge(&source_resources);
+                        flattened.source_metadata = source_metadata;
+                        flattened
+                    }
                     Err(_) => FlattenedTrial {
                         scores: scorer_panic_scores(&self.definitions),
-                        resources: ResourceUsage::default(),
+                        resources: source_resources,
+                        source_metadata,
                     },
                 }
             }
             Ok(Err(err)) => FlattenedTrial {
                 scores: source_failure_scores(&self.definitions, err),
                 resources: ResourceUsage::default(),
+                source_metadata: HashMap::new(),
             },
             Err(payload) => FlattenedTrial {
                 scores: source_failure_scores(
@@ -215,6 +242,7 @@ impl<I, O, R> Run<I, O, R> {
                     OutputSourceError::Panicked(panic_message(payload)),
                 ),
                 resources: ResourceUsage::default(),
+                source_metadata: HashMap::new(),
             },
         };
 
@@ -228,7 +256,10 @@ impl<I, O, R> Run<I, O, R> {
         }
     }
 
-    async fn produce_output(&self, sample: &Sample<I, R>) -> Result<O, OutputSourceError> {
+    async fn produce_output(
+        &self,
+        sample: &Sample<I, R>,
+    ) -> Result<ProductionOutput<O>, OutputSourceError> {
         crate::source::with_current_sample_id(
             &sample.id,
             self.produce_output_inner(&sample.input),
@@ -236,17 +267,19 @@ impl<I, O, R> Run<I, O, R> {
         .await
     }
 
-    async fn produce_output_inner(&self, input: &I) -> Result<O, OutputSourceError> {
-        let envelope = match self.sample_timeout {
+    async fn produce_output_inner(
+        &self,
+        input: &I,
+    ) -> Result<ProductionOutput<O>, OutputSourceError> {
+        match self.sample_timeout {
             Some(duration) => {
                 match timeout(duration, self.source.produce_boxed(input)).await {
-                    Ok(result) => result?,
-                    Err(_) => return Err(OutputSourceError::Timeout(duration)),
+                    Ok(result) => result,
+                    Err(_) => Err(OutputSourceError::Timeout(duration)),
                 }
             }
-            None => self.source.produce_boxed(input).await?,
-        };
-        Ok(envelope.output)
+            None => self.source.produce_boxed(input).await,
+        }
     }
 }
 
@@ -1201,7 +1234,11 @@ fn flatten_scores(results: TrialScores) -> FlattenedTrial {
         scores.insert(definition.name, validated);
     }
 
-    FlattenedTrial { scores, resources }
+    FlattenedTrial {
+        scores,
+        resources,
+        source_metadata: HashMap::new(),
+    }
 }
 
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
