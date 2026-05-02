@@ -129,7 +129,6 @@ fn score_to_f64(score: Option<&Score>) -> Option<f64> {
     match score? {
         Score::Binary(value) => Some(if *value { 1.0 } else { 0.0 }),
         Score::Numeric(value) => Some(*value),
-        Score::Structured { score, .. } => Some(*score),
         Score::Metric { value, .. } => Some(*value),
         Score::Label(_) => None,
         _ => None,

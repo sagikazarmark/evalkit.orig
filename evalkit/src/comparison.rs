@@ -147,13 +147,12 @@ impl ScoreBucket {
                     Score::Numeric(value) => Self::Numeric(vec![*value]),
                     Score::Binary(value) => Self::Binary(vec![*value]),
                     Score::Label(value) => Self::Label(vec![value.clone()]),
-                    Score::Structured { score, .. } => Self::Numeric(vec![*score]),
                     Score::Metric { value, .. } => Self::Metric(vec![*value]),
+                    _ => Self::Mixed,
                 };
             }
             Self::Numeric(values) => match score {
                 Score::Numeric(value) => values.push(*value),
-                Score::Structured { score, .. } => values.push(*score),
                 _ => *self = Self::Mixed,
             },
             Self::Binary(values) => {

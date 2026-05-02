@@ -485,7 +485,6 @@ where
 fn numeric_value(score: Score) -> Option<f64> {
     match score {
         Score::Numeric(v) => Some(v),
-        Score::Structured { score, .. } => Some(score),
         Score::Metric { value, .. } => Some(value),
         _ => None,
     }

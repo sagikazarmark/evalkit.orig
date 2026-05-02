@@ -1701,9 +1701,6 @@ fn validate_score(score: Score) -> Result<Score, ScorerError> {
         Score::Label(label) if label.is_empty() => {
             Err(invalid_score_error("label scores must not be empty"))
         }
-        Score::Structured { score, .. } if !score.is_finite() => Err(invalid_score_error(
-            "structured scores must have a finite score value (not NaN or infinity)",
-        )),
         Score::Metric { name, .. } if name.is_empty() => Err(invalid_score_error(
             "metric scores must have a non-empty name",
         )),

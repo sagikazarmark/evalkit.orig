@@ -1981,7 +1981,6 @@ fn score_value(score: &Result<evalkit::Score, evalkit::ScorerError>) -> Option<f
     match score {
         Ok(evalkit::Score::Binary(value)) => Some(if *value { 1.0 } else { 0.0 }),
         Ok(evalkit::Score::Numeric(value)) => Some(*value),
-        Ok(evalkit::Score::Structured { score, .. }) => Some(*score),
         Ok(evalkit::Score::Metric { value, .. }) => Some(*value),
         Ok(evalkit::Score::Label(_)) | Ok(_) | Err(_) => None,
     }

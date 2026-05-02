@@ -559,17 +559,15 @@ where
                     }));
                 };
 
-                Ok(ScoreOutcome::new(Score::Structured {
-                    score,
-                    reasoning: String::new(),
-                    metadata: calibrated_label_metadata(
-                        &label,
-                        score,
-                        &self.label_definitions,
-                        Value::Null,
-                    ),
-                })
-                .with_resources(outcome.resources))
+                let cal_meta =
+                    calibrated_label_metadata(&label, score, &self.label_definitions, Value::Null);
+                let mut new_outcome = ScoreOutcome::new(Score::Numeric(score))
+                    .with_metadata("classifier", cal_meta["classifier"].clone())
+                    .with_resources(outcome.resources);
+                if let Some(reasoning) = outcome.reasoning {
+                    new_outcome = new_outcome.with_reasoning(reasoning);
+                }
+                Ok(new_outcome)
             }
             other => Err(ScorerError::invalid_input(
                 CalibratedClassifierTypeMismatchError { score: other },
@@ -611,28 +609,27 @@ where
             }));
         };
 
-        Ok(ScoreOutcome::new(Score::Structured {
-            score,
-            reasoning: extracted.value.reasoning.unwrap_or_default(),
-            metadata: calibrated_label_metadata(
-                &label,
-                score,
-                &self.label_definitions,
-                judge_metadata(
-                    &self.inner.prompt,
-                    &self.inner.provider,
-                    &extracted.response,
-                    self.inner.pricing.as_ref(),
-                    "label",
-                    json!({ "label": label }),
-                    extracted.value.metadata,
-                ),
-            ),
-        })
-        .with_resources(response_resources(
+        let jmeta = judge_metadata(
+            &self.inner.prompt,
+            &self.inner.provider,
             &extracted.response,
             self.inner.pricing.as_ref(),
-        )))
+            "label",
+            json!({ "label": label }),
+            extracted.value.metadata,
+        );
+        let cal_meta = calibrated_label_metadata(&label, score, &self.label_definitions, jmeta);
+        let mut outcome = ScoreOutcome::new(Score::Numeric(score))
+            .with_metadata("classifier", cal_meta["classifier"].clone())
+            .with_metadata("judge", cal_meta["judge"].clone())
+            .with_resources(response_resources(
+                &extracted.response,
+                self.inner.pricing.as_ref(),
+            ));
+        if let Some(reasoning) = extracted.value.reasoning {
+            outcome = outcome.with_reasoning(reasoning);
+        }
+        Ok(outcome)
     }
 
     fn definition(&self) -> ScoreDefinition {
@@ -678,9 +675,14 @@ where
             true,
         );
 
-        if let Score::Structured { metadata, .. } = &mut outcome.score {
-            merge_g_eval_plan_metadata(metadata, &self.criteria, &steps);
-        }
+        outcome = outcome.with_metadata(
+            "g_eval",
+            json!({
+                "criteria": &self.criteria,
+                "generated_steps": &steps,
+                "mode": "multi_pass",
+            }),
+        );
 
         let planner_resources = response_resources(&planned.response, self.planner.pricing.as_ref());
         outcome.resources.merge(&planner_resources);
@@ -825,7 +827,7 @@ impl LlmJudge {
         self
     }
 
-    /// Returns `Score::Structured` with reasoning for numeric and binary outputs.
+    /// Attaches reasoning to the `ScoreOutcome` for numeric, binary, and label outputs.
     pub fn capture_reasoning(mut self, capture_reasoning: bool) -> Self {
         self.capture_reasoning = capture_reasoning;
         self
@@ -909,12 +911,6 @@ where
         &self,
         ctx: &ScorerContext<'_, I, O, R>,
     ) -> Result<ScoreOutcome, ScorerError> {
-        if self.capture_reasoning && self.output == LlmJudgeOutput::Label {
-            return Err(ScorerError::invalid_input(
-                LlmJudgeConfigurationError::LabelReasoningCaptureUnsupported,
-            ));
-        }
-
         let request = self.request(ctx)?;
 
         match self.output {
@@ -948,11 +944,15 @@ where
                 let extracted = self
                     .extract_with_retry::<LabelJudgeResponse>(&request)
                     .await?;
-                Ok(
-                    ScoreOutcome::new(Score::Label(extracted.value.label)).with_resources(
-                        response_resources(&extracted.response, self.pricing.as_ref()),
-                    ),
-                )
+                let resources = response_resources(&extracted.response, self.pricing.as_ref());
+                let mut outcome =
+                    ScoreOutcome::new(Score::Label(extracted.value.label)).with_resources(resources);
+                if self.capture_reasoning {
+                    if let Some(reasoning) = extracted.value.reasoning {
+                        outcome = outcome.with_reasoning(reasoning);
+                    }
+                }
+                Ok(outcome)
             }
         }
     }
@@ -1009,20 +1009,22 @@ fn binary_score(
     let resources = response_resources(response, pricing);
 
     if capture_reasoning {
-        ScoreOutcome::new(Score::Structured {
-            score: if result.score { 1.0 } else { 0.0 },
-            reasoning: result.reasoning.unwrap_or_default(),
-            metadata: judge_metadata(
-                prompt,
-                provider,
-                response,
-                pricing,
-                "binary",
-                json!({ "binary": result.score }),
-                result.metadata,
-            ),
-        })
-        .with_resources(resources)
+        ScoreOutcome::new(Score::Binary(result.score))
+            .with_reasoning(result.reasoning.unwrap_or_default())
+            .with_metadata(
+                "judge",
+                judge_metadata(
+                    prompt,
+                    provider,
+                    response,
+                    pricing,
+                    "binary",
+                    json!({ "binary": result.score }),
+                    result.metadata,
+                )["judge"]
+                    .clone(),
+            )
+            .with_resources(resources)
     } else {
         ScoreOutcome::new(Score::Binary(result.score)).with_resources(resources)
     }
@@ -1039,20 +1041,22 @@ fn numeric_score(
     let resources = response_resources(response, pricing);
 
     if capture_reasoning {
-        ScoreOutcome::new(Score::Structured {
-            score: result.score,
-            reasoning: result.reasoning.unwrap_or_default(),
-            metadata: judge_metadata(
-                prompt,
-                provider,
-                response,
-                pricing,
-                "numeric",
-                json!({ "score": result.score }),
-                result.metadata,
-            ),
-        })
-        .with_resources(resources)
+        ScoreOutcome::new(Score::Numeric(result.score))
+            .with_reasoning(result.reasoning.unwrap_or_default())
+            .with_metadata(
+                "judge",
+                judge_metadata(
+                    prompt,
+                    provider,
+                    response,
+                    pricing,
+                    "numeric",
+                    json!({ "score": result.score }),
+                    result.metadata,
+                )["judge"]
+                    .clone(),
+            )
+            .with_resources(resources)
     } else {
         ScoreOutcome::new(Score::Numeric(result.score)).with_resources(resources)
     }
@@ -1208,22 +1212,6 @@ impl Error for PromptRenderError {
     }
 }
 
-#[derive(Debug)]
-enum LlmJudgeConfigurationError {
-    LabelReasoningCaptureUnsupported,
-}
-
-impl Display for LlmJudgeConfigurationError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::LabelReasoningCaptureUnsupported => f.write_str(
-                "label judges cannot capture reasoning because Score::Structured requires a numeric score",
-            ),
-        }
-    }
-}
-
-impl Error for LlmJudgeConfigurationError {}
 
 /// Construction errors for higher-level LLM judge wrappers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1483,22 +1471,6 @@ fn normalize_generated_steps(
         .collect())
 }
 
-fn merge_g_eval_plan_metadata(metadata: &mut Value, criteria: &[String], steps: &[String]) {
-    let Some(root) = metadata.as_object_mut() else {
-        *metadata = json!({});
-        merge_g_eval_plan_metadata(metadata, criteria, steps);
-        return;
-    };
-
-    root.insert(
-        String::from("g_eval"),
-        json!({
-            "criteria": criteria,
-            "generated_steps": steps,
-            "mode": "multi_pass",
-        }),
-    );
-}
 
 #[cfg(test)]
 mod tests {
@@ -1556,25 +1528,14 @@ mod tests {
 
         let outcome = scorer.score_with_resources(&ctx).await.unwrap();
 
-        match outcome.score {
-            Score::Structured {
-                score,
-                reasoning,
-                metadata,
-            } => {
-                assert_eq!(score, 0.75);
-                assert_eq!(reasoning, "Grounded overall.");
-                assert_eq!(metadata["judge"]["provider"], "mock");
-                assert_eq!(metadata["judge"]["output_kind"], "numeric");
-                assert_eq!(metadata["judge"]["response_id"], "resp_1");
-                assert_eq!(metadata["judge"]["usage"]["input_tokens"], 12);
-                assert_eq!(
-                    metadata["judge"]["result_metadata"]["rubric"],
-                    "faithfulness"
-                );
-            }
-            other => panic!("expected structured score, got {other:?}"),
-        }
+        assert_eq!(outcome.score, Score::Numeric(0.75));
+        assert_eq!(outcome.reasoning.as_deref(), Some("Grounded overall."));
+        let judge = &outcome.metadata["judge"];
+        assert_eq!(judge["provider"], "mock");
+        assert_eq!(judge["output_kind"], "numeric");
+        assert_eq!(judge["response_id"], "resp_1");
+        assert_eq!(judge["usage"]["input_tokens"], 12);
+        assert_eq!(judge["result_metadata"]["rubric"], "faithfulness");
 
         assert_eq!(outcome.resources.token_usage.input, 12);
         assert_eq!(outcome.resources.token_usage.output, 4);
@@ -1656,8 +1617,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn llm_judge_rejects_label_reasoning_capture() {
-        let provider = MockProvider::with_text(r#"{"label":"pass"}"#)
+    async fn llm_judge_label_with_reasoning_capture_attaches_reasoning() {
+        let provider = MockProvider::with_text(r#"{"label":"pass","reasoning":"output looks good"}"#)
             .with_supported_chat_capabilities([ChatCapability::StructuredOutput]);
 
         let scorer = llm_judge(
@@ -1672,13 +1633,10 @@ mod tests {
         let output = "answer".to_string();
         let ctx: ScorerContext<'_, String, String> = ScorerContext::new(&input, &output, None);
 
-        let err = scorer.score(&ctx).await.unwrap_err();
+        let outcome = scorer.score_with_resources(&ctx).await.unwrap();
 
-        assert!(matches!(err, evalkit::ScorerError::InvalidInput(_)));
-        assert!(
-            err.to_string()
-                .contains("label judges cannot capture reasoning")
-        );
+        assert_eq!(outcome.score, Score::Label("pass".to_string()));
+        assert_eq!(outcome.reasoning.as_deref(), Some("output looks good"));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1793,26 +1751,18 @@ mod tests {
         let reference = "gold".to_string();
         let ctx = ScorerContext::new(&input, &output, Some(&reference));
 
-        let score = scorer.score(&ctx).await.unwrap();
+        let outcome = scorer.score_with_resources(&ctx).await.unwrap();
 
-        match score {
-            Score::Structured {
-                score,
-                reasoning,
-                metadata,
-            } => {
-                assert_eq!(score, 0.0);
-                assert!(reasoning.is_empty());
-                assert_eq!(metadata["classifier"]["label"], "reject");
-                assert_eq!(metadata["classifier"]["score"], 0.0);
-                assert_eq!(
-                    metadata["classifier"]["labels"][1]["description"],
-                    "Use when the answer is wrong or unsupported."
-                );
-                assert_eq!(metadata["classifier"]["labels"][1]["metadata"]["severity"], "high");
-            }
-            other => panic!("expected structured score, got {other:?}"),
-        }
+        assert_eq!(outcome.score, Score::Numeric(0.0));
+        assert!(outcome.reasoning.is_none());
+        let classifier = &outcome.metadata["classifier"];
+        assert_eq!(classifier["label"], "reject");
+        assert_eq!(classifier["score"], 0.0);
+        assert_eq!(
+            classifier["labels"][1]["description"],
+            "Use when the answer is wrong or unsupported."
+        );
+        assert_eq!(classifier["labels"][1]["metadata"]["severity"], "high");
 
         assert_eq!(scorer.definition.name, "llm_classifier_calibrated");
     }
@@ -1838,24 +1788,19 @@ mod tests {
         let reference = "gold".to_string();
         let ctx = ScorerContext::new(&input, &output, Some(&reference));
 
-        let score = scorer.score(&ctx).await.unwrap();
+        let outcome = scorer.score_with_resources(&ctx).await.unwrap();
 
-        match score {
-            Score::Structured {
-                score,
-                reasoning,
-                metadata,
-            } => {
-                assert_eq!(score, 0.9);
-                assert_eq!(reasoning, "The answer is correct and grounded.");
-                assert_eq!(metadata["judge"]["result_metadata"]["method"], "g_eval");
-                assert_eq!(
-                    metadata["judge"]["result_metadata"]["criteria"],
-                    serde_json::json!(["correctness", "groundedness"])
-                );
-            }
-            other => panic!("expected structured score, got {other:?}"),
-        }
+        assert_eq!(outcome.score, Score::Numeric(0.9));
+        assert_eq!(
+            outcome.reasoning.as_deref(),
+            Some("The answer is correct and grounded.")
+        );
+        let judge = &outcome.metadata["judge"];
+        assert_eq!(judge["result_metadata"]["method"], "g_eval");
+        assert_eq!(
+            judge["result_metadata"]["criteria"],
+            serde_json::json!(["correctness", "groundedness"])
+        );
 
         let request = provider.last_request().unwrap();
         let user = request.messages[0].as_user().unwrap();
@@ -1932,27 +1877,21 @@ mod tests {
         let reference = "gold".to_string();
         let ctx = ScorerContext::new(&input, &output, Some(&reference));
 
-        let score = scorer.score(&ctx).await.unwrap();
+        let outcome = scorer.score_with_resources(&ctx).await.unwrap();
 
-        match score {
-            Score::Structured {
-                score,
-                reasoning,
-                metadata,
-            } => {
-                assert_eq!(score, 0.8);
-                assert_eq!(reasoning, "The answer is mostly correct.");
-                assert_eq!(metadata["g_eval"]["mode"], "multi_pass");
-                assert_eq!(
-                    metadata["g_eval"]["generated_steps"],
-                    serde_json::json!([
-                        "Check correctness against the reference.",
-                        "Penalize unsupported claims."
-                    ])
-                );
-            }
-            other => panic!("expected structured score, got {other:?}"),
-        }
+        assert_eq!(outcome.score, Score::Numeric(0.8));
+        assert_eq!(
+            outcome.reasoning.as_deref(),
+            Some("The answer is mostly correct.")
+        );
+        assert_eq!(outcome.metadata["g_eval"]["mode"], "multi_pass");
+        assert_eq!(
+            outcome.metadata["g_eval"]["generated_steps"],
+            serde_json::json!([
+                "Check correctness against the reference.",
+                "Penalize unsupported claims."
+            ])
+        );
 
         assert_eq!(provider.call_count(), 2);
         let requests = provider.requests();
