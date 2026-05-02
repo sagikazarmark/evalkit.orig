@@ -8,6 +8,8 @@ use crate::{RunResult, Score};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunStats {
     pub scorer_stats: HashMap<String, ScorerStats>,
+    #[serde(default)]
+    pub mixed_variant_scorers: Vec<String>,
     pub total_samples: usize,
     pub trials_per_sample: usize,
     pub total_trials_executed: usize,
@@ -73,17 +75,26 @@ impl RunResult {
             }
         }
 
-        let scorer_stats = accumulators
-            .into_iter()
-            .filter_map(|(name, accumulator)| {
-                accumulator
-                    .finish(confidence_level)
-                    .map(|stats| (name, stats))
-            })
-            .collect();
+        let (scorer_stats, mut mixed_variant_scorers) = {
+            let mut clean = HashMap::new();
+            let mut mixed = Vec::new();
+            for (name, accumulator) in accumulators {
+                match accumulator {
+                    ScorerAccumulator::Mixed => mixed.push(name),
+                    other => {
+                        if let Some(stats) = other.finish(confidence_level) {
+                            clean.insert(name, stats);
+                        }
+                    }
+                }
+            }
+            (clean, mixed)
+        };
+        mixed_variant_scorers.sort();
 
         RunStats {
             scorer_stats,
+            mixed_variant_scorers,
             total_samples: self.samples.len(),
             trials_per_sample: self.metadata.trial_count,
             total_trials_executed: self.samples.len() * self.metadata.trial_count,
@@ -165,6 +176,13 @@ impl RunStats {
             };
 
             lines.push(line);
+        }
+
+        if !self.mixed_variant_scorers.is_empty() {
+            lines.push(format!(
+                "mixed-variant scorers (dropped from stats): {}",
+                self.mixed_variant_scorers.join(", ")
+            ));
         }
 
         lines.join("\n")
@@ -500,5 +518,90 @@ impl BootstrapRng {
 
     fn next_index(&mut self, upper_bound: usize) -> usize {
         (self.next_u64() % upper_bound as u64) as usize
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        ResourceUsage, RunMetadata, RunResult, SampleResult, ScoredEntry, TokenUsage, TrialResult,
+    };
+    use chrono::Utc;
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    #[test]
+    fn mixed_variant_scorers_are_surfaced() {
+        let metadata = RunMetadata {
+            run_id: "r1".to_string(),
+            seed: None,
+            dataset_fingerprint: String::new(),
+            scorer_fingerprint: String::new(),
+            code_commit: None,
+            code_fingerprint: None,
+            judge_model_pins: vec![],
+            started_at: Utc::now(),
+            completed_at: Utc::now(),
+            duration: Duration::ZERO,
+            trial_count: 2,
+            score_definitions: vec![],
+            source_mode: "inline".to_string(),
+        };
+
+        // Two trials with different Score variants for the same scorer
+        let trials = vec![
+            TrialResult {
+                scores: HashMap::from([(
+                    "flaky".to_string(),
+                    ScoredEntry {
+                        result: Ok(Score::Numeric(0.5)),
+                        reasoning: None,
+                        metadata: HashMap::new(),
+                    },
+                )]),
+                duration: Duration::ZERO,
+                trial_index: 0,
+                source_metadata: HashMap::new(),
+            },
+            TrialResult {
+                scores: HashMap::from([(
+                    "flaky".to_string(),
+                    ScoredEntry {
+                        result: Ok(Score::Binary(true)),
+                        reasoning: None,
+                        metadata: HashMap::new(),
+                    },
+                )]),
+                duration: Duration::ZERO,
+                trial_index: 1,
+                source_metadata: HashMap::new(),
+            },
+        ];
+
+        let result = RunResult {
+            metadata,
+            samples: vec![SampleResult {
+                sample_id: "s1".to_string(),
+                trials,
+                trial_count: 2,
+                scored_count: 2,
+                error_count: 0,
+                token_usage: TokenUsage::default(),
+                cost_usd: None,
+                source_resources: ResourceUsage::default(),
+                scorer_resources: ResourceUsage::default(),
+            }],
+        };
+
+        let stats = result.stats();
+        assert!(
+            stats.mixed_variant_scorers.contains(&"flaky".to_string()),
+            "expected 'flaky' in mixed_variant_scorers"
+        );
+        assert!(
+            !stats.scorer_stats.contains_key("flaky"),
+            "expected 'flaky' absent from scorer_stats"
+        );
     }
 }
