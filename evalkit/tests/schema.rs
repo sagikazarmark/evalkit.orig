@@ -4,7 +4,7 @@ use serde_json::json;
 #[test]
 fn run_log_schema_matches_the_published_document() {
     let published: serde_json::Value =
-        serde_json::from_str(include_str!("../../docs/schema/run-log-v2.schema.json"))
+        serde_json::from_str(include_str!("../../docs/schema/run-log-v3.schema.json"))
             .expect("published schema must be valid JSON");
 
     assert_eq!(schema::run_log_schema(), published);
@@ -14,7 +14,7 @@ fn run_log_schema_matches_the_published_document() {
 fn run_log_schema_uses_the_current_schema_version() {
     let schema = schema::run_log_schema();
 
-    assert_eq!(RUN_RESULT_SCHEMA_VERSION, "2");
+    assert_eq!(RUN_RESULT_SCHEMA_VERSION, "3");
     assert_eq!(
         schema["$defs"]["HeaderRecord"]["properties"]["schema_version"]["const"],
         json!(RUN_RESULT_SCHEMA_VERSION)

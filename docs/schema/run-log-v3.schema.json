@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://evalkit.dev/schema/run-log-v2.schema.json",
-  "title": "evalkit Run Log v2",
-  "description": "Schema catalog for evalkit JSONL run-log records and the aggregated RunResult structure.",
+  "$id": "https://evalkit.dev/schema/run-log-v3.schema.json",
+  "title": "evalkit Run Log v3",
+  "description": "Schema catalog for evalkit JSONL run-log records and the aggregated RunResult structure. v3 schema document is partially synchronized; the schema_version const is bumped but the full TrialResult/SampleResult/Score shape updates (ProductionOutput, ScoredEntry, source_resources/scorer_resources split) are pending Task 30.",
   "$comment": "Validate individual JSONL lines against the root schema. Validate an aggregated in-memory run result against #/$defs/RunResult.",
   "oneOf": [
     {
@@ -460,7 +460,7 @@
           "const": "header"
         },
         "schema_version": {
-          "const": "2"
+          "const": "3"
         }
       }
     },
