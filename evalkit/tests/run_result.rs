@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
 use evalkit::{
-    Direction, RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, ScoredEntry,
-    ScorerError, TokenUsage, TrialResult,
+    Direction, ResourceUsage, RunMetadata, RunResult, SampleResult, Score, ScoreDefinition,
+    ScoredEntry, ScorerError, TokenUsage, TrialResult,
 };
 use serde_json::json;
 
@@ -137,6 +137,8 @@ fn sample_result_can_distinguish_low_scores_from_failed_scores() {
             cache_write: 1,
         },
         cost_usd: Some(0.01),
+        source_resources: ResourceUsage::default(),
+        scorer_resources: ResourceUsage::default(),
     };
 
     assert!(matches!(
@@ -171,6 +173,8 @@ fn run_result_round_trips_metadata_and_sample_order() {
                 error_count: 0,
                 token_usage: Default::default(),
                 cost_usd: None,
+                source_resources: ResourceUsage::default(),
+                scorer_resources: ResourceUsage::default(),
             },
             SampleResult {
                 sample_id: "sample-b".to_owned(),
@@ -193,6 +197,8 @@ fn run_result_round_trips_metadata_and_sample_order() {
                     cache_write: 0,
                 },
                 cost_usd: Some(0.002),
+                source_resources: ResourceUsage::default(),
+                scorer_resources: ResourceUsage::default(),
             },
         ],
     };

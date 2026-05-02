@@ -837,7 +837,7 @@ fn change_counts(scorer: &evalkit::ScorerComparison) -> ChangeCounts {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
-    use evalkit::{RunMetadata, RunResult, SampleResult, ScoredEntry, TrialResult};
+    use evalkit::{ResourceUsage, RunMetadata, RunResult, SampleResult, ScoredEntry, TrialResult};
     use std::time::Duration;
     use tempfile::tempdir;
 
@@ -1000,6 +1000,8 @@ mod tests {
                 error_count: 0,
                 token_usage: Default::default(),
                 cost_usd: None,
+                source_resources: ResourceUsage::default(),
+                scorer_resources: ResourceUsage::default(),
                 trials: vec![TrialResult {
                     scores: [(String::from("accuracy"), ScoredEntry {
                         result: Ok(Score::Numeric(0.5)),
@@ -1038,6 +1040,8 @@ mod tests {
                 error_count: 0,
                 token_usage: Default::default(),
                 cost_usd: None,
+                source_resources: ResourceUsage::default(),
+                scorer_resources: ResourceUsage::default(),
                 trials: vec![TrialResult {
                     scores: [(String::from("accuracy"), ScoredEntry {
                         result: Ok(Score::Numeric(0.8)),

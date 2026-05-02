@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::time::Duration;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use crate::{Score, ScoreDefinition, ScorerContext, ScorerError, TokenUsage};
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ResourceUsage {
     pub token_usage: TokenUsage,

@@ -1,5 +1,5 @@
 use chrono::Utc;
-use evalkit::{RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, ScoredEntry, TrialResult};
+use evalkit::{ResourceUsage, RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, ScoredEntry, TrialResult};
 use evalkit_exporters_langfuse::{LangfuseConfig, export_run};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -33,6 +33,8 @@ fn make_result() -> RunResult {
             error_count: 0,
             token_usage: Default::default(),
             cost_usd: None,
+            source_resources: ResourceUsage::default(),
+            scorer_resources: ResourceUsage::default(),
             trials: vec![TrialResult {
                 scores: HashMap::from([(
                     "exact_match".into(),

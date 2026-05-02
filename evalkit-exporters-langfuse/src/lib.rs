@@ -144,7 +144,7 @@ fn new_event_id() -> String {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use evalkit::{RunMetadata, RunResult, SampleResult, ScoreDefinition, ScoredEntry, TrialResult};
+    use evalkit::{ResourceUsage, RunMetadata, RunResult, SampleResult, ScoreDefinition, ScoredEntry, TrialResult};
     use std::time::Duration;
 
     fn make_result(samples: Vec<(&str, Vec<HashMap<&str, Score>>)>) -> RunResult {
@@ -174,6 +174,8 @@ mod tests {
                     error_count: 0,
                     token_usage: Default::default(),
                     cost_usd: None,
+                    source_resources: ResourceUsage::default(),
+                    scorer_resources: ResourceUsage::default(),
                     trials: trials
                         .into_iter()
                         .enumerate()

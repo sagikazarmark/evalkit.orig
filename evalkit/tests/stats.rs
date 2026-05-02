@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
 use evalkit::{
-    RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, ScoredEntry, ScorerError,
-    ScorerStats, TrialResult,
+    ResourceUsage, RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, ScoredEntry,
+    ScorerError, ScorerStats, TrialResult,
 };
 
 fn metadata(score_definitions: Vec<ScoreDefinition>, trial_count: usize) -> RunMetadata {
@@ -38,6 +38,8 @@ fn sample(sample_id: &str, trials: Vec<TrialResult>) -> SampleResult {
         error_count: trials.len() - scored_count,
         token_usage: Default::default(),
         cost_usd: None,
+        source_resources: ResourceUsage::default(),
+        scorer_resources: ResourceUsage::default(),
         trials,
     }
 }

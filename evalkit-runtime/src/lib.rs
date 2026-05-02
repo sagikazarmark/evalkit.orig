@@ -1344,6 +1344,8 @@ where
         trials,
         token_usage: resources.token_usage,
         cost_usd: resources.cost_usd,
+        source_resources: ResourceUsage::default(),
+        scorer_resources: ResourceUsage::default(),
     }
 }
 

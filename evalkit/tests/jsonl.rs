@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
 use evalkit::{
-    Direction, RUN_RESULT_SCHEMA_VERSION, RunMetadata, RunResult, SampleResult, Score,
-    ScoreDefinition, ScoredEntry, ScorerError, TrialResult, read_jsonl, write_jsonl,
+    Direction, ResourceUsage, RUN_RESULT_SCHEMA_VERSION, RunMetadata, RunResult, SampleResult,
+    Score, ScoreDefinition, ScoredEntry, ScorerError, TrialResult, read_jsonl, write_jsonl,
 };
 use serde_json::json;
 
@@ -70,6 +70,8 @@ fn run_result() -> RunResult {
                     cache_write: 0,
                 },
                 cost_usd: Some(0.0025),
+                source_resources: ResourceUsage::default(),
+                scorer_resources: ResourceUsage::default(),
             },
             SampleResult {
                 sample_id: "sample-b".to_owned(),
@@ -91,6 +93,8 @@ fn run_result() -> RunResult {
                 error_count: 0,
                 token_usage: Default::default(),
                 cost_usd: None,
+                source_resources: ResourceUsage::default(),
+                scorer_resources: ResourceUsage::default(),
             },
         ],
     }

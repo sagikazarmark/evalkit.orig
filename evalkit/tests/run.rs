@@ -1,7 +1,7 @@
 use evalkit::{
-    OutputSourceError, Direction, MapError, ResourceUsage, Run, RunBuildError, Sample, Score,
-    ScoreDefinition, ScoreOutcome, Scorer, ScorerContext, ScorerError, ScorerMetadata, ScorerSet,
-    TokenUsage,
+    OutputSource, OutputSourceError, Direction, MapError, ProductionOutput, ResourceUsage, Run,
+    RunBuildError, Sample, Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerContext, ScorerError,
+    ScorerMetadata, ScorerSet, TokenUsage,
 };
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -326,7 +326,6 @@ async fn run_aggregates_resource_usage_into_sample_results() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn source_metadata_reaches_trial_result() {
-    use evalkit::{OutputSource, ProductionOutput};
     use serde_json::json;
 
     struct EnvelopeSource;
@@ -651,5 +650,42 @@ async fn global_mapper_failures_propagate_to_every_affected_scorer() {
             .unwrap_err()
             .to_string(),
         "map failed"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn sample_result_splits_source_and_scorer_resources() {
+    struct CostSource;
+    impl OutputSource<String, String> for CostSource {
+        async fn produce(
+            &self,
+            input: &String,
+        ) -> Result<ProductionOutput<String>, OutputSourceError> {
+            Ok(ProductionOutput::new(input.clone()).with_cost_usd(0.001))
+        }
+    }
+
+    let sample = Sample::builder("prompt".to_string()).id("s1").build().unwrap();
+    let run = Run::builder()
+        .dataset(vec![sample])
+        .source(CostSource)
+        .scorer(ResourceReportingScorer {
+            name: "judge",
+            score: Score::Binary(true),
+            token_usage: TokenUsage::default(),
+            cost_usd: Some(0.002),
+        })
+        .build()
+        .unwrap();
+
+    let result = run.execute().await.unwrap();
+    let sample = &result.samples[0];
+
+    assert_eq!(sample.source_resources.cost_usd, Some(0.001));
+    assert_eq!(sample.scorer_resources.cost_usd, Some(0.002));
+    assert!(
+        (sample.cost_usd.unwrap() - 0.003).abs() < 1e-10,
+        "combined cost should be 0.003, got {:?}",
+        sample.cost_usd
     );
 }

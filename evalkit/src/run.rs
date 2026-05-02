@@ -27,7 +27,8 @@ type OutputSourceFuture<'a, O> = Pin<Box<dyn Future<Output = Result<ProductionOu
 
 struct ExecutedTrial {
     result: TrialResult,
-    resources: ResourceUsage,
+    scorer_resources: ResourceUsage,
+    source_resources: ResourceUsage,
 }
 
 struct FlattenedTrial {
@@ -151,11 +152,13 @@ impl<I, O, R> Run<I, O, R> {
 
     async fn execute_sample(&self, run_id: &str, sample: &Sample<I, R>) -> SampleResult {
         let mut trials = Vec::with_capacity(self.trial_count);
-        let mut resources = ResourceUsage::default();
+        let mut scorer_resources = ResourceUsage::default();
+        let mut source_resources = ResourceUsage::default();
 
         for trial_index in 0..self.trial_count {
             let trial = self.execute_trial(run_id, sample, trial_index).await;
-            resources.merge(&trial.resources);
+            scorer_resources.merge(&trial.scorer_resources);
+            source_resources.merge(&trial.source_resources);
             trials.push(trial.result);
         }
 
@@ -164,14 +167,19 @@ impl<I, O, R> Run<I, O, R> {
             .filter(|trial| trial.scores.values().any(|e| e.result.is_ok()))
             .count();
 
+        let mut combined = source_resources.clone();
+        combined.merge(&scorer_resources);
+
         SampleResult {
             sample_id: sample.id.clone(),
             trial_count: self.trial_count,
             error_count: self.trial_count - scored_count,
             scored_count,
             trials,
-            token_usage: resources.token_usage,
-            cost_usd: resources.cost_usd,
+            token_usage: combined.token_usage,
+            cost_usd: combined.cost_usd,
+            source_resources,
+            scorer_resources,
         }
     }
 
@@ -183,7 +191,7 @@ impl<I, O, R> Run<I, O, R> {
     ) -> ExecutedTrial {
         let started = Instant::now();
 
-        let flattened = match AssertUnwindSafe(self.produce_output(sample))
+        match AssertUnwindSafe(self.produce_output(sample))
             .catch_unwind()
             .await
         {
@@ -228,40 +236,53 @@ impl<I, O, R> Run<I, O, R> {
                 {
                     Ok(scores) => {
                         let mut flattened = flatten_scores(scores);
-                        flattened.resources.merge(&source_resources);
                         flattened.source_metadata = source_metadata;
-                        flattened
+                        ExecutedTrial {
+                            result: TrialResult {
+                                scores: flattened.scores,
+                                duration: started.elapsed(),
+                                trial_index,
+                                source_metadata: flattened.source_metadata,
+                            },
+                            scorer_resources: flattened.resources,
+                            source_resources,
+                        }
                     }
-                    Err(_) => FlattenedTrial {
-                        scores: scorer_panic_scores(&self.definitions),
-                        resources: source_resources,
-                        source_metadata,
+                    Err(_) => ExecutedTrial {
+                        result: TrialResult {
+                            scores: scorer_panic_scores(&self.definitions),
+                            duration: started.elapsed(),
+                            trial_index,
+                            source_metadata,
+                        },
+                        scorer_resources: ResourceUsage::default(),
+                        source_resources,
                     },
                 }
             }
-            Ok(Err(err)) => FlattenedTrial {
-                scores: source_failure_scores(&self.definitions, err),
-                resources: ResourceUsage::default(),
-                source_metadata: HashMap::new(),
+            Ok(Err(err)) => ExecutedTrial {
+                result: TrialResult {
+                    scores: source_failure_scores(&self.definitions, err),
+                    duration: started.elapsed(),
+                    trial_index,
+                    source_metadata: HashMap::new(),
+                },
+                scorer_resources: ResourceUsage::default(),
+                source_resources: ResourceUsage::default(),
             },
-            Err(payload) => FlattenedTrial {
-                scores: source_failure_scores(
-                    &self.definitions,
-                    OutputSourceError::Panicked(panic_message(payload)),
-                ),
-                resources: ResourceUsage::default(),
-                source_metadata: HashMap::new(),
+            Err(payload) => ExecutedTrial {
+                result: TrialResult {
+                    scores: source_failure_scores(
+                        &self.definitions,
+                        OutputSourceError::Panicked(panic_message(payload)),
+                    ),
+                    duration: started.elapsed(),
+                    trial_index,
+                    source_metadata: HashMap::new(),
+                },
+                scorer_resources: ResourceUsage::default(),
+                source_resources: ResourceUsage::default(),
             },
-        };
-
-        ExecutedTrial {
-            result: TrialResult {
-                scores: flattened.scores,
-                duration: started.elapsed(),
-                trial_index,
-                source_metadata: flattened.source_metadata,
-            },
-            resources: flattened.resources,
         }
     }
 

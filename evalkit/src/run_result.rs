@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
-use crate::{Score, ScoreDefinition, ScorerError};
+use crate::{ResourceUsage, Score, ScoreDefinition, ScorerError};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenUsage {
@@ -47,6 +47,10 @@ pub struct SampleResult {
     pub token_usage: TokenUsage,
     #[serde(default)]
     pub cost_usd: Option<f64>,
+    #[serde(default)]
+    pub source_resources: ResourceUsage,
+    #[serde(default)]
+    pub scorer_resources: ResourceUsage,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -123,6 +127,27 @@ mod score_result_serde {
     }
 
     impl Error for SerializedScorerError {}
+}
+
+#[cfg(test)]
+mod sample_result_tests {
+    use super::*;
+
+    #[test]
+    fn sample_result_default_resources_are_zero() {
+        let sr = SampleResult {
+            sample_id: "s1".to_string(),
+            trials: vec![],
+            trial_count: 0,
+            scored_count: 0,
+            error_count: 0,
+            token_usage: TokenUsage::default(),
+            cost_usd: None,
+            source_resources: ResourceUsage::default(),
+            scorer_resources: ResourceUsage::default(),
+        };
+        assert_eq!(sr.source_resources, ResourceUsage::default());
+    }
 }
 
 #[cfg(test)]

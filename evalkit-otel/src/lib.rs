@@ -1186,7 +1186,7 @@ enum OtlpAnyValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evalkit::{Direction, RunMetadata, SampleResult, ScoreDefinition, ScoredEntry, TrialResult};
+    use evalkit::{Direction, ResourceUsage, RunMetadata, SampleResult, ScoreDefinition, ScoredEntry, TrialResult};
     use evalkit_runtime::SampleSource;
     use serde_json::json;
     use std::io::{Read, Write};
@@ -1710,6 +1710,8 @@ mod tests {
                 error_count: 1,
                 token_usage: Default::default(),
                 cost_usd: Some(0.002),
+                source_resources: ResourceUsage::default(),
+                scorer_resources: ResourceUsage::default(),
             }],
         }
     }

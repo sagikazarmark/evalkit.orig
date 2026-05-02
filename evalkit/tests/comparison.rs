@@ -4,8 +4,8 @@ use chrono::{TimeZone, Utc};
 use std::collections::HashMap;
 
 use evalkit::{
-    Change, CompareConfig, RunMetadata, RunResult, SampleComparison, SampleResult, Score,
-    ScoreDefinition, ScoredEntry, TrialResult, compare,
+    Change, CompareConfig, ResourceUsage, RunMetadata, RunResult, SampleComparison, SampleResult,
+    Score, ScoreDefinition, ScoredEntry, TrialResult, compare,
 };
 
 fn metadata(
@@ -43,6 +43,8 @@ fn sample(sample_id: &str, trials: Vec<TrialResult>) -> SampleResult {
         error_count: trials.len() - scored_count,
         token_usage: Default::default(),
         cost_usd: None,
+        source_resources: ResourceUsage::default(),
+        scorer_resources: ResourceUsage::default(),
         trials,
     }
 }

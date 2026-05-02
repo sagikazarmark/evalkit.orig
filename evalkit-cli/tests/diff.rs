@@ -7,8 +7,8 @@ use chrono::{TimeZone, Utc};
 use std::collections::HashMap;
 
 use evalkit::{
-    Comparison, RunMetadata, RunResult, SampleResult, Score, ScoreDefinition, ScoredEntry,
-    TrialResult, read_jsonl, write_jsonl,
+    Comparison, ResourceUsage, RunMetadata, RunResult, SampleResult, Score, ScoreDefinition,
+    ScoredEntry, TrialResult, read_jsonl, write_jsonl,
 };
 use tempfile::tempdir;
 
@@ -36,6 +36,8 @@ fn fixture_run(run_id: &str, accuracy: f64) -> RunResult {
             error_count: 0,
             token_usage: Default::default(),
             cost_usd: None,
+            source_resources: ResourceUsage::default(),
+            scorer_resources: ResourceUsage::default(),
             trials: vec![TrialResult {
                 scores: [(String::from("accuracy"), ScoredEntry {
                     result: Ok(Score::Numeric(accuracy)),

@@ -2229,8 +2229,8 @@ mod tests {
     };
     use chrono::{Duration, Utc};
     use evalkit::{
-        CompareConfig, Direction, RunMetadata, RunResult, Sample, SampleResult, Score,
-        ScoreDefinition, ScoredEntry, TrialResult, compare,
+        CompareConfig, Direction, ResourceUsage, RunMetadata, RunResult, Sample, SampleResult,
+        Score, ScoreDefinition, ScoredEntry, TrialResult, compare,
     };
     use serde_json::json;
     use tempfile::tempdir;
@@ -2276,6 +2276,8 @@ mod tests {
                     }],
                     token_usage: Default::default(),
                     cost_usd: None,
+                    source_resources: ResourceUsage::default(),
+                    scorer_resources: ResourceUsage::default(),
                 }],
             },
             samples: vec![
@@ -2336,6 +2338,8 @@ mod tests {
             }],
             token_usage: Default::default(),
             cost_usd: None,
+            source_resources: ResourceUsage::default(),
+            scorer_resources: ResourceUsage::default(),
         });
         run.result.samples.push(SampleResult {
             sample_id: String::from("sample-c"),
@@ -2353,6 +2357,8 @@ mod tests {
             }],
             token_usage: Default::default(),
             cost_usd: None,
+            source_resources: ResourceUsage::default(),
+            scorer_resources: ResourceUsage::default(),
         });
         run.samples.push(
             Sample::builder(json!({ "prompt": "draft a risky email" }))
