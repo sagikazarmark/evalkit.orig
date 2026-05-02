@@ -186,7 +186,6 @@ impl ScorerAccumulator {
             Score::Binary(_) => Self::Binary(BinaryAccumulator::default()),
             Score::Label(_) => Self::Label(LabelAccumulator::default()),
             Score::Metric { .. } => Self::Metric(NumericAccumulator::default()),
-            _ => Self::Mixed,
         };
 
         accumulator.add_score(sample_id, score);
