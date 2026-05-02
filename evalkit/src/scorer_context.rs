@@ -3,17 +3,26 @@ use std::sync::OnceLock;
 
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
+use crate::{Budget, Score};
 
 #[non_exhaustive]
 pub struct ScorerContext<'a, I, O, R = ()> {
     pub run_id: &'a str,
     pub sample_id: &'a str,
     pub trial_index: usize,
+    pub seed: Option<u64>,
     pub cancel: &'a CancellationToken,
+    pub budget: Option<&'a Budget>,
+    pub previous_scores: &'a HashMap<String, Score>,
     pub metadata: &'a HashMap<String, Value>,
     pub input: &'a I,
     pub output: &'a O,
     pub reference: Option<&'a R>,
+}
+
+fn empty_previous_scores() -> &'static HashMap<String, Score> {
+    static EMPTY: OnceLock<HashMap<String, Score>> = OnceLock::new();
+    EMPTY.get_or_init(HashMap::new)
 }
 
 impl<'a, I, O, R> ScorerContext<'a, I, O, R> {
@@ -22,7 +31,10 @@ impl<'a, I, O, R> ScorerContext<'a, I, O, R> {
             run_id: "",
             sample_id: "",
             trial_index: 0,
+            seed: None,
             cancel: default_cancel(),
+            budget: None,
+            previous_scores: empty_previous_scores(),
             metadata: empty_metadata(),
             input,
             output,
@@ -34,21 +46,18 @@ impl<'a, I, O, R> ScorerContext<'a, I, O, R> {
         run_id: &'a str,
         sample_id: &'a str,
         trial_index: usize,
+        seed: Option<u64>,
         cancel: &'a CancellationToken,
+        budget: Option<&'a Budget>,
+        previous_scores: &'a HashMap<String, Score>,
         metadata: &'a HashMap<String, Value>,
         input: &'a I,
         output: &'a O,
         reference: Option<&'a R>,
     ) -> Self {
         Self {
-            run_id,
-            sample_id,
-            trial_index,
-            cancel,
-            metadata,
-            input,
-            output,
-            reference,
+            run_id, sample_id, trial_index, seed, cancel, budget,
+            previous_scores, metadata, input, output, reference,
         }
     }
 }
@@ -125,8 +134,9 @@ mod tests {
         let output = String::from("answer");
         let metadata = HashMap::from([("topic".to_string(), serde_json::json!("math"))]);
         let cancel = CancellationToken::new();
+        let previous = HashMap::new();
         let ctx: ScorerContext<'_, String, String> =
-            ScorerContext::with_scope("run-1", "sample-1", 2, &cancel, &metadata, &input, &output, None);
+            ScorerContext::with_scope("run-1", "sample-1", 2, None, &cancel, None, &previous, &metadata, &input, &output, None);
 
         assert_eq!(ctx.run_id, "run-1");
         assert_eq!(ctx.sample_id, "sample-1");
@@ -140,5 +150,29 @@ mod tests {
         let output = String::from("a");
         let ctx: ScorerContext<'_, String, String> = ScorerContext::new(&input, &output, None);
         assert!(!ctx.cancel.is_cancelled());
+    }
+
+    #[test]
+    fn scorer_context_carries_seed() {
+        use tokio_util::sync::CancellationToken;
+        let input = String::from("p");
+        let output = String::from("a");
+        let metadata = HashMap::new();
+        let cancel = CancellationToken::new();
+        let previous = HashMap::new();
+        let ctx: ScorerContext<'_, String, String> = ScorerContext::with_scope(
+            "run-1", "s-1", 0,
+            Some(42),
+            &cancel,
+            None,
+            &previous,
+            &metadata,
+            &input,
+            &output,
+            None,
+        );
+        assert_eq!(ctx.seed, Some(42));
+        assert!(ctx.budget.is_none());
+        assert!(ctx.previous_scores.is_empty());
     }
 }

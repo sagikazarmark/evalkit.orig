@@ -702,7 +702,10 @@ impl<I, R> PartialScoringPlan<I, String, R> for StringPrefixPartialScoring<I, R>
                     ctx.run_id,
                     ctx.sample_id,
                     ctx.trial_index,
+                    ctx.seed,
                     ctx.cancel,
+                    ctx.budget,
+                    ctx.previous_scores,
                     ctx.metadata,
                     ctx.input,
                     &output,
@@ -764,7 +767,10 @@ impl<I, R> PartialScoringPlan<I, String, R> for StringStreamingPartialScoring<I,
                     ctx.run_id,
                     ctx.sample_id,
                     ctx.trial_index,
+                    ctx.seed,
                     ctx.cancel,
+                    ctx.budget,
+                    ctx.previous_scores,
                     ctx.metadata,
                     ctx.input,
                     &snapshot.output,
@@ -1362,11 +1368,15 @@ where
         Ok(Ok(mut produced)) => {
             scrub_produced_output(state, &mut produced);
             let trial_cancel = CancellationToken::new();
+            let previous_scores = std::collections::HashMap::new(); // populated by ScorerSet in Task 14
             let ctx = ScorerContext::with_scope(
                 run_id,
                 &sample.id,
                 trial_index,
+                None,
                 &trial_cancel,
+                None,
+                &previous_scores,
                 &sample.metadata,
                 &sample.input,
                 &produced.output,

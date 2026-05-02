@@ -1,5 +1,5 @@
 use crate::{
-    OutputSource, OutputSourceError, Dataset, MapError, Mapper, ProductionOutput, ResourceUsage,
+    Budget, OutputSource, OutputSourceError, Dataset, MapError, Mapper, ProductionOutput, ResourceUsage,
     RunMetadata, RunResult, Sample, SampleResult, Score, ScoreDefinition, ScoreOutcome, Scorer,
     ScorerContext, ScorerError, ScorerSet, TrialResult,
 };
@@ -100,6 +100,7 @@ pub struct Run<I, O, R = ()> {
     concurrency: usize,
     sample_timeout: Option<Duration>,
     seed: Option<u64>,
+    budget: Option<Budget>,
     code_commit: Option<String>,
     code_fingerprint: Option<String>,
     judge_model_pins: Vec<String>,
@@ -206,11 +207,15 @@ impl<I, O, R> Run<I, O, R> {
                     source_resources.latency = Some(latency);
                 }
 
+                let previous_scores: HashMap<String, Score> = HashMap::new(); // populated by ScorerSet in Task 14
                 let ctx = ScorerContext {
                     run_id,
                     sample_id: &sample.id,
                     trial_index,
+                    seed: self.seed,
                     cancel: &self.cancel,
+                    budget: self.budget.as_ref(),
+                    previous_scores: &previous_scores,
                     metadata: &sample.metadata,
                     input: &sample.input,
                     output: &output,
@@ -371,6 +376,7 @@ pub struct RunBuilderWithTargets<
     concurrency: usize,
     sample_timeout: Option<Duration>,
     seed: Option<u64>,
+    budget: Option<Budget>,
     code_commit: Option<String>,
     code_fingerprint: Option<String>,
     judge_model_pins: Vec<String>,
@@ -457,6 +463,7 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
             concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
             seed: self.seed,
+            budget: None,
             code_commit: self.code_commit,
             code_fingerprint: self.code_fingerprint,
             judge_model_pins,
@@ -488,6 +495,7 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
             concurrency: self.concurrency,
             sample_timeout: self.sample_timeout,
             seed: self.seed,
+            budget: None,
             code_commit: self.code_commit,
             code_fingerprint: self.code_fingerprint,
             judge_model_pins,
@@ -541,6 +549,11 @@ impl<I, O, R, O2, R2, OutputState, ReferenceState>
 
     pub fn seed(mut self, seed: u64) -> Self {
         self.seed = Some(seed);
+        self
+    }
+
+    pub fn budget(mut self, budget: Budget) -> Self {
+        self.budget = Some(budget);
         self
     }
 
@@ -854,6 +867,7 @@ impl<I: 'static, O: 'static, R: 'static, O2: 'static, R2: 'static, OS, RS>
             concurrency: this.concurrency,
             sample_timeout: this.sample_timeout,
             seed: this.seed,
+            budget: this.budget,
             code_commit: this.code_commit,
             code_fingerprint: this.code_fingerprint,
             judge_model_pins: this.judge_model_pins,
@@ -1125,7 +1139,10 @@ where
                 run_id: ctx.run_id,
                 sample_id: ctx.sample_id,
                 trial_index: ctx.trial_index,
+                seed: ctx.seed,
                 cancel: ctx.cancel,
+                budget: ctx.budget,
+                previous_scores: ctx.previous_scores,
                 metadata: ctx.metadata,
                 input: ctx.input,
                 output: mapped_output,
