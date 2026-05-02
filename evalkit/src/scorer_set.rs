@@ -1,9 +1,10 @@
 #![allow(dead_code)]
 
 use crate::{
-    MapError, Mapper, ScoreDefinition, ScoreOutcome, Scorer, ScorerContext, ScorerError,
+    MapError, Mapper, Score, ScoreDefinition, ScoreOutcome, Scorer, ScorerContext, ScorerError,
     ScorerMetadata,
 };
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::future::Future;
@@ -361,12 +362,28 @@ async fn score_entries<I, O, R>(
     ctx: &ScorerContext<'_, I, O, R>,
 ) -> ScoreResults {
     let mut results = Vec::with_capacity(scorers.len());
+    let mut previous: HashMap<String, Score> = ctx.previous_scores.clone();
 
     for scorer in scorers {
-        results.push((
-            scorer.definition.clone(),
-            scorer.scorer.score_boxed(ctx).await,
-        ));
+        let definition = scorer.definition.clone();
+        let inner_ctx = ScorerContext {
+            run_id: ctx.run_id,
+            sample_id: ctx.sample_id,
+            trial_index: ctx.trial_index,
+            seed: ctx.seed,
+            cancel: ctx.cancel,
+            budget: ctx.budget,
+            previous_scores: &previous,
+            metadata: ctx.metadata,
+            input: ctx.input,
+            output: ctx.output,
+            reference: ctx.reference,
+        };
+        let outcome_result = scorer.scorer.score_boxed(&inner_ctx).await;
+        if let Ok(ref outcome) = outcome_result {
+            previous.insert(definition.name.clone(), outcome.score.clone());
+        }
+        results.push((definition, outcome_result));
     }
 
     results
@@ -452,6 +469,118 @@ mod tests {
     use std::fmt::{self, Display, Formatter};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn scorer_set_exposes_previous_scores() {
+        struct First;
+        impl Scorer<String, String, String> for First {
+            async fn score(
+                &self,
+                _ctx: &ScorerContext<'_, String, String, String>,
+            ) -> Result<Score, ScorerError> {
+                Ok(Score::Binary(true))
+            }
+            fn definition(&self) -> ScoreDefinition {
+                ScoreDefinition::new("first")
+            }
+        }
+
+        struct Second;
+        impl Scorer<String, String, String> for Second {
+            async fn score(
+                &self,
+                ctx: &ScorerContext<'_, String, String, String>,
+            ) -> Result<Score, ScorerError> {
+                let saw_first = ctx.previous_scores.contains_key("first");
+                Ok(Score::Binary(saw_first))
+            }
+            fn definition(&self) -> ScoreDefinition {
+                ScoreDefinition::new("second")
+            }
+        }
+
+        let set: ScorerSet<String, String, String> = ScorerSet::builder()
+            .scorer(First)
+            .scorer(Second)
+            .build();
+
+        let input = String::from("x");
+        let output = String::from("x");
+        let reference = String::from("");
+        let ctx: ScorerContext<'_, String, String, String> =
+            ScorerContext::new(&input, &output, Some(&reference));
+
+        let results = set.score(&ctx).await;
+        let second_result = results
+            .iter()
+            .find(|(d, _)| d.name == "second")
+            .map(|(_, r)| r.as_ref().ok());
+        assert!(matches!(
+            second_result,
+            Some(Some(outcome)) if matches!(outcome.score, Score::Binary(true))
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn scorer_set_failed_scorer_not_in_previous_scores() {
+        #[derive(Debug)]
+        struct FailErr;
+        impl std::fmt::Display for FailErr {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("fail")
+            }
+        }
+        impl std::error::Error for FailErr {}
+
+        struct AlwaysFails;
+        impl Scorer<String, String, String> for AlwaysFails {
+            async fn score(
+                &self,
+                _ctx: &ScorerContext<'_, String, String, String>,
+            ) -> Result<Score, ScorerError> {
+                Err(ScorerError::internal(FailErr))
+            }
+            fn definition(&self) -> ScoreDefinition {
+                ScoreDefinition::new("fails")
+            }
+        }
+
+        struct ChecksPrevious;
+        impl Scorer<String, String, String> for ChecksPrevious {
+            async fn score(
+                &self,
+                ctx: &ScorerContext<'_, String, String, String>,
+            ) -> Result<Score, ScorerError> {
+                // failed scorer should NOT be visible
+                let saw_fails = ctx.previous_scores.contains_key("fails");
+                Ok(Score::Binary(!saw_fails))
+            }
+            fn definition(&self) -> ScoreDefinition {
+                ScoreDefinition::new("checks")
+            }
+        }
+
+        let set: ScorerSet<String, String, String> = ScorerSet::builder()
+            .scorer(AlwaysFails)
+            .scorer(ChecksPrevious)
+            .build();
+
+        let input = String::from("x");
+        let output = String::from("x");
+        let reference = String::from("");
+        let ctx: ScorerContext<'_, String, String, String> =
+            ScorerContext::new(&input, &output, Some(&reference));
+
+        let results = set.score(&ctx).await;
+        let checks_result = results
+            .iter()
+            .find(|(d, _)| d.name == "checks")
+            .map(|(_, r)| r.as_ref().ok());
+        assert!(matches!(
+            checks_result,
+            Some(Some(outcome)) if matches!(outcome.score, Score::Binary(true))
+        ));
+    }
 
     #[derive(Debug)]
     struct TestMapError(&'static str);
