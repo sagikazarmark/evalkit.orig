@@ -1,3 +1,5 @@
+mod migrate;
+
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
@@ -36,6 +38,19 @@ enum Commands {
     Run(RunArgs),
     Diff(DiffArgs),
     Watch(WatchArgs),
+    MigrateRunlog(MigrateRunlogArgs),
+}
+
+#[derive(clap::Args)]
+#[command(about = "Migrate a run-log JSONL file from schema v2 to v3")]
+struct MigrateRunlogArgs {
+    /// Path to the input v2 JSONL file
+    #[arg(long, value_name = "FILE")]
+    r#in: PathBuf,
+
+    /// Path to write the output v3 JSONL file
+    #[arg(long, value_name = "FILE")]
+    out: PathBuf,
 }
 
 #[derive(clap::Args, Clone)]
@@ -325,6 +340,18 @@ async fn main() {
                 2
             }
         },
+        Commands::MigrateRunlog(args) => {
+            match migrate::migrate_v2_to_v3(&args.r#in, &args.out) {
+                Ok(()) => {
+                    println!("Migrated {} -> {}", args.r#in.display(), args.out.display());
+                    0
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    2
+                }
+            }
+        }
     };
     std::process::exit(exit_code);
 }

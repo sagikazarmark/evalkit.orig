@@ -7,6 +7,10 @@ edition = "2024"
 name = "evalkit"
 path = "src/main.rs"
 
+[lib]
+name = "evalkit_cli"
+path = "src/lib.rs"
+
 [dependencies]
 evalkit = { path = "../evalkit" }
 evalkit-providers = { path = "../evalkit-providers" }
