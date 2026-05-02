@@ -179,6 +179,8 @@ impl OutputSource<String, String> for HttpSource {
 
         extract_string_field(&payload, &self.output_field).map(ProductionOutput::new)
     }
+
+    fn metadata_mode(&self) -> &'static str { "http" }
 }
 
 pub struct SubprocessSource {
@@ -378,6 +380,8 @@ impl OutputSource<String, String> for SubprocessSource {
             .map_err(|_| OutputSourceError::Timeout(self.timeout))?
             .map(ProductionOutput::new)
     }
+
+    fn metadata_mode(&self) -> &'static str { "subprocess" }
 }
 
 impl Scorer<String, String, String> for SubprocessScorer {

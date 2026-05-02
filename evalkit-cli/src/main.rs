@@ -248,6 +248,13 @@ impl OutputSource<String, String> for CliOutputSource {
             Self::Subprocess(a) => a.produce(input).await,
         }
     }
+
+    fn metadata_mode(&self) -> &'static str {
+        match self {
+            Self::Http(a) => a.metadata_mode(),
+            Self::Subprocess(a) => a.metadata_mode(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
