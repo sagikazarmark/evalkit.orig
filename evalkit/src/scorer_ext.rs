@@ -313,6 +313,8 @@ where
                 Ok(ScoreOutcome {
                     score: secondary.score,
                     resources,
+                    reasoning: secondary.reasoning,
+                    metadata: secondary.metadata,
                 })
             }
             Score::Binary(false) => {

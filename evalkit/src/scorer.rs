@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::time::Duration;
+use serde_json::Value;
 use crate::{Score, ScoreDefinition, ScorerContext, ScorerError, TokenUsage};
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -51,6 +53,8 @@ impl ResourceUsage {
 pub struct ScoreOutcome {
     pub score: Score,
     pub resources: ResourceUsage,
+    pub reasoning: Option<String>,
+    pub metadata: HashMap<String, Value>,
 }
 
 impl ScoreOutcome {
@@ -58,11 +62,23 @@ impl ScoreOutcome {
         Self {
             score,
             resources: ResourceUsage::default(),
+            reasoning: None,
+            metadata: HashMap::new(),
         }
     }
 
     pub fn with_resources(mut self, resources: ResourceUsage) -> Self {
         self.resources = resources;
+        self
+    }
+
+    pub fn with_reasoning(mut self, reasoning: impl Into<String>) -> Self {
+        self.reasoning = Some(reasoning.into());
+        self
+    }
+
+    pub fn with_metadata(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.metadata.insert(key.into(), value);
         self
     }
 }
@@ -267,5 +283,15 @@ mod tests {
         let b = ResourceUsage::default();
         a.merge(&b);
         assert_eq!(a.latency, Some(Duration::from_millis(100)));
+    }
+
+    #[test]
+    fn score_outcome_carries_reasoning_and_metadata() {
+        use serde_json::json;
+        let outcome = ScoreOutcome::new(Score::Binary(true))
+            .with_reasoning("matches the gold")
+            .with_metadata("rubric", json!({ "version": 1 }));
+        assert_eq!(outcome.reasoning.as_deref(), Some("matches the gold"));
+        assert_eq!(outcome.metadata.get("rubric"), Some(&json!({ "version": 1 })));
     }
 }
