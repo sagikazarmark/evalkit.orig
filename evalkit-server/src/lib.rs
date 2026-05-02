@@ -953,6 +953,67 @@ fn store_error(error: impl Display) -> ServerError {
     ServerError::Store(error.to_string())
 }
 
+/// Migrate all stored runs from v2 schema to v3.
+///
+/// Walks every row in the `runs` table, parses `run_json` as JSON, applies
+/// the v2 → v3 transform from `evalkit_cli::migrate`, and writes the updated
+/// payload back. Idempotent — running on already-v3 rows is a no-op
+/// (transform_run_result is safe to apply twice; new fields with defaults
+/// don't overwrite existing values).
+///
+/// # When to run
+///
+/// Operators run this function **once** after upgrading the server binary to a
+/// 2.0 build. The simplest approach is to call it during server startup if you
+/// want it to be fully automatic, or wire it up as a one-shot CLI subcommand.
+/// The function is idempotent so running it multiple times is safe.
+pub fn migrate_storage_v2_to_v3(connection: &rusqlite::Connection) -> Result<usize, ServerError> {
+    use evalkit_cli::migrate::transform_run_result;
+
+    let mut stmt = connection
+        .prepare("SELECT run_id, run_json FROM runs")
+        .map_err(store_error)?;
+
+    let rows: Vec<(String, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(store_error)?
+        .collect::<Result<_, _>>()
+        .map_err(store_error)?;
+
+    let mut migrated = 0usize;
+    for (run_id, payload) in rows {
+        let mut value: serde_json::Value = serde_json::from_str(&payload).map_err(|err| {
+            ServerError::InvalidRequest(format!(
+                "failed to parse run_json for {run_id}: {err}"
+            ))
+        })?;
+
+        // StoredRun has structure { result: RunResult, ... }. Transform the inner result.
+        if let Some(result) = value.get_mut("result") {
+            transform_run_result(result);
+        } else {
+            // Older shape may have stored RunResult directly.
+            transform_run_result(&mut value);
+        }
+
+        let new_payload = serde_json::to_string(&value).map_err(|err| {
+            ServerError::InvalidRequest(format!(
+                "failed to re-serialize run_json for {run_id}: {err}"
+            ))
+        })?;
+
+        connection
+            .execute(
+                "UPDATE runs SET run_json = ?1 WHERE run_id = ?2",
+                rusqlite::params![new_payload, run_id],
+            )
+            .map_err(store_error)?;
+        migrated += 1;
+    }
+
+    Ok(migrated)
+}
+
 fn render_home_page(runs: &[RunSummary]) -> String {
     let mut html = page_shell(
         "Runs",
@@ -2656,5 +2717,153 @@ mod tests {
         assert!(html.contains("refusal draft"));
         assert!(html.contains("Scorer Changes"));
         assert!(html.contains("exact_match"));
+    }
+
+    #[test]
+    fn migrate_storage_v2_to_v3_transforms_legacy_payload() {
+        use rusqlite::Connection;
+
+        // 1. Create an in-memory SQLite DB with just the runs table.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE runs (
+                run_id TEXT PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                completed_at TEXT NOT NULL,
+                source_mode TEXT NOT NULL,
+                sample_count INTEGER NOT NULL,
+                metadata_json TEXT NOT NULL,
+                run_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+
+        // 2. Insert a synthetic v2-shaped StoredRun JSON.
+        //    v2 shape: scores entry is a bare Result<Score, _> (no ScoredEntry wrapper),
+        //    Score::Structured holds score + reasoning + metadata.
+        //    No source_metadata on trial, no source_resources / scorer_resources on sample.
+        let v2_payload = serde_json::json!({
+            "result": {
+                "metadata": {
+                    "run_id": "run-migrate-test",
+                    "seed": null,
+                    "dataset_fingerprint": "fp",
+                    "scorer_fingerprint": "sp",
+                    "code_commit": null,
+                    "code_fingerprint": null,
+                    "judge_model_pins": [],
+                    "started_at": "2024-01-01T00:00:00Z",
+                    "completed_at": "2024-01-01T00:00:01Z",
+                    "duration": {"secs": 1, "nanos": 0},
+                    "trial_count": 1,
+                    "score_definitions": [],
+                    "source_mode": "inline"
+                },
+                "samples": [
+                    {
+                        "sample_id": "s1",
+                        "trial_count": 1,
+                        "scored_count": 1,
+                        "error_count": 0,
+                        "trials": [
+                            {
+                                "trial_index": 0,
+                                "duration": {"secs": 0, "nanos": 10000000},
+                                "scores": {
+                                    "quality": {
+                                        "Ok": {
+                                            "type": "structured",
+                                            "score": 0.9,
+                                            "reasoning": "very good output",
+                                            "metadata": {"detail": "high precision"}
+                                        }
+                                    }
+                                }
+                                // no source_metadata
+                            }
+                        ],
+                        "token_usage": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0},
+                        "cost_usd": null
+                        // no source_resources, no scorer_resources
+                    }
+                ]
+            },
+            "samples": [],
+            "outputs": []
+        });
+
+        conn.execute(
+            "INSERT INTO runs (run_id, started_at, completed_at, source_mode, sample_count, metadata_json, run_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                "run-migrate-test",
+                "2024-01-01T00:00:00Z",
+                "2024-01-01T00:00:01Z",
+                "inline",
+                1i64,
+                "{}",
+                serde_json::to_string(&v2_payload).unwrap(),
+                "2024-01-01T00:00:00Z",
+            ],
+        )
+        .unwrap();
+
+        // 3. Run the migration.
+        let migrated = super::migrate_storage_v2_to_v3(&conn).unwrap();
+        assert_eq!(migrated, 1);
+
+        // 4. Read the row back and assert v3 shape.
+        let run_json: String = conn
+            .query_row(
+                "SELECT run_json FROM runs WHERE run_id = ?1",
+                ["run-migrate-test"],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        let value: serde_json::Value = serde_json::from_str(&run_json).unwrap();
+        let trial = &value["result"]["samples"][0]["trials"][0];
+        let score_entry = &trial["scores"]["quality"];
+
+        // Score::Structured → ScoredEntry with Numeric result + reasoning + metadata
+        assert_eq!(
+            score_entry["result"]["Ok"]["type"],
+            "numeric",
+            "Score::Structured should have been converted to numeric"
+        );
+        assert_eq!(
+            score_entry["result"]["Ok"]["value"], 0.9,
+            "numeric value should be preserved from structured score"
+        );
+        assert_eq!(
+            score_entry["reasoning"], "very good output",
+            "reasoning should be lifted from structured score"
+        );
+        assert_eq!(
+            score_entry["metadata"]["detail"], "high precision",
+            "metadata should be preserved from structured score"
+        );
+
+        // source_metadata should default to empty object on the trial
+        assert!(
+            trial["source_metadata"].is_object(),
+            "source_metadata should default to an object"
+        );
+
+        let sample = &value["result"]["samples"][0];
+        // source_resources and scorer_resources should default
+        assert!(
+            sample["source_resources"].is_object(),
+            "source_resources should be defaulted"
+        );
+        assert!(
+            sample["scorer_resources"].is_object(),
+            "scorer_resources should be defaulted"
+        );
+        assert_eq!(
+            sample["source_resources"]["token_usage"]["input"], 0,
+            "source_resources token_usage.input should default to 0"
+        );
     }
 }

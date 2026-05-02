@@ -506,6 +506,7 @@ dependencies = [
  "axum",
  "chrono",
  "evalkit",
+ "evalkit-cli",
  "rusqlite",
  "serde",
  "serde_json",
