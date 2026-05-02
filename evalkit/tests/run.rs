@@ -325,6 +325,38 @@ async fn run_aggregates_resource_usage_into_sample_results() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn source_metadata_reaches_trial_result() {
+    use evalkit::{OutputSource, ProductionOutput};
+    use serde_json::json;
+
+    struct EnvelopeSource;
+    impl OutputSource<String, String> for EnvelopeSource {
+        async fn produce(
+            &self,
+            input: &String,
+        ) -> Result<ProductionOutput<String>, OutputSourceError> {
+            Ok(ProductionOutput::new(input.clone())
+                .with_metadata("model_id", json!("test-model")))
+        }
+    }
+
+    let sample = Sample::builder("prompt".to_string()).id("s1").build().unwrap();
+    let run = Run::builder()
+        .dataset(vec![sample])
+        .source(EnvelopeSource)
+        .scorer(ExactMatchScorer)
+        .build()
+        .unwrap();
+
+    let result = run.execute().await.unwrap();
+    let trial = &result.samples[0].trials[0];
+    assert_eq!(
+        trial.source_metadata.get("model_id"),
+        Some(&json!("test-model"))
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn run_metadata_captures_an_explicit_seed() {
     let sample = Sample::new(String::from("prompt"), String::from("four"));
 
