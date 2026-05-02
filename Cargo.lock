@@ -369,7 +369,7 @@ dependencies = [
 
 [[package]]
 name = "evalkit"
-version = "0.3.0"
+version = "2.0.0"
 dependencies = [
  "chrono",
  "evalkit-otel",
@@ -386,7 +386,7 @@ dependencies = [
 
 [[package]]
 name = "evalkit-cli"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "chrono",
  "clap",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "evalkit-exporters-langfuse"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "chrono",
  "evalkit",
@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "evalkit-otel"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "bytes",
  "chrono",
@@ -433,7 +433,7 @@ dependencies = [
 
 [[package]]
 name = "evalkit-providers"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "evalkit",
  "reqwest",
@@ -445,7 +445,7 @@ dependencies = [
 
 [[package]]
 name = "evalkit-runtime"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "chrono",
  "evalkit",
@@ -461,11 +461,11 @@ dependencies = [
 
 [[package]]
 name = "evalkit-scorers-embed"
-version = "0.1.0"
+version = "2.0.0"
 
 [[package]]
 name = "evalkit-scorers-llm"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "anyllm",
  "evalkit",
@@ -478,11 +478,11 @@ dependencies = [
 
 [[package]]
 name = "evalkit-scorers-rag"
-version = "0.1.0"
+version = "2.0.0"
 
 [[package]]
 name = "evalkit-scorers-redteam"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "evalkit",
  "regex",
@@ -491,7 +491,7 @@ dependencies = [
 
 [[package]]
 name = "evalkit-scorers-text"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "evalkit",
  "regex",
@@ -501,7 +501,7 @@ dependencies = [
 
 [[package]]
 name = "evalkit-server"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "axum",
  "chrono",
